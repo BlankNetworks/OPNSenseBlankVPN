@@ -110,12 +110,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     reply.dashboard.profiles = [];
     bv('refresh').click();
     await wait();
+    const importedDomains = 'netflix.com\n*.nflxvideo.net\nnflximg.net';
     const data = new DataTransfer();
-    data.items.add(new File(['netflix.com\n*.nflxvideo.net\nnflximg.net'], 'Netflix.txt'));
+    data.items.add(new File([importedDomains], 'Netflix.txt'));
     bv('service-file').files = data.files;
-    bv('service-file').dispatchEvent(new Event('change'));
-    for (let attempt = 0; attempt < 30 && !bv('domain-file-status').textContent; attempt++) {
+    // Headless Chrome can exhaust its virtual time budget before native file IO returns.
+    const nativeText = File.prototype.text;
+    File.prototype.text = async function () {
+        assert(this.name === 'Netflix.txt', 'wrong domain file was read');
+        return importedDomains;
+    };
+    try {
+        bv('service-file').dispatchEvent(new Event('change'));
         await wait();
+    } finally {
+        File.prototype.text = nativeText;
     }
     assert(bv('domain-file-status').textContent.includes('Netflix.txt') && !bv('download-domains').disabled,
         'domain file was not loaded');

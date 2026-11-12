@@ -24,6 +24,7 @@
             mullvadSignedIn: false,
             presets: {},
             editingService: null,
+            domainRead: 0,
             relays: [],
             settings: null,
             availableInterfaces: [],
@@ -464,6 +465,7 @@
 
         function editService(service = null) {
             state.editingService = service?.id || null;
+            state.domainRead++;
             byId('service-form').reset();
             byId('service-name').value = service?.name || '';
             const exit = byId('service-profile');
@@ -1182,6 +1184,7 @@
         });
         byId('service-file').addEventListener('change', async (event) => {
             const input = event.currentTarget;
+            const read = ++state.domainRead;
             const file = input.files[0];
             if (!file) {
                 return;
@@ -1194,7 +1197,7 @@
             }
             try {
                 const content = await file.text();
-                if (input.files[0] !== file) {
+                if (state.domainRead !== read) {
                     return;
                 }
                 byId('service-domains').value = content;
@@ -1205,7 +1208,9 @@
                 status.textContent = file.name + ' loaded. Save the list to keep it.';
                 input.value = '';
             } catch {
-                status.textContent = 'Could not read the file. Paste its domains into the editor.';
+                if (state.domainRead === read) {
+                    status.textContent = 'Could not read the file. Paste its domains into the editor.';
+                }
             }
         });
         byId('service-domains').addEventListener('input', (event) => {
