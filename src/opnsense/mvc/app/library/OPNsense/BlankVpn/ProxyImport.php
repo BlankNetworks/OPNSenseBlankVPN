@@ -415,7 +415,7 @@ final class ProxyImport
                     'interfacename', 'inet4bindaddress', 'inet6bindaddress', 'downloadurl',
                     'certificatepath', 'keypath', 'privatekeypath', 'certificatefile', 'keyfile', 'sshkeyfile',
                     'privatekeyfile', 'cafile', 'hostkeypath', 'clientcertificatepath', 'clientkeypath',
-                    'externalcontroller', 'script', 'usersfile', 'logfile', 'configfile'
+                    'externalcontroller', 'script', 'usersfile', 'logfile', 'configfile', 'keylog'
                 ], true)) {
                     throw new DomainException('The proxy entry requests router-local files, chaining or privileged routing options.');
                 }

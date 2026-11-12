@@ -304,7 +304,7 @@ final class ProxyRuntime
         }
         try {
             chmod($path, 0600);
-            $bytes = json_encode($config, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+            $bytes = json_encode($config, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
             if (fwrite($file, $bytes) !== strlen($bytes)) {
                 throw new RuntimeException('Could not write the complete proxy runtime file.');
             }

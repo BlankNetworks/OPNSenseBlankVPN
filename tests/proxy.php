@@ -73,7 +73,7 @@ if (isset($argv[1])) {
         'vmess' => ProxyRuntime::configuration($route, proxyNode($vmess))['mihomo'],
         'ss2022' => ProxyRuntime::configuration($route, proxyNode($ss2022))['mihomo'],
         'adapter-bridge' => $xray['mihomo'], 'xray' => $xray['adapter'], 'sing-box' => $sing['adapter']] as $name => $config) {
-        file_put_contents($dir . '/' . $name . '.json', json_encode($config, JSON_THROW_ON_ERROR));
+        file_put_contents($dir . '/' . $name . '.json', json_encode($config, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     }
 }
 echo "Proxy import, identity, and core configuration fixtures passed.\n";
