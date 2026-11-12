@@ -5,10 +5,21 @@ if [ "${PKG_ROOTDIR:-/}" != / ] && [ "${PKG_CHROOTED:-}" != true ]; then
     exit 1
 fi
 
+machine=$(uname -m)
+case "$machine" in
+    arm64) machine=aarch64 ;;
+    x86_64) machine=amd64 ;;
+esac
+expected_arch=@BLANKVPN_ARCH@
+if [ "$machine" != "$expected_arch" ]; then
+    echo "This Blank VPN package targets $expected_arch. Select the package matching this router ($machine)." >&2
+    exit 1
+fi
+
 version_tool=/usr/local/sbin/opnsense-version
 if [ ! -x "$version_tool" ] || [ "$("$version_tool" -n)" != opnsense ] ||
-    [ "$("$version_tool" -a)" != 26.7 ] || [ "$(uname -m)" != amd64 ] ||
+    [ "$("$version_tool" -a)" != 26.7 ] ||
     [ ! -x /usr/bin/wg ] || [ ! -x /usr/local/sbin/dnsmasq ]; then
-    echo "Blank VPN requires OPNsense Community Edition 26.7 on amd64 with WireGuard and Dnsmasq." >&2
+    echo "Blank VPN requires OPNsense Community Edition 26.7 with WireGuard and Dnsmasq." >&2
     exit 1
 fi

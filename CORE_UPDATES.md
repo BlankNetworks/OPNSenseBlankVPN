@@ -4,14 +4,16 @@ Blank VPN includes a baseline build of Mihomo, tun2socks, Xray, and sing-box. Mi
 
 ## Approve a release
 
-Edit [the core catalog](src/share/blankvpn/core-catalog.json) on the repository’s main branch. Each entry specifies the core, numeric version, source, GitHub release tag, asset filename, and lowercase SHA-256. Blank VPN derives the HTTPS URL from these fields and accepts only its catalog repositories and release filename patterns.
+Edit the [amd64 catalog](src/share/blankvpn/core-catalog.json) or the [aarch64 catalog](src/share/blankvpn/core-catalog-aarch64.json) on the repository’s main branch. Each entry specifies the core, numeric version, source, GitHub release tag, asset filename, and lowercase SHA-256. Blank VPN derives the HTTPS URL from these fields and accepts only its catalog repositories and release filename patterns.
 
-| Core | Source value | Release tag | Archive |
+| Core | Source | amd64 archive | aarch64 archive |
 | --- | --- | --- | --- |
-| Mihomo | `upstream` | `vVERSION` | `mihomo-freebsd-amd64-compatible-vVERSION.gz` |
-| tun2socks | `upstream` | `vVERSION` | `tun2socks-freebsd-amd64.zip` |
-| Xray | `upstream` | `vVERSION` | `Xray-freebsd-64.zip` |
-| Any bundled core, including sing-box | `blanknetworks` | `cores-CORE-vVERSION` | `CORE-VERSION-freebsd-amd64.gz` |
+| Mihomo | `upstream` | `mihomo-freebsd-amd64-compatible-vVERSION.gz` | `mihomo-freebsd-arm64-vVERSION.gz` |
+| tun2socks | `upstream` | `tun2socks-freebsd-amd64.zip` | `tun2socks-freebsd-arm64.zip` |
+| Xray | `upstream` | `Xray-freebsd-64.zip` | `Xray-freebsd-arm64-v8a.zip` |
+| Any bundled core, including sing-box | `blanknetworks` | `CORE-VERSION-freebsd-amd64.gz` | `CORE-VERSION-freebsd-aarch64.gz` |
+
+Use `vVERSION` for upstream tags. Use `cores-CORE-vVERSION` for Blank Networks amd64 releases and `cores-CORE-vVERSION-aarch64` for ARM64 releases.
 
 Use the vendor release digest or a digest independently verified against the reviewed archive. The sing-box release workflow takes the upstream version and matching commit and publishes the archive and checksum. Review changes to the catalog as you would executable package changes.
 
@@ -26,6 +28,6 @@ php cores.php install mihomo /path/to/approved-mihomo.gz
 php cores.php rollback mihomo
 ```
 
-To install an independently reviewed local FreeBSD amd64 build, use `php cores.php install-local CORE VERSION FILE SHA256` as root. This path trusts the operator’s checksum and approval of the executable. The router verifies the file, executable version, and compatible saved exit configurations before activation.
+To install an independently reviewed local FreeBSD build for the router’s architecture, use `php cores.php install-local CORE VERSION FILE SHA256` as root. This path trusts the operator’s checksum and approval of the executable. The router verifies the file, executable version, and compatible saved exit configurations before activation.
 
 The active and previous override binaries are stored separately from the package and survive upgrades. The bundled core remains available for the first rollback. A crash during activation leaves a recovery record for the next maintenance pass. Keep the state directory on persistent storage if you use OPNsense RAM disk settings.

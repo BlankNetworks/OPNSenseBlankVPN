@@ -1,6 +1,12 @@
-# Blank VPN 0.5.0
+# Blank VPN 0.5.1
 
-This lab prerelease targets OPNsense Community Edition 26.7 on amd64 with the FreeBSD 15 package ABI.
+This lab prerelease targets OPNsense Community Edition 26.7 with the FreeBSD 15 package ABI.
+
+- **amd64** supports x86-64 OPNsense appliances and VMs.
+- **aarch64** supports matching community ARM64 OPNsense, including supported NanoPi builds and ARM64 VMs.
+- Both packages bundle architecture-matched Mihomo, tun2socks, Xray, sing-box, and the Clash YAML parser. Core updates and uploaded archives use the router’s CPU architecture.
+
+Use `pkg config ABI` on the router to choose the matching download. This release includes the features introduced in 0.5.0.
 
 - Update Mihomo, tun2socks, Xray, and sing-box independently from the plug-in. The core manager checks approved releases and uploads, shows disk space, and supports rollback.
 - Choose Full Tunneling, Multi-Path Tunneling, Disabled, or Blocked for an assigned device. Multi-Path supports concurrent service exits, with Netflix, Hulu, and WeChat presets.

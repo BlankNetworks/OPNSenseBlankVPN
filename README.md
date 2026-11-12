@@ -1,14 +1,21 @@
-# Blank VPN 0.5.0
+# Blank VPN 0.5.1
 
 Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Smart Routing keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
 ## Compatibility
 
-This lab candidate targets **OPNsense Community Edition 26.7.x**, **amd64**, package ABI **`FreeBSD:15:amd64`**. It uses the standard WebGUI process mode and the 26.7 native WireGuard and firewall implementation. The release is a cross-built lab prerelease. Live OPNsense forwarding and kill-switch behavior still need testing. See [VALIDATION.md](VALIDATION.md) for the tests and deployment gates.
+Blank VPN targets OPNsense Community Edition 26.7.x with the FreeBSD 15 package ABI, standard WebGUI process mode, WireGuard, and Dnsmasq.
+
+| Package suffix | OPNsense ABI | Target |
+| --- | --- | --- |
+| `amd64` | `FreeBSD:15:amd64` | Official x86-64 OPNsense, including Intel and AMD appliances and x86-64 VMs |
+| `aarch64` | `FreeBSD:15:aarch64` | Compatible community ARM64 OPNsense, including supported NanoPi builds and ARM64 VMs |
+
+OPNsense officially distributes x86-64 images. For NanoPi R4S/R4SE and R5S, start with a board-compatible community OPNsense 26.7 image and check its device notes. Other ARM64 boards need their own working OPNsense image. OpenWrt, Linux firmware, and 32-bit ARM require a different package and runtime. Live OPNsense routing still needs lab verification. [Official hardware support](https://docs.opnsense.org/manual/hardware.html) · [Community NanoPi images](https://github.com/matheusber/opnsense/releases) · [Validation](VALIDATION.md)
 
 ## Download
 
-Download the package and its SHA-256 file from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). The full prerelease package includes the proxy runtimes and Clash YAML parser.
+Run `pkg config ABI` on the router, then download the matching package and its SHA-256 file from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). The full prerelease package includes the proxy runtimes and Clash YAML parser.
 
 ## Build
 
@@ -21,21 +28,24 @@ python3 build/package.py
 On another development host, build the same package format with the cross-build path. This also checks the manifest, scripts, payload hashes, ownership and permissions.
 
 ```sh
-python3 build/package.py --cross
+python3 build/package.py --cross --arch amd64
+python3 build/package.py --cross --arch aarch64
 ```
 
-The package and SHA-256 file are written to `dist/`. To reproduce the bundled release on a Linux development host with Go, run `sh build/prepare-release.sh /tmp/blankvpn-runtime`, followed by `python3 build/package.py --cross --runtime-dir /tmp/blankvpn-runtime`.
+The package and SHA-256 file are written to `dist/`. To reproduce the bundled release on a Linux development host with Go, run `sh build/prepare-release.sh /tmp/blankvpn-runtime amd64`, followed by `python3 build/package.py --cross --arch amd64 --runtime-dir /tmp/blankvpn-runtime`. For ARM64, use `aarch64` for both commands.
 
 ## Lab installation
 
-1. Use an OPNsense CE 26.7 amd64 VM or spare router with console access. Attach a WAN, a management network and a test client LAN or VLAN. Back up the lab configuration under **System → Configuration → Backups**.
-2. Confirm `opnsense-version -v` reports 26.7.x, `opnsense-version -n` reports `opnsense`, and `pkg config ABI` reports `FreeBSD:15:amd64`.
+1. Use an matching OPNsense CE 26.7 VM or spare router with console access. Attach a WAN, a management network and a test client LAN or VLAN. Back up the lab configuration under **System → Configuration → Backups**.
+2. Confirm `opnsense-version -v` reports 26.7.x, `opnsense-version -n` reports `opnsense`, and `pkg config ABI` matches the chosen architecture.
 3. Transfer the package and checksum to the lab system. From their directory, verify and install as root.
 
    ```sh
-   sha256 -c "$(awk '{print $1}' os-blank-vpn-0.5.0.pkg.sha256)" os-blank-vpn-0.5.0.pkg
-   pkg info -F ./os-blank-vpn-0.5.0.pkg
-   pkg add ./os-blank-vpn-0.5.0.pkg
+   arch=$(pkg config ABI | cut -d: -f3)
+   package="os-blank-vpn-0.5.1-$arch.pkg"
+   sha256 -c "$(awk '{print $1}' "$package.sha256")" "$package"
+   pkg info -F "./$package"
+   pkg add "./$package"
    pkg info os-blank-vpn
    ```
 
@@ -90,9 +100,9 @@ The GitHub release includes Mihomo, tun2socks, Xray, sing-box, and the Clash YAM
 
 ## Update proxy cores
 
-Open **Proxies → Core updates and storage** as an OPNsense administrator. Select **Check for updates**, then install an approved version or upload its matching archive. Approved archives are checked against their SHA-256, FreeBSD amd64 format, reported version, and saved proxy configurations. Core updates retain one rollback version and preserve the bundled baseline. A failed restart restores the prior selection. Proxy exits that depend on the changed core briefly reconnect.
+Open **Proxies → Core updates and storage** as an OPNsense administrator. Select **Check for updates**, then install an approved version or upload its matching archive. Approved archives are checked against their SHA-256, the router’s FreeBSD CPU architecture, reported version, and saved proxy configurations. Core updates retain one rollback version and preserve the bundled baseline. A failed restart restores the prior selection. Proxy exits that depend on the changed core briefly reconnect.
 
-The [approved core catalog](src/share/blankvpn/core-catalog.json) pins specific upstream or Blank Networks release assets. Change the catalog on GitHub to approve a new version independently of the plug-in. The [sing-box workflow](.github/workflows/cores.yml) can publish a FreeBSD build from a pinned upstream tag and commit. After verifying the build, add its version and asset SHA-256 to the catalog. The router fetches the catalog on demand. See [CORE_UPDATES.md](CORE_UPDATES.md) for the exact release format, offline installation and rollback.
+The approved [amd64](src/share/blankvpn/core-catalog.json) and [aarch64](src/share/blankvpn/core-catalog-aarch64.json) catalogs pin specific upstream or Blank Networks release assets. Change the catalog on GitHub to approve a new version independently of the plug-in. The [sing-box workflow](.github/workflows/cores.yml) can publish FreeBSD builds from a pinned upstream tag and commit. After verifying the build, add its version and asset SHA-256 to the catalog. The router fetches the catalog on demand. See [CORE_UPDATES.md](CORE_UPDATES.md) for the exact release format, offline installation and rollback.
 
 Core updates, the private subscription catalog, and recovery state use `/var/db/blank-vpn`. The storage panel shows available space, downloaded core size, and catalog size. Staging keeps at least 64 MiB free for settings and runtime state. The bundled cores are part of the package. OPNsense stores saved assignments and WireGuard settings in its normal configuration. Mullvad sign-in uses a short-lived WebGUI session, with a persistent WireGuard key for each saved exit.
 

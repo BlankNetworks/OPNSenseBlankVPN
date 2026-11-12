@@ -69,12 +69,22 @@ assertProxy(ProxyCatalog::subscriptionUsage('Upload=12; download=34; total=100; 
 assertProxy(ProxyCatalog::subscriptionUsage('upload=1; upload=2; total=9223372036854775808; expire=-1; download=0') ===
     ['download' => 0], 'Ignore duplicate, overflowed and negative metadata.');
 
-$catalog = ProxyCores::parseCatalog((string)file_get_contents(__DIR__ . '/../src/share/blankvpn/core-catalog.json'));
-assertProxy(str_starts_with(ProxyCores::releaseUrl('mihomo', $catalog['mihomo']), 'https://github.com/MetaCubeX/mihomo/'),
+$catalog = ProxyCores::parseCatalog((string)file_get_contents(__DIR__ . '/../src/share/blankvpn/core-catalog.json'), 'amd64');
+assertProxy(str_starts_with(ProxyCores::releaseUrl('mihomo', $catalog['mihomo'], 'amd64'), 'https://github.com/MetaCubeX/mihomo/'),
     'Derive downloads from the approved source.');
 try {
-    ProxyCores::releaseUrl('mihomo', array_replace($catalog['mihomo'], ['asset' => '../../unexpected']));
+    ProxyCores::releaseUrl('mihomo', array_replace($catalog['mihomo'], ['asset' => '../../unexpected']), 'amd64');
     throw new RuntimeException('An unexpected asset path was accepted.');
+} catch (DomainException) {
+}
+$armCatalog = ProxyCores::parseCatalog((string)file_get_contents(
+    __DIR__ . '/../src/share/blankvpn/core-catalog-aarch64.json'
+), 'aarch64');
+assertProxy(str_ends_with(ProxyCores::releaseUrl('xray', $armCatalog['xray'], 'aarch64'), 'Xray-freebsd-arm64-v8a.zip'),
+    'ARM uses the FreeBSD arm64 asset.');
+try {
+    ProxyCores::releaseUrl('mihomo', $catalog['mihomo'], 'aarch64');
+    throw new RuntimeException('An amd64 asset was accepted on aarch64.');
 } catch (DomainException) {
 }
 assertProxy(ProxyCores::uses(['core' => 'xray'], 'mihomo') && !ProxyCores::uses(['core' => 'xray'], 'sing-box'),

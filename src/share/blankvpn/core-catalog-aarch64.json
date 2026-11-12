@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "cores": {
+    "mihomo": {
+      "version": "1.19.34",
+      "source": "upstream",
+      "tag": "v1.19.34",
+      "asset": "mihomo-freebsd-arm64-v1.19.34.gz",
+      "sha256": "88234d79d449c98957a1f1cc26093dd9e4ab96d0614a66a64b3b36bf7b52b44f"
+    },
+    "tun2socks": {
+      "version": "2.7.0",
+      "source": "upstream",
+      "tag": "v2.7.0",
+      "asset": "tun2socks-freebsd-arm64.zip",
+      "sha256": "a002504d99fb7c22080cb75eb2de6be1a5b7dc6bd3c2654803823b2a72091903"
+    },
+    "xray": {
+      "version": "26.11.9",
+      "source": "upstream",
+      "tag": "v26.11.9",
+      "asset": "Xray-freebsd-arm64-v8a.zip",
+      "sha256": "d6d06f71daf393056fa4266c0eba8eaca6ebd0f227e6e3fa126fbf5edf249c8b"
+    }
+  }
+}

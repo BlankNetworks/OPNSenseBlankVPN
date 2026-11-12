@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import re
+import runpy
 import shutil
 import subprocess
 import tarfile
@@ -17,10 +18,10 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "os-blank-vpn"
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 SERIES = "26.7"
-ABI = "FreeBSD:15:amd64"
-LEGACY_ABI = "freebsd:15:x86:64"
+LEGACY_ARCHES = {"amd64": "x86:64", "aarch64": "aarch64:64"}
+CORE_INSTALLER = ROOT / "src/opnsense/scripts/OPNsense/BlankVpn/install_proxy_cores.py"
 PREFIX = "/usr/local"
 DEPENDENCIES = {
     "opnsense": {"origin": "opnsense/opnsense", "version": SERIES},
@@ -34,7 +35,7 @@ def command(*args):
     return subprocess.check_output(args, text=True).strip()
 
 
-def payload(runtime_dir=None):
+def payload(arch, runtime_dir=None):
     source = ROOT / "src"
     files = {}
     for path in sorted(source.rglob("*")):
@@ -56,10 +57,11 @@ def payload(runtime_dir=None):
     if not files:
         raise ValueError("No plugin files found under src/")
     if runtime_dir is not None:
+        check_binary = runpy.run_path(str(CORE_INSTALLER))["is_freebsd_binary"]
         for core in ("mihomo", "tun2socks", "xray", "sing-box"):
             binary = (runtime_dir / "bin" / core).read_bytes()
-            if len(binary) < 64 or binary[:6] != b"\x7fELF\x02\x01" or binary[18:20] != b"\x3e\x00":
-                raise ValueError(f"{core} is not an amd64 ELF executable")
+            if not check_binary(binary, arch):
+                raise ValueError(f"{core} is not a FreeBSD {arch} ELF executable")
             files[f"{PREFIX}/libexec/blankvpn/{core}"] = (binary, 0o755)
         for name in ("mihomo", "tun2socks", "xray", "sing-box", "pyyaml"):
             license_path = f"licenses/{name}.txt"
@@ -72,7 +74,7 @@ def payload(runtime_dir=None):
     return files
 
 
-def version_info(files):
+def version_info(files, arch):
     digest = hashlib.sha256()
     for name, (data, mode) in files.items():
         digest.update(name.encode("ascii") + b"\0")
@@ -80,7 +82,7 @@ def version_info(files):
         digest.update(hashlib.sha256(data).digest())
     return {
         "product_abi": SERIES,
-        "product_arch": "amd64",
+        "product_arch": arch,
         "product_conflicts": "",
         "product_email": "N/A",
         "product_hash": digest.hexdigest()[:12],
@@ -92,8 +94,12 @@ def version_info(files):
     }
 
 
-def build_metadata(files, dependencies):
-    version = version_info(files)
+def abi(arch):
+    return f"FreeBSD:15:{arch}"
+
+
+def build_metadata(files, dependencies, arch):
+    version = version_info(files, arch)
     files[f"{PREFIX}/{VERSION_FILE}"] = (
         (json.dumps(version, indent=4) + "\n").encode(),
         0o644,
@@ -106,8 +112,8 @@ def build_metadata(files, dependencies):
         "desc": (ROOT / "pkg-descr").read_text(encoding="utf-8").strip(),
         "maintainer": version["product_email"],
         "www": version["product_website"],
-        "abi": ABI,
-        "arch": LEGACY_ABI,
+        "abi": abi(arch),
+        "arch": f"freebsd:15:{LEGACY_ARCHES[arch]}",
         "prefix": PREFIX,
         "categories": ["net-vpn"],
         "deps": dependencies,
@@ -116,29 +122,29 @@ def build_metadata(files, dependencies):
     }
 
 
-def hook_scripts():
+def hook_scripts(arch):
     scripts = {}
     for name in HOOKS:
         path = ROOT / "build" / "hooks" / name
-        subprocess.run(["sh", "-n", path], check=True)
-        scripts[name] = path.read_text(encoding="utf-8").strip()
+        script = path.read_text(encoding="utf-8").replace("@BLANKVPN_ARCH@", arch).strip()
+        subprocess.run(["sh", "-n"], input=script, text=True, check=True)
+        scripts[name] = script
     return scripts
 
 
-def native_pkg():
+def native_pkg(arch):
     pkg = "/usr/local/sbin/pkg"
     version = "/usr/local/sbin/opnsense-version"
     if (
         platform.system() != "FreeBSD"
-        or platform.machine() != "amd64"
         or not Path(pkg).is_file()
         or not Path(version).is_file()
         or command(version, "-n") != "opnsense"
         or command(version, "-a") != SERIES
-        or command(pkg, "config", "ABI") != ABI
+        or command(pkg, "config", "ABI") != abi(arch)
     ):
         raise ValueError(
-            f"Native build requires OPNsense Community Edition {SERIES} {ABI}. "
+            f"Native build requires OPNsense Community Edition {SERIES} {abi(arch)}. "
             "Use --cross to produce an archive for validation on that target."
         )
     installed = {}
@@ -173,8 +179,10 @@ def create_native(path, work, pkg, metadata, scripts, files, timestamp):
         env=os.environ | {"SOURCE_DATE_EPOCH": str(timestamp)},
         check=True,
     )
-    if not path.is_file():
-        raise ValueError(f"pkg create did not produce {path.name}")
+    native_name = path.with_name(f"{NAME}-{VERSION}.pkg")
+    if not native_name.is_file():
+        raise ValueError(f"pkg create did not produce {native_name.name}")
+    native_name.rename(path)
     subprocess.run([pkg, "info", "-F", path], check=True)
 
 
@@ -245,6 +253,7 @@ def verify(path, metadata, scripts, files):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cross", action="store_true", help="Produce the native pkg format on a non-OPNsense host")
+    parser.add_argument("--arch", choices=LEGACY_ARCHES, help="Target FreeBSD package architecture")
     parser.add_argument("--output", type=Path, default=ROOT / "dist", help="Output directory")
     parser.add_argument("--runtime-dir", type=Path, help="Include the staged FreeBSD proxy runtimes and licenses")
     args = parser.parse_args()
@@ -252,17 +261,22 @@ def main():
     if timestamp < 0:
         raise ValueError("SOURCE_DATE_EPOCH must be nonnegative")
     if args.cross:
+        arch = args.arch or "amd64"
         pkg, dependencies = None, DEPENDENCIES
     else:
-        pkg, dependencies = native_pkg()
-    files = payload(args.runtime_dir)
-    metadata = build_metadata(files, dependencies)
-    scripts = hook_scripts()
+        normalize = runpy.run_path(str(CORE_INSTALLER))["architecture"]
+        arch = args.arch or normalize(platform.machine())
+        if arch not in LEGACY_ARCHES:
+            parser.error("Use an amd64 or aarch64 OPNsense host, or cross-build with --cross --arch")
+        pkg, dependencies = native_pkg(arch)
+    files = payload(arch, args.runtime_dir)
+    metadata = build_metadata(files, dependencies, arch)
+    scripts = hook_scripts(arch)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".blank-vpn-package-", dir=output) as temporary:
         work = Path(temporary)
-        package = work / f"{NAME}-{VERSION}.pkg"
+        package = work / f"{NAME}-{VERSION}-{arch}.pkg"
         if pkg is None:
             create_cross(package, metadata, scripts, files, timestamp)
         else:

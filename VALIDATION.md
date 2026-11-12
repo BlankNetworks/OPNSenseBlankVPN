@@ -8,7 +8,7 @@
 | Mullvad integration references | Reviewed Mullvad’s published WireGuard tools and device API source. |
 | Dashboard browser fixture | Passed at 390 × 844 and 1280 × 900 with controlled API responses. Covered input escaping, assignment and retarget requests, read-only controls, connections, counters, account and relay rendering, the Netflix preset, service submission, Smart Routing settings, and the proxy import and individual exit controls. |
 | PHP and XML source | PHP parsed with Tree-sitter. The repository checks workflow runs the PHP fixtures on an Ubuntu runner. MVC, menu and ACL XML parsed. JavaScript syntax checked with Node. |
-| Package archive | Cross-built with the FreeBSD pkg manifest format, verified file checksums and modes against source, and inspected with bsdtar. |
+| Package archives | The release workflow checks the ABI and checksums for both FreeBSD architectures, opens each package with native pkg in a FreeBSD 15.1 guest, and runs the bundled core version commands. |
 | Router access | Read-only SSH was blocked by the development environment. No router changes or Mullvad account changes were made. |
 
 Run the dashboard fixture again with `python3 tests/ui_fixture.py /path/to/chromium`. The PHP fixtures under `tests/` require a PHP runtime with SimpleXML. The development Mac had no PHP CLI and could only parse the PHP source.
@@ -32,7 +32,7 @@ A passing lab should confirm all of the following on the exact CE 26.7 build. Us
 | Configuration lifecycle | Force apply failure and confirm rollback. Test concurrent administration changes, reboot, upgrade, disable, and guarded removal. |
 | Provider behavior | Test a real Mullvad exit, cache expiry or API outage, account expiry and full slots. Confirm that changing an unassigned profile preserves its registered device. |
 
-There was no matching OPNsense guest or FreeBSD pkg executable on the development host. Native installation, PHP execution on OPNsense, actual data-plane routing, proxy TUN forwarding, and leak resistance remain unverified. Test real Netflix playback separately because service-side VPN restrictions are independent of correct routing.
+There was no matching OPNsense guest or FreeBSD pkg executable on the development host. Installation and data-plane behavior on physical OPNsense routers, including the NanoPi, still need lab verification. Test real Netflix playback separately because service-side VPN restrictions are independent of correct routing.
 
 ## Provider and subscription checks
 

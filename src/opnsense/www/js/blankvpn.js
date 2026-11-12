@@ -443,10 +443,11 @@
             body.replaceChildren();
             const storage = data.storage || {};
             byId('core-storage').textContent = data.pending ? 'A core change is in progress.'
-                : [formatBytes(Math.floor(storage.freeBytes || 0)) + ' free on the state filesystem',
+                : [data.architecture ? 'FreeBSD ' + data.architecture : '',
+                    formatBytes(Math.floor(storage.freeBytes || 0)) + ' free on the state filesystem',
                     formatBytes(storage.coreBytes) + ' core updates',
                     formatBytes(storage.catalogBytes) + ' proxy catalog',
-                    formatBytes(storage.reserveBytes) + ' reserved as free space'].join(' · ');
+                    formatBytes(storage.reserveBytes) + ' reserved as free space'].filter(Boolean).join(' · ');
             for (const core of cores) {
                 const row = body.insertRow();
                 cell(row, core.id === 'mihomo' ? 'Mihomo (Clash)' : core.id);

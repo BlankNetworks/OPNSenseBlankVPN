@@ -16,9 +16,6 @@ final class ProxyCores
     private const UPSTREAM = [
         'mihomo' => 'MetaCubeX/mihomo', 'tun2socks' => 'xjasonlyu/tun2socks', 'xray' => 'XTLS/Xray-core'
     ];
-    private const DIRECTORY = Policy::STATE_DIR . '/cores';
-    private const STATE = 'core-versions.json';
-    private const CACHE = 'core-catalog.json';
     private const RESERVE = 64 * 1024 * 1024;
     private const MAX_CATALOG = 32768;
 
@@ -32,8 +29,42 @@ final class ProxyCores
         return preg_match('/^[0-9a-f]{64}$/D', $value) === 1;
     }
 
-    public static function releaseUrl(string $core, array $row): string
+    public static function architecture(): string
     {
+        return match (php_uname('m')) {
+            'amd64', 'x86_64' => 'amd64',
+            'aarch64', 'arm64' => 'aarch64',
+            default => throw new DomainException('The proxy cores require FreeBSD amd64 or aarch64.')
+        };
+    }
+
+    private static function architectureSuffix(): string
+    {
+        return self::architecture() === 'aarch64' ? '-aarch64' : '';
+    }
+
+    private static function directory(): string
+    {
+        return Policy::STATE_DIR . '/cores' . self::architectureSuffix();
+    }
+
+    private static function stateFile(): string
+    {
+        return 'core-versions' . self::architectureSuffix() . '.json';
+    }
+
+    private static function catalogFile(): string
+    {
+        return 'core-catalog' . self::architectureSuffix() . '.json';
+    }
+
+    public static function releaseUrl(string $core, array $row, ?string $arch = null): string
+    {
+        $arch ??= self::architecture();
+        if (!in_array($arch, ['amd64', 'aarch64'], true)) {
+            throw new DomainException('The core catalog architecture is unsupported.');
+        }
+        $arm = $arch === 'aarch64';
         $version = $row['version'] ?? '';
         $sha = $row['sha256'] ?? '';
         if (!isset(self::BASE[$core]) || !is_string($version) || !self::version($version) ||
@@ -42,15 +73,15 @@ final class ProxyCores
         }
         if (($row['source'] ?? '') === 'blanknetworks') {
             $repository = self::REPO;
-            $tag = "cores-{$core}-v{$version}";
-            $asset = "{$core}-{$version}-freebsd-amd64.gz";
+            $tag = "cores-{$core}-v{$version}" . ($arm ? "-aarch64" : "");
+            $asset = "{$core}-{$version}-freebsd-{$arch}.gz";
         } elseif (($row['source'] ?? '') === 'upstream' && isset(self::UPSTREAM[$core])) {
             $repository = self::UPSTREAM[$core];
             $tag = 'v' . $version;
             $asset = match ($core) {
-                'mihomo' => "mihomo-freebsd-amd64-compatible-{$tag}.gz",
-                'tun2socks' => 'tun2socks-freebsd-amd64.zip',
-                'xray' => 'Xray-freebsd-64.zip'
+                'mihomo' => $arm ? "mihomo-freebsd-arm64-{$tag}.gz" : "mihomo-freebsd-amd64-compatible-{$tag}.gz",
+                'tun2socks' => $arm ? 'tun2socks-freebsd-arm64.zip' : 'tun2socks-freebsd-amd64.zip',
+                'xray' => $arm ? 'Xray-freebsd-arm64-v8a.zip' : 'Xray-freebsd-64.zip'
             };
         } else {
             throw new DomainException('The core catalog contains an unknown release source.');
@@ -61,7 +92,7 @@ final class ProxyCores
         return "https://github.com/{$repository}/releases/download/{$tag}/{$asset}";
     }
 
-    public static function parseCatalog(string $content): array
+    public static function parseCatalog(string $content, ?string $arch = null): array
     {
         $data = strlen($content) <= self::MAX_CATALOG ? json_decode($content, true, 8) : null;
         if (($data['schema'] ?? null) !== 1 || !is_array($data['cores'] ?? null) || $data['cores'] === []) {
@@ -72,7 +103,7 @@ final class ProxyCores
             if (!is_string($core) || !is_array($row)) {
                 throw new DomainException('The core catalog is invalid.');
             }
-            self::releaseUrl($core, $row);
+            self::releaseUrl($core, $row, $arch);
             $cores[$core] = array_intersect_key($row, array_flip(['version', 'source', 'tag', 'asset', 'sha256']));
         }
         return $cores;
@@ -80,14 +111,15 @@ final class ProxyCores
 
     private static function catalog(): array
     {
-        $cache = Policy::STATE_DIR . '/' . self::CACHE;
-        $path = is_file($cache) ? $cache : '/usr/local/share/blankvpn/core-catalog.json';
+        $filename = self::catalogFile();
+        $cache = Policy::STATE_DIR . '/' . $filename;
+        $path = is_file($cache) ? $cache : '/usr/local/share/blankvpn/' . $filename;
         return self::parseCatalog((string)file_get_contents($path, false, null, 0, self::MAX_CATALOG + 1));
     }
 
     public static function refresh(): void
     {
-        $url = 'https://raw.githubusercontent.com/' . self::REPO . '/main/src/share/blankvpn/core-catalog.json';
+        $url = 'https://raw.githubusercontent.com/' . self::REPO . '/main/src/share/blankvpn/' . self::catalogFile();
         $curl = curl_init($url);
         $body = '';
         curl_setopt_array($curl, [
@@ -106,12 +138,12 @@ final class ProxyCores
             throw new DomainException('The approved core catalog could not be downloaded.');
         }
         self::parseCatalog($body);
-        Policy::writeState(self::CACHE, $body);
+        Policy::writeState(self::catalogFile(), $body);
     }
 
     private static function state(): array
     {
-        $path = Policy::STATE_DIR . '/' . self::STATE;
+        $path = Policy::STATE_DIR . '/' . self::stateFile();
         if (!is_file($path)) {
             return ['cores' => []];
         }
@@ -124,13 +156,13 @@ final class ProxyCores
 
     private static function save(array $state): void
     {
-        Policy::writeState(self::STATE, json_encode($state, JSON_THROW_ON_ERROR));
+        Policy::writeState(self::stateFile(), json_encode($state, JSON_THROW_ON_ERROR));
     }
 
     public static function isManagedPath(string $core, string $path): bool
     {
         return isset(self::BASE[$core]) && preg_match(
-            '/^' . preg_quote(self::DIRECTORY . '/' . $core . '-', '/') . '[0-9a-f]{64}$/D',
+            '/^' . preg_quote(self::directory() . '/' . $core . '-', '/') . '[0-9a-f]{64}$/D',
             $path
         ) === 1;
     }
@@ -141,7 +173,7 @@ final class ProxyCores
         if (!isset(self::BASE[$core]) || !is_string($digest) || !self::digest($digest)) {
             return null;
         }
-        return self::DIRECTORY . '/' . $core . '-' . $digest;
+        return self::directory() . '/' . $core . '-' . $digest;
     }
 
     public static function uses(array $route, string $core): bool
@@ -186,13 +218,13 @@ final class ProxyCores
             ];
         }
         $used = 0;
-        foreach (glob(self::DIRECTORY . '/*') ?: [] as $path) {
+        foreach (glob(self::directory() . '/*') ?: [] as $path) {
             if (is_file($path)) {
                 $used += filesize($path);
             }
         }
         return [
-            'cores' => $cores, 'pending' => isset($state['pending']),
+            'cores' => $cores, 'architecture' => self::architecture(), 'pending' => isset($state['pending']),
             'storage' => [
                 'freeBytes' => disk_free_space(Policy::STATE_DIR) ?: 0, 'coreBytes' => $used,
                 'catalogBytes' => @filesize(Policy::STATE_DIR . '/proxy-catalog.json') ?: 0,
@@ -229,7 +261,8 @@ final class ProxyCores
         if (($original['sha256'] ?? '') === $entry['sha256']) {
             return;
         }
-        $directory = Policy::stateDirectory() . '/cores';
+        Policy::stateDirectory();
+        $directory = self::directory();
         if ((!is_dir($directory) && !mkdir($directory, 0700)) ||
             is_link($directory) || fileowner($directory) !== 0 || (fileperms($directory) & 0077) !== 0) {
             throw new RuntimeException('The core storage directory is unavailable.');
@@ -249,7 +282,7 @@ final class ProxyCores
                 Resolver::command(['/usr/bin/timeout', '40', '/usr/local/bin/python3.13', $script,
                     '--stage', $core, $entry['sha256'], $temporary, $source, (string)self::RESERVE]);
             } catch (RuntimeException) {
-                throw new DomainException('The core archive could not be downloaded or verified as FreeBSD amd64.');
+                throw new DomainException('The core archive could not be downloaded or verified as FreeBSD ' . self::architecture() . '.');
             }
             if (disk_free_space($directory) <= self::RESERVE) {
                 throw new DomainException('The core would leave too little space for Blank VPN settings and router state.');
@@ -295,7 +328,7 @@ final class ProxyCores
                 ));
                 try {
                     $arguments = match ($core) {
-                        'mihomo' => ['-t', '-d', self::DIRECTORY, '-f', $file],
+                        'mihomo' => ['-t', '-d', self::directory(), '-f', $file],
                         'xray' => ['run', '-test', '-config', $file],
                         'sing-box' => ['check', '-c', $file]
                     };
@@ -318,7 +351,7 @@ final class ProxyCores
         }
         $target = $selection['previous'] ?? null;
         if ($target !== null) {
-            $path = self::DIRECTORY . '/' . $core . '-' . $target['sha256'];
+            $path = self::directory() . '/' . $core . '-' . $target['sha256'];
             self::validate($core, $target['version'], $path);
         } elseif (!ProxyRuntime::hasBase($core)) {
             throw new DomainException('Install the bundled core before rolling back to it.');
@@ -391,7 +424,7 @@ final class ProxyCores
 
     private static function clearStaging(): void
     {
-        foreach (glob(self::DIRECTORY . '/.stage-*') ?: [] as $path) {
+        foreach (glob(self::directory() . '/.stage-*') ?: [] as $path) {
             if (is_file($path) && !is_link($path)) {
                 unlink($path);
             }
@@ -402,7 +435,7 @@ final class ProxyCores
     {
         $keep = array_filter(array_column($state['cores'][$core] ?? [], 'sha256'));
         $keep = array_merge($keep, array_filter(array_column($state['pending']['restore'] ?? [], 'sha256')));
-        foreach (glob(self::DIRECTORY . '/' . $core . '-*') ?: [] as $path) {
+        foreach (glob(self::directory() . '/' . $core . '-*') ?: [] as $path) {
             if (self::isManagedPath($core, $path) && !in_array(substr($path, -64), $keep, true)) {
                 unlink($path);
             }
