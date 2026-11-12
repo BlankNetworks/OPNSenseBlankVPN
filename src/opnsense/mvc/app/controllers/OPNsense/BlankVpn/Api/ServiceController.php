@@ -29,6 +29,7 @@ class ServiceController extends ApiControllerBase
         return $this->respond(function () {
             $model = new BlankVpn();
             $settings = Policy::settings($model);
+            $routing = Policy::routingSettings($settings);
             $settings['dashboardAddresses'] = Resolver::dashboardAddresses();
             $port = (string)Config::getInstance()->object()->system->webgui->port;
             $settings['dashboardPort'] = ctype_digit($port) && (int)$port <= 65535 && (int)$port > 0 ? (int)$port : 443;
@@ -94,11 +95,11 @@ class ServiceController extends ApiControllerBase
                     'appliedRoute' => $applied
                 ];
             }
-            $learned = SmartRouting::active($settings, $services) ? SmartRouting::status() : [];
+            $learned = SmartRouting::active($routing, $services) ? SmartRouting::status() : [];
             foreach ($services as $id => &$service) {
                 $service['learned'] = $learned[$id] ?? null;
                 $service['routing'] = [];
-                foreach ($settings['smartInterfaces'] as $interface) {
+                foreach ($routing['smartInterfaces'] as $interface) {
                     $key = $id . ':' . $interface;
                     $guard = ($loaded[Policy::marker('service_guard', $key)]['action'] ?? '') === 'block';
                     $service['routing'][$interface] = [
@@ -119,27 +120,15 @@ class ServiceController extends ApiControllerBase
                 'canManageCores' => self::nativeWritesAvailable() && is_string($username) &&
                     (new ACL())->isPageAccessible($username, '/api/blankvpn/core/status'),
                 'mullvadSignedIn' => $this->mullvadToken() !== null,
-                'nativeGateways' => array_values(NativeVpn::gateways()),
                 'assignments' => array_values($assignments),
                 'settings' => $settings,
+                'activeSmartInterfaces' => $routing['smartInterfaces'],
                 'services' => array_values($services),
                 'servicePresets' => SmartRouting::PRESETS,
                 'canManage' => self::nativeWritesAvailable() && is_string($username) &&
                     (new ACL())->isPageAccessible($username, '/api/blankvpn/service/assign')
             ];
         });
-    }
-
-    public function providersAction()
-    {
-        return $this->respond(static function () {
-            $path = '/usr/local/share/blankvpn/providers.json';
-            $catalog = is_readable($path) ? file_get_contents($path) : false;
-            if ($catalog === false) {
-                throw new \RuntimeException('The installed VPN provider catalog could not be read.');
-            }
-            return ['providers' => json_decode($catalog, true, 32, JSON_THROW_ON_ERROR)];
-        }, false, true);
     }
 
     public function relaysAction()
@@ -182,7 +171,7 @@ class ServiceController extends ApiControllerBase
 
     private function mullvadToken(): ?string
     {
-        if ($this->isExternalClient() || !$this->request->isSecure()) {
+        if ($this->isExternalClient() || $this->request->getScheme() !== 'https') {
             return null;
         }
         $login = $this->session->get(self::MULLVAD_SESSION);
@@ -248,7 +237,7 @@ class ServiceController extends ApiControllerBase
                         throw new \DomainException('Move all devices off this shared exit before changing its server.');
                     }
                 }
-                $this->requireUnusedByService($model, $id);
+                $this->requireUnusedByRouting($model, $id);
                 foreach ($profiles as $other) {
                     if ($other['id'] !== $id && $other['relay'] === $relayId) {
                         throw new \DomainException('A tunnel for that relay already exists. Use that profile.');
@@ -366,7 +355,7 @@ class ServiceController extends ApiControllerBase
                         throw new \DomainException('Remove this profile from every device policy before deleting it.');
                     }
                 }
-                $this->requireUnusedByService($model, $id);
+                $this->requireUnusedByRouting($model, $id);
                 if (($profile['kind'] ?? '') === 'proxy') {
                     $model->proxyRoutes->route->del($id);
                     return ['reload' => Policy::settings($model)['enabled']];
@@ -395,6 +384,17 @@ class ServiceController extends ApiControllerBase
             $local = $this->listInput('localNetworks');
             $hostname = strtolower(trim($this->input('hostname', 120, 'blankvpn.home.arpa')));
             $bind = $this->input('dashboardBind', 12, 'lan');
+            $current = Policy::settings(new BlankVpn());
+            $coverage = $this->input('coverage', 12, $current['coverage']);
+            $networkMode = $this->input('networkMode', 12, $current['networkMode']);
+            $networkProfile = $this->input('networkProfile', 64, $current['networkProfile']);
+            if (!in_array($coverage, ['network', 'device'], true) ||
+                !in_array($networkMode, ['full', 'multi', 'blocked', 'disabled'], true)) {
+                throw new \DomainException('Choose a coverage scope and routing mode.');
+            }
+            if ($coverage !== 'network' || $networkMode !== 'full') {
+                $networkProfile = '';
+            }
             if (!in_array($bind, ['lan', 'tailnet'], true)) {
                 throw new \DomainException('Choose the LAN or Tailscale IPv4 address for the dashboard.');
             }
@@ -429,8 +429,26 @@ class ServiceController extends ApiControllerBase
                 }
                 $networks[] = $canonical;
             }
-            Operations::change(function (BlankVpn $model) use ($enabled, $interfaces, $strict, $smart, $tailscale, $assignedOnly, $networks, $hostname, $bind) {
+            Operations::change(function (BlankVpn $model) use (
+                $enabled, $interfaces, $strict, $smart, $tailscale, $assignedOnly, $networks,
+                $hostname, $bind, $coverage, $networkMode, $networkProfile
+            ) {
                 $before = Policy::settings($model);
+                if ($coverage === 'network') {
+                    $segments = array_values(array_diff($interfaces, $tailscale));
+                    if ($enabled && $networkMode !== 'disabled') {
+                        if ($segments === []) {
+                            throw new \DomainException('Choose a LAN or VLAN for whole-network routing.');
+                        }
+                        Policy::segmentNetworks($segments);
+                    }
+                    if ($enabled && $networkMode === 'full') {
+                        $route = Policy::routes($model)[$networkProfile] ?? [];
+                        if ($route === [] || !SmartRouting::canResolve($route) || !self::routeConfigured($route)) {
+                            throw new \DomainException('Choose a configured VPN or proxy exit with DNS for the whole network.');
+                        }
+                    }
+                }
                 $reset = [];
                 foreach (Policy::assignments($model) as $row) {
                     if (!in_array($row['interface'], $interfaces, true)) {
@@ -443,7 +461,8 @@ class ServiceController extends ApiControllerBase
                     if ($mode === 'multi' && !in_array($row['interface'], $smart, true)) {
                         throw new \DomainException('Move Multi-Path assignments before removing their service routing interface.');
                     }
-                    if ($enabled && !$before['enabled'] && ($mode === 'blocked' ||
+                    if ($enabled && $coverage === 'device' && (!$before['enabled'] || $before['coverage'] !== 'device') &&
+                        ($mode === 'blocked' ||
                         ($mode === 'full' && $row['failure'] !== 'wan'))) {
                         $reset[] = $row['ip'];
                         if (!empty($row['ipv6'])) {
@@ -453,6 +472,9 @@ class ServiceController extends ApiControllerBase
                 }
                 $model->settings->enabled = $enabled ? '1' : '0';
                 $model->settings->interfaces = implode(',', $interfaces);
+                $model->settings->coverage = $coverage;
+                $model->settings->networkMode = $networkMode;
+                $model->settings->networkProfile = $networkProfile;
                 $model->settings->strictInterfaces = implode(',', $strict);
                 $model->settings->smartInterfaces = implode(',', $smart);
                 $model->settings->smartAssignedOnly = $assignedOnly ? '1' : '0';
@@ -460,12 +482,25 @@ class ServiceController extends ApiControllerBase
                 $model->settings->localNetworks = implode(',', array_unique($networks));
                 $model->settings->hostname = $hostname;
                 $model->settings->dashboardBind = $bind;
-                $newStrict = $enabled ? array_values(array_diff($strict, $before['enabled'] ? $before['strictInterfaces'] : [])) : [];
+                $after = Policy::settings($model);
+                $oldRouting = Policy::routingSettings($before);
+                $newRouting = Policy::routingSettings($after);
+                $newStrict = $enabled
+                    ? array_diff($newRouting['strictInterfaces'], $before['enabled'] ? $oldRouting['strictInterfaces'] : [])
+                    : [];
+                $oldNetwork = $before['enabled'] && $before['coverage'] === 'network' && $before['networkMode'] !== 'disabled'
+                    ? $oldRouting['interfaces'] : [];
+                $newNetwork = $enabled && $coverage === 'network' && $networkMode !== 'disabled'
+                    ? $newRouting['interfaces'] : [];
+                $networkChanged = $oldNetwork !== $newNetwork || ($newNetwork !== [] &&
+                    ($networkMode !== $before['networkMode'] || $networkProfile !== $before['networkProfile']));
                 return [
                     'reload' => $before['enabled'] || $enabled,
-                    'strictActivation' => $newStrict,
+                    'resetSegments' => array_values(array_unique(array_merge(
+                        $newStrict, $networkChanged ? [...$oldNetwork, ...$newNetwork] : []
+                    ))),
                     'killSwitchReset' => array_values(array_unique($reset)),
-                    'settings' => Policy::settings($model)
+                    'settings' => $after
                 ];
             });
             return [];
@@ -601,7 +636,7 @@ class ServiceController extends ApiControllerBase
         return $this->respond(fn () => Operations::exclusive(function () {
             $id = $this->input('id', 64);
             $name = $this->name();
-            $domains = SmartRouting::domains($this->input('domains', 2048));
+            $domains = SmartRouting::domains($this->input('domains', SmartRouting::MAX_DOMAIN_BYTES));
             $profileId = $this->input('profile', 64);
             return Operations::change(function (BlankVpn $model) use ($id, $name, $domains, $profileId) {
                 $services = SmartRouting::services($model);
@@ -611,16 +646,19 @@ class ServiceController extends ApiControllerBase
                 if ($id === '' && count($services) >= SmartRouting::MAX_SERVICES) {
                     throw new \DomainException('Remove an existing service before adding another.');
                 }
-                SmartRouting::checkOverlap($services, $id, $domains);
-                $profile = Policy::routes($model)[$profileId] ?? [];
-                if ($profile === [] || !SmartRouting::canResolve($profile) || !self::routeConfigured($profile)) {
-                    throw new \DomainException('Select a configured VPN or proxy exit with DNS support.');
+                if ($profileId !== '') {
+                    SmartRouting::checkOverlap(SmartRouting::boundServices($services), $id, $domains);
+                    $profile = Policy::routes($model)[$profileId] ?? [];
+                    if ($profile === [] || !SmartRouting::canResolve($profile) || !self::routeConfigured($profile)) {
+                        throw new \DomainException('Select a configured VPN or proxy exit with DNS support.');
+                    }
                 }
                 $node = $id === '' ? $model->services->service->add() : $model->services->service->getChild($id);
                 $node->name = $name;
                 $node->domains = implode(',', $domains);
                 $node->profile = $profileId;
-                return ['reload' => Policy::settings($model)['enabled']];
+                return ['reload' => Policy::settings($model)['enabled'] &&
+                    ($profileId !== '' || ($services[$id]['profile'] ?? '') !== '')];
             });
         }), true, true);
     }
@@ -630,16 +668,20 @@ class ServiceController extends ApiControllerBase
         return $this->respond(fn () => Operations::exclusive(function () {
             $id = $this->input('id', 64);
             return Operations::change(function (BlankVpn $model) use ($id) {
-                if (!$model->services->service->del($id)) {
+                $service = SmartRouting::services($model)[$id] ?? null;
+                if ($service === null || !$model->services->service->del($id)) {
                     throw new \DomainException('This Smart Routing service no longer exists.');
                 }
-                return ['reload' => Policy::settings($model)['enabled']];
+                return ['reload' => Policy::settings($model)['enabled'] && $service['profile'] !== ''];
             });
         }), true, true);
     }
 
-    private function requireUnusedByService(BlankVpn $model, string $profileId): void
+    private function requireUnusedByRouting(BlankVpn $model, string $profileId): void
     {
+        if (Policy::settings($model)['networkProfile'] === $profileId) {
+            throw new \DomainException('Move the whole-network policy off this exit first.');
+        }
         foreach (SmartRouting::services($model) as $service) {
             if ($service['profile'] === $profileId) {
                 throw new \DomainException('Move Smart Routing services off this exit first.');
@@ -811,7 +853,7 @@ class ServiceController extends ApiControllerBase
             return ['ok' => false, 'error' => 'Send this operation as POST.'];
         }
         try {
-            if ($requireHttps && !$this->request->isSecure()) {
+            if ($requireHttps && $this->request->getScheme() !== 'https') {
                 throw new \DomainException('Open the OPNsense WebGUI over HTTPS before sending VPN credentials, proxy nodes, or subscription URLs.');
             }
             if ($post && !self::nativeWritesAvailable()) {
@@ -826,7 +868,7 @@ class ServiceController extends ApiControllerBase
             }
             syslog(LOG_WARNING, 'Blank VPN operation did not complete.');
         } catch (\Throwable) {
-            syslog(LOG_ERR, 'Blank VPN operation failed unexpectedly.');
+            syslog(LOG_ERR, 'Blank VPN ' . $error::class . ' at ' . basename($error->getFile()) . ':' . $error->getLine());
         }
         return ['ok' => false, 'error' => 'Blank VPN could not complete this operation.'];
     }

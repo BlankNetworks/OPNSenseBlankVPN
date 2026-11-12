@@ -53,8 +53,8 @@ final class Operations
             if (!empty($result['reload'])) {
                 self::sync($model);
             }
-            if (!empty($result['strictActivation'])) {
-                self::clearNewSegments($result['strictActivation'], $result['settings']);
+            if (!empty($result['resetSegments'])) {
+                self::resetSegments($result['resetSegments'], $result['settings']);
             }
             foreach ($result['killSwitchReset'] ?? [] as $ip) {
                 self::resetKillSwitch($ip);
@@ -130,7 +130,7 @@ final class Operations
         }
     }
 
-    private static function clearNewSegments(array $interfaces, array $settings): void
+    public static function resetSegments(array $interfaces, array $settings): void
     {
         $networks = Policy::segmentNetworks($interfaces);
         $local = Policy::localNetworks($settings);

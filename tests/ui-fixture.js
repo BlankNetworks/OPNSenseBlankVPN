@@ -6,14 +6,12 @@ const reply = {
         assignments: [],
         services: [],
         canManageCores: true,
-        nativeGateways: [{id:'gw1', gateway:'NORD', protocol:'OpenVPN'}],
         mullvadSignedIn: false,
         proxyCores: {mihomo:true,tun2socks:true,xray:true,"sing-box":true},
         servicePresets: {Netflix:['netflix.com','nflxvideo.net']},
         settings: {dashboardBind:'lan',dashboardAddresses:{lan:'10.0.0.1',tailnet:'100.101.102.103'},enabled:true, interfaces:['lan'], availableInterfaces:[{id:'lan', name:'LAN'}], strictInterfaces:[], localNetworks:[], hostname:'opnsense.home.arpa'},
         warnings: []
     },
-    providers: {ok:true, providers:JSON.parse(document.getElementById('provider-fixture').textContent)},
     relays: {relays:[{id:'ca-test-wg-001',country:'Canada',city:'Test',hostname:'ca-test-wg-001',active:true},{id:'ca-test-wg-002',country:'Canada',city:'Test',hostname:'ca-test-wg-002',active:false}], stale:false, fetchedAt:1794490200},
     connections: {connections:[{protocol:'tcp', source:'10.0.0.20', sourcePort:1234, destination:'2001:db8::25', destinationPort:443, age:'00:00:10', bytes:[1024,1024]}]},
     status: {ok:true, cores:[{id:'mihomo',version:'1.19.34',installed:true,source:'Bundled',
@@ -26,12 +24,20 @@ const reply = {
     importProxies: {ok:true, imported:1, skipped:0},
     refreshRelays: {ok:true, relays:[{id:'ca-test-wg-003',country:'Canada',city:'Test',hostname:'ca-test-wg-003',active:true}], stale:true, error:'Provider unavailable'}
 };
+window.confirm = () => true;
 window.jQuery = (ready) => document.addEventListener('DOMContentLoaded', ready);
 window.jQuery.ajax = async (request) => {
     const action = request.url.split('/')[4];
-    requests.push({action, method:request.method, data:request.data ? JSON.parse(request.data) : null});
+    const data = request.data ? JSON.parse(request.data) : null;
+    requests.push({action, method:request.method, data});
     if (action === 'account') reply.dashboard.mullvadSignedIn = true;
     if (action === 'logoutMullvad') reply.dashboard.mullvadSignedIn = false;
+    if (action === 'saveService') {
+        reply.dashboard.services = [{id:'list1', name:data.name, profile:data.profile, domains:data.domains.split(/[,\s]+/)}];
+    }
+    if (action === 'settings') {
+        Object.assign(reply.dashboard.settings, data);
+    }
     return structuredClone(reply[action] || {ok:true});
 };
 
@@ -50,6 +56,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('appearance').value = 'day';
     bv('appearance').dispatchEvent(new Event('change'));
     assert(getComputedStyle(document.getElementById('blankvpn')).colorScheme === 'light', 'day theme did not apply');
+    assert(!bv('tunnels').hidden && !bv('login-form').hidden && bv('register-form').hidden, 'login is not the starting page');
+    assert(!requests.some(x => x.action === 'relays'), 'server list loaded before sign-in');
+    assert(getComputedStyle(bv('appearance')).backgroundImage === 'none', 'host select decoration was not suppressed');
+    document.querySelector('[data-bv-section="devices"]').click();
     bv('device-list').querySelector('button').click();
     assert(bv('ip').value === '10.0.0.20', 'assignment address not populated');
     assert(bv('identity').textContent.includes('reservation was observed'), 'reservation not shown');
@@ -71,60 +81,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('connection-list').textContent.includes('[2001:db8::25]:443'), 'IPv6 destination rendering failed');
     assert(bv('connection-list').textContent.includes('2.0 KiB'), 'connection bytes not rendered');
     document.querySelector('[data-bv-section="vpns"]').click();
-    assert(!bv('tunnels').hidden && bv('tunnels').open, 'VPN section did not open');
-    await wait();
-    assert(requests.some(x => x.action === 'providers' && x.method === 'GET'), 'provider catalog was not fetched');
-    const chooseProvider = (query) => {
-        bv('provider-search').value = query;
-        bv('provider-search').dispatchEvent(new Event('input'));
-    };
-    chooseProvider('nordlynx');
-    assert(bv('provider').value === 'nordvpn', 'search did not match provider alias');
-    assert(bv('provider-methods').querySelectorAll('a[target="_blank"]').length === 2,
-        'NordVPN setup paths lack provider guides');
-    bv('provider-methods').querySelectorAll('button')[1].click();
-    assert(bv('native-name').value === 'NordVPN' && document.activeElement === bv('native-name'),
-        'OpenVPN provider shortcut did not focus and name the gateway form');
-    bv('native-gateway').value = 'gw1';
-    bv('native-dns').value = '192.0.2.9';
-    bv('native-form').requestSubmit(bv('native-add'));
-    await wait();
-    assert(requests.some(x => x.action === 'addNativeExit' && x.data.gateway === 'gw1'), 'native VPN gateway was not submitted');
-    chooseProvider('mysteriumvpn');
-    bv('provider-methods').querySelector('button').click();
-    const data = new DataTransfer();
-    data.items.add(new File(['[Interface]\nDNS = vpn.example'], 'provider.conf'));
-    bv('import-file').files = data.files;
-    bv('import-file').dispatchEvent(new Event('change'));
-    await wait();
-    bv('import-dns').value = '192.0.2.9';
-    bv('import-form').requestSubmit(bv('import-form').querySelector('button[type=submit]'));
-    await wait();
-    assert(requests.some(x => x.action === 'importProfile' && x.data.name === 'MysteriumVPN' &&
-        x.data.config.includes('DNS = vpn.example') && x.data.dns === '192.0.2.9'),
-        'WireGuard provider shortcut, file load or DNS override failed');
-    chooseProvider('nymvpn');
-    assert(bv('provider-note').textContent.includes('daemon') && !bv('provider-methods').querySelector('button'),
-        'client-managed service was offered an unsupported import');
-    chooseProvider('geph5');
-    bv('provider-methods').querySelector('button').click();
-    assert(!bv('proxies').hidden && bv('proxy-manual').closest('details').open &&
-        bv('manual-name').value === 'Geph' && bv('manual-protocol').value === 'socks5',
-        'companion SOCKS5 setup did not open the manual form');
-    document.querySelector('[data-bv-section="vpns"]').click();
-    await wait();
-    assert(bv('relay').options.length === 3 && bv('relay').options[2].disabled, 'server availability not enforced');
+    assert(!bv('tunnels').hidden && bv('register-form').hidden, 'VPN login did not open');
     bv('account').value = '1234567890123456';
     bv('inspect-account').click();
     await wait();
-    assert(bv('account-status').textContent.includes('1 of 5'), 'account slots not rendered');
+    assert(bv('account-status').textContent.includes('1 of 5') && bv('login-form').hidden &&
+        !bv('register-form').hidden, 'successful sign-in did not switch to server selection');
+    assert(bv('relay').options.length === 3 && bv('relay').options[2].disabled, 'server availability not enforced');
     bv('relay').value = 'ca-test-wg-001';
+    bv('relay').dispatchEvent(new Event('change'));
+    assert(bv('relay-choice').textContent.includes('Canada') && !bv('register').disabled, 'relay selection did not update');
     bv('register-form').requestSubmit(bv('register-form').querySelector('button[type=submit]'));
     await wait();
     assert(requests.some(x => x.action === 'register' && x.data.relay === 'ca-test-wg-001' && !Object.hasOwn(x.data, 'account')), 'registration payload failed');
     assert(bv('account').value === '', 'successful registration retained account input');
     bv('relay').value = 'ca-test-wg-001';
     bv('retarget').value = 'vpn1';
+    bv('relay').dispatchEvent(new Event('change'));
     bv('register-form').requestSubmit(bv('register-form').querySelector('button[type=submit]'));
     await wait();
     assert(requests.some(x => x.action === 'retargetProfile' && x.data.id === 'vpn1' &&
@@ -132,12 +105,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelector('[data-bv-section="smart"]').click();
     bv('service-preset').value = 'Netflix';
     bv('service-preset').dispatchEvent(new Event('change'));
-    assert(bv('service-domains').value === 'netflix.com, nflxvideo.net', 'Netflix preset domains not populated');
+    assert(bv('service-domains').value === 'netflix.com\nnflxvideo.net', 'Netflix preset domains not populated');
+    const originalProfiles = reply.dashboard.profiles;
+    reply.dashboard.profiles = [];
+    bv('refresh').click();
+    await wait();
+    const data = new DataTransfer();
+    data.items.add(new File(['netflix.com\n*.nflxvideo.net\nnflximg.net'], 'Netflix.txt'));
+    bv('service-file').files = data.files;
+    bv('service-file').dispatchEvent(new Event('change'));
+    for (let attempt = 0; attempt < 30 && !bv('domain-file-status').textContent; attempt++) {
+        await wait();
+    }
+    assert(bv('domain-file-status').textContent.includes('Netflix.txt') && !bv('download-domains').disabled,
+        'domain file was not loaded');
+    bv('service-form').requestSubmit(bv('save-service'));
+    await wait();
+    assert(requests.some(x => x.action === 'saveService' && x.data.profile === '' &&
+        x.data.domains.includes('nflximg.net')) && bv('service-list').textContent.includes('Unassigned'),
+        'domain list did not save without any exits');
+    reply.dashboard.profiles = originalProfiles;
+    bv('refresh').click();
+    await wait();
+    bv('service-list').querySelector('button').click();
     bv('service-profile').value = 'vpn1';
     bv('service-form').requestSubmit(bv('save-service'));
     await wait();
-    assert(requests.some(x => x.action === 'saveService' && x.data.profile === 'vpn1' &&
-        x.data.domains.includes('nflxvideo.net')), 'service rule payload failed');
+    assert(requests.some(x => x.action === 'saveService' && x.data.id === 'list1' && x.data.profile === 'vpn1' &&
+        x.data.domains.includes('nflxvideo.net')), 'saved list could not be bound to an exit');
     bv('use-lan').click();
     assert(bv('smart-interfaces').value === 'lan' && bv('managed').value === 'lan', 'LAN setup did not prefill');
     document.querySelector('[data-bv-section="proxies"]').click();
@@ -165,7 +160,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('proxy-import').requestSubmit(bv('proxy-import').querySelector('button'));
     await wait();
     assert(requests.some(x => x.action === 'importProxies') && bv('proxy-body').value === '', 'proxy import was not submitted and cleared');
-    bv('settings').open = true;
+    document.querySelector('[data-bv-section="devices"]').click();
+    bv('advanced').open = true;
     bv('dashboard-bind').value = 'tailnet';
     bv('dashboard-bind').dispatchEvent(new Event('change'));
     assert(bv('bind-address').textContent.includes('100.101.102.103'), 'Tailscale dashboard address not displayed');
@@ -173,11 +169,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'settings' && x.data.interfaces[0] === 'lan' &&
       x.data.smartInterfaces[0] === 'lan' && x.data.dashboardBind === 'tailnet'), 'routing settings did not serialize');
+    bv('coverage').value = 'network';
+    bv('network-mode').value = 'full';
+    bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
+    bv('network-profile').value = 'vpn1';
+    bv('network-profile').dispatchEvent(new Event('input', {bubbles:true}));
+    assert(!bv('network-profile-field').hidden && bv('coverage-note').textContent.includes('Canada'),
+        'network exit selection had no visible effect');
+    bv('settings-form').requestSubmit(bv('settings-form').querySelector('button[type=submit]'));
+    await wait();
+    assert(requests.some(x => x.action === 'settings' && x.data.coverage === 'network' &&
+        x.data.networkMode === 'full' && x.data.networkProfile === 'vpn1') && bv('add-device').hidden,
+        'whole-network settings did not apply');
+    document.querySelector('[data-bv-section="vpns"]').click();
     bv('refresh-relays').click();
     await wait();
     assert(bv('relay').options[1].value === 'ca-test-wg-003', 'cached relay lost after refresh error');
     assert(bv('relay-status').textContent.includes('Provider unavailable'), 'stale catalog warning omitted');
     assert(document.documentElement.scrollWidth <= window.innerWidth, 'document has horizontal overflow');
+    document.querySelector('[data-bv-section="devices"]').click();
     const expected = window.innerWidth < 768 ? 'block' : 'table';
     assert(getComputedStyle(bv('device-list').closest('table')).display === expected, 'incorrect device layout for viewport');
     reply.dashboard.canManage = false;

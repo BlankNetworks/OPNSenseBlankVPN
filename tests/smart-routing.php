@@ -99,6 +99,11 @@ namespace {
 
     $domains = SmartRouting::domains("NETFLIX.com, *.netflix.com.\n*.nflxvideo.net");
     checkRouting($domains === ['netflix.com', 'nflxvideo.net'], 'Normalize suffixes and deduplicate the apex.');
+    $fileDomains = SmartRouting::domains("\xEF\xBB\xBF# Domains\r\n*.netflix.com, Nflxvideo.net # streaming\r\n");
+    checkRouting($fileDomains === $domains, 'Plain text and CSV imports must accept BOM, comments and wildcards.');
+    $largeList = array_map(static fn (int $n): string => "service{$n}.example.com", range(1, 1000));
+    checkRouting(SmartRouting::domains(implode("\n", $largeList)) === $largeList, 'Accept a 1,000-domain list.');
+    rejectRouting(fn () => SmartRouting::domains(implode("\n", [...$largeList, 'extra.example.com'])));
     checkRouting(SmartRouting::matches('a.b.netflix.com', 'netflix.com'), 'Match multiple subdomain levels.');
     checkRouting(!SmartRouting::matches('fakenetflix.com', 'netflix.com'), 'Require a DNS label boundary.');
     foreach (['com', 'http://netflix.com', '*foo.netflix.com', '127.0.0.1', 'opnsense.home.arpa', 'x.local'] as $invalid) {
@@ -109,6 +114,9 @@ namespace {
     rejectRouting(fn () => SmartRouting::checkOverlap($services, '', ['a.netflix.com']));
     SmartRouting::checkOverlap($services, 'streaming', ['a.netflix.com']);
     SmartRouting::checkOverlap($services, '', ['fakenetflix.com']);
+    rejectRouting(fn () => SmartRouting::checkOverlap(
+        ['child' => array_replace($service, ['domains' => ['a.netflix.com']])], '', ['netflix.com']
+    ));
 
     $table = SmartRouting::table($service);
     checkRouting(strlen($table) <= 31, 'PF table name must fit the native limit.');
@@ -125,6 +133,10 @@ namespace {
     checkRouting(in_array('local=/netflix.com/', SmartRouting::dnsDirectives($services, []), true), 'A missing profile must not send matched DNS to native upstream.');
 
     $settings = ['enabled' => true, 'interfaces' => ['lan'], 'smartInterfaces' => ['lan'], 'strictInterfaces' => []];
+    $drafts = ['draft' => array_replace($service, ['profile' => ''])];
+    checkRouting(SmartRouting::boundServices($drafts) === [] &&
+        !SmartRouting::active($settings, $drafts) && SmartRouting::dnsDirectives($drafts, $profiles) === [],
+        'A saved list without an exit must not generate DNS routes or activate routing.');
     $interfaces = ['lan' => ['if' => 'igb0']];
     $compileSmart = new ReflectionMethod(Firewall::class, 'registerSmartRoutes');
     $good = new Plugin();
@@ -140,6 +152,30 @@ namespace {
     $compileSmart->invoke(null, $down, $settings, $interfaces, $services, $profiles, ['jp' => ['reachable' => false]]);
     checkRouting(!isset($down->rules[Policy::marker('service', 'streaming:lan')]) &&
         isset($down->rules[Policy::marker('service_guard', 'streaming:lan')]), 'Keep the block when the service exit is down.');
+
+    $networkSettings = $settings + [
+        'coverage' => 'network', 'networkMode' => 'full', 'networkProfile' => 'jp', 'tailscaleInterfaces' => []
+    ];
+    $network = new ReflectionMethod(Firewall::class, 'registerNetworkPolicy');
+    $whole = new Plugin();
+    $network->invoke(null, $whole, $networkSettings, $interfaces, $profiles, []);
+    $networkPass = $whole->rules[Policy::marker('device', 'network:lan')];
+    $networkBlock = $whole->rules[Policy::marker('kill', 'network:lan')];
+    checkRouting($networkPass['gateway'] === 'VPN' && $networkPass['priority'] < $networkBlock['priority'] &&
+        $networkBlock['from'] === 'any' && $networkBlock['to_not'] && $whole->nat[0]['from'] === 'lan',
+        'Whole-network routing needs a gateway pass, LAN-scoped NAT and an internet guard.');
+    $wholeDown = new Plugin();
+    $network->invoke(null, $wholeDown, $networkSettings, $interfaces, $profiles, ['jp' => ['reachable' => false]]);
+    checkRouting(!isset($wholeDown->rules[Policy::marker('device', 'network:lan')]) &&
+        isset($wholeDown->rules[Policy::marker('kill', 'network:lan')],
+            $wholeDown->rules[Policy::marker('kill_v6', 'network:lan')]) && $wholeDown->nat === [],
+        'A whole-network VPN outage blocks both address families without WAN fallback.');
+    $multiNetwork = Policy::routingSettings(array_replace($networkSettings, [
+        'networkMode' => 'multi', 'interfaces' => ['lan', 'opt2'], 'tailscaleInterfaces' => ['opt2'],
+        'strictInterfaces' => ['lan'], 'smartAssignedOnly' => true
+    ]));
+    checkRouting($multiNetwork['smartInterfaces'] === ['lan'] && $multiNetwork['strictInterfaces'] === [] &&
+        !$multiNetwork['smartAssignedOnly'], 'Whole-network Multi-Path covers selected LANs without per-IP assignment.');
 
     $assignment = ['interface' => 'lan', 'ip' => '192.0.2.23', 'mac' => '02:00:00:00:00:23',
         'profile' => 'jp', 'backup' => '', 'failure' => 'block'];

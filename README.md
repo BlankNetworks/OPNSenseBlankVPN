@@ -1,4 +1,4 @@
-# Blank VPN 0.6.0
+# Blank VPN 0.7.0
 
 Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Smart Routing keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
@@ -42,19 +42,19 @@ The package and SHA-256 file are written to `dist/`. To reproduce the bundled re
 
    ```sh
    arch=$(pkg config ABI | cut -d: -f3)
-   package="os-blank-vpn-0.6.0-$arch.pkg"
+   package="os-blank-vpn-0.7.0-$arch.pkg"
    sha256 -c "$(awk '{print $1}' "$package.sha256")" "$package"
    pkg info -F "./$package"
    pkg add "./$package"
    pkg info os-blank-vpn
    ```
 
-4. Sign in using the current WebGUI HTTPS address and open **VPN → Blank VPN → Devices** or `/ui/blankvpn/index`. Routing starts disabled. The installer registers the dashboard, model, firewall hook, and local maintenance entry.
+4. Sign in using the current WebGUI HTTPS address and open **VPN → Blank VPN → Dashboard** or `/ui/blankvpn/index`. Routing starts disabled. The installer registers the dashboard, model, firewall hook, and local maintenance entry.
 5. For delegated access, assign **VPN: Blank VPN: View devices and connections** or **VPN: Blank VPN: Manage tunnels and policy routing** in the native user manager. Confirm ACL behavior before delegating either permission.
 
 ## Open the dashboard
 
-From a client on your LAN, open your existing OPNsense HTTPS address and select **VPN → Blank VPN → Devices**. The direct path is `https://<router-ip>/ui/blankvpn/index`. Include your WebGUI port if it differs from 443. Use your existing OPNsense login.
+From a client on your LAN, open your existing OPNsense HTTPS address and select **VPN → Blank VPN → Dashboard**. The direct path is `https://<router-ip>/ui/blankvpn/index`. Include your WebGUI port if it differs from 443. Use your existing OPNsense login.
 
 For ordinary LAN DNS, set up `blankvpn.home.arpa` as a host override pointing to the router’s LAN IP. In OPNsense Unbound, use **Services → Unbound DNS → Overrides**. Add the hostname under **System → Settings → Administration → Alternate Hostnames** and use a trusted HTTPS certificate covering it. To open Blank VPN immediately after login, set the OPNsense user’s preferred landing page to `ui/blankvpn/index`.
 
@@ -63,49 +63,20 @@ For `BlankVPN.local` on the LAN, set the dashboard name to `blankvpn.local` and 
 ### Open from Tailscale
 
 1. Connect OPNsense to your tailnet, assign its Tailscale interface, and permit HTTPS from your authorized peers in the OPNsense firewall. [Tailscale setup for OPNsense](https://tailscale.com/docs/install/opnsense)
-2. Open the router’s Tailscale address or its MagicDNS name with the same WebGUI port and path. In **Blank VPN → Settings**, select **Router Tailscale IPv4** in **Bind dashboard IP**. Blank VPN detects the current router address and uses it for the dashboard name in its managed DNS listeners.
+2. Open the router’s Tailscale address or its MagicDNS name with the same WebGUI port and path. In **Blank VPN → Devices → Advanced routing settings**, select **Router Tailscale IPv4** in **Dashboard IPv4 address**. Blank VPN detects the current router address and uses it for the dashboard name in its managed DNS listeners.
 3. For a shared remote hostname, add `blankvpn.home.arpa` to your native resolver with the detected Tailscale address, then configure that resolver as the restricted nameserver for `home.arpa` in Tailscale DNS. To use the exact `BlankVPN.local` spelling from a remote client, add a local hosts entry mapping `blankvpn.local` to the displayed router Tailscale IP and use a trusted WebGUI certificate for that name. Refresh a manual DNS override or hosts entry if the router’s Tailscale IP changes. [Tailscale DNS](https://tailscale.com/docs/reference/dns-in-tailscale) · [mDNS link-local scope](https://www.rfc-editor.org/rfc/rfc6762.html)
 
 The dashboard binding chooses the IP advertised by Blank VPN’s managed DNS. WebGUI listeners, certificates, and tailnet access remain under the native OPNsense and Tailscale settings.
 
 ## Add a Mullvad exit
 
-1. Open the WebGUI over HTTPS and choose **VPNs → Sign in to Mullvad**. Enter your account number, then choose a country, city, and exact server.
+1. Open the WebGUI over HTTPS and choose **VPN Login → Sign in**. Enter your account number. After sign-in, the server catalog loads automatically. Choose a country, city, and server.
 2. Choose **Add Mullvad exit**. Blank VPN checks your device slots, generates a WireGuard key pair locally, registers only the public key with Mullvad, and creates the native tunnel. The account number is cleared from the form after sign-in. The provider token is kept in your WebGUI session for up to ten minutes.
-3. Select the exit under **Devices** or **Smart Routing**. Sign-out ends the setup session. Saved tunnels keep running with their WireGuard keys.
+3. Select the exit under **Devices** or **Multi-Path Settings**. Sign-out ends the setup session. Saved tunnels keep running with their WireGuard keys.
 
-Each new Mullvad exit uses one Mullvad device slot. Multiple local devices can use the same exit. An interrupted registration retains a restricted recovery key. Retry with the same account and server to recover it without consuming a second device slot. To set up the key on Mullvad’s website, use the [Mullvad configuration generator](https://mullvad.net/en/account/wireguard-config) and import the resulting file under **VPNs → Import a WireGuard exit**.
+Each new Mullvad exit uses one Mullvad device slot. Multiple local devices can use the same exit. An interrupted registration retains a restricted recovery key. Retry with the same account and server to recover it without consuming a second device slot.
 
-## Add VPN providers
-
-Open **VPNs → VPN providers** and search for a service. The [provider catalog](src/share/blankvpn/providers.json) covers 98 entries and offers setup for 64 through compatible profiles, native tunnels, or proxy endpoints. Each setup path links to the provider's documentation. Availability can vary by plan and server.
-
-| Provider | Setup path | Provider instructions |
-| --- | --- | --- |
-| Mullvad | Sign in with your account number and choose an exact relay, or import a WireGuard profile. | [WireGuard generator](https://mullvad.net/en/account/wireguard-config) |
-| NordVPN | Import WireGuard from Nord Account or attach an OpenVPN client configured with NordVPN service credentials. | [Manual configurations](https://support.nordvpn.com/hc/en-us/articles/19617516982929-How-to-find-various-server-configuration-files-for-NordVPN) · [Service credentials](https://support.nordvpn.com/hc/en-us/articles/19685514639633-How-to-find-your-service-credentials-for-manual-NordVPN-setup) |
-| ExpressVPN | Attach an OpenVPN client configured with ExpressVPN's manual credentials and server file. | [Manual setup](https://www.expressvpn.com/support/vpn-setup/manual-config-for-asus-router-with-openvpn/) |
-| Surfshark | Download the server’s WireGuard configuration and import it in Blank VPN. You can also attach a native OpenVPN client. | [WireGuard configuration](https://support.surfshark.com/hc/en-us/articles/6585805595666) · [OPNsense OpenVPN](https://support.surfshark.com/hc/en-us/articles/12434921071890) |
-| Proton VPN | Import WireGuard or attach a native OpenVPN client. | [WireGuard configuration](https://protonvpn.com/support/wireguard-configurations) · [OpenVPN profiles](https://protonvpn.com/support/vpn-config-download) |
-| VPNBaron and Xeovo | Import compatible WireGuard or attach OpenVPN. For supported proxy servers, add the HTTPS subscription from your account. | [VPNBaron](https://vpnbaron.com/docs/stealth/hiddify/) · [Xeovo](https://hub.xeovo.com/posts/182-how-to-setup-stealth-proxies-on-keenetic-xkeen) |
-
-For a direct import, open **VPNs → Import a WireGuard exit**, choose a `.conf` file or paste its contents, and save the exit. Use a one-peer configuration with full-tunnel IPv4 AllowedIPs. The endpoint must resolve over IPv4. If the file lacks a usable IPv4 DNS resolver, provide a resolver reachable through the tunnel in **IPv4 DNS override**. The tunnel address is installed with a host prefix for policy routing. Each concurrent WireGuard exit needs a distinct local tunnel address and key pair. Providers that reuse a tunnel address across servers can require using one exit at a time.
-
-For a native tunnel, configure the provider client, assign its interface, and create a named IPv4 gateway in OPNsense. Keep the WAN as the system default, disable any provider-pushed default route or split default routes, and confirm the firewall’s own default traffic still leaves over WAN. Then choose **VPNs → Use an OPNsense VPN tunnel**, select the gateway, and enter the provider’s IPv4 DNS resolver reachable through the tunnel. Device and service assignments can then select the exit by name. OPNsense manages the VPN credentials, certificates, and connection. A selected gateway must remain attached to the same named interface and have a unique active IPv4 tunnel address.
-
-### Decentralized and companion services
-
-| Service | Blank VPN setup | Provider instructions |
-| --- | --- | --- |
-| MysteriumVPN retail | Import the WireGuard router profile generated in your retail account. Regenerating it can replace an existing profile. | [Router profile](https://help.mysteriumvpn.com/en/articles/16010679-how-to-generate-wireguard-configuration-file) |
-| Geph | Run Geph5 on a companion host and add its reachable SOCKS5 or HTTP endpoint under **Proxies**. | [Geph5 client](https://docs.rs/crate/geph5-client/latest) |
-| Sentinel dVPN | Use the official SDK to run a V2Ray or Xray session on a companion host, then add its reachable SOCKS5 endpoint. The companion handles credentials and session renewal. | [Sentinel SDK](https://github.com/sentinel-official/sentinel-js-sdk#vpn-protocols) |
-| Mysterium Network / MYST | Direct sessions require the Mysterium node client. Use the retail WireGuard option if you have a MysteriumVPN subscription. | [Mysterium node client](https://github.com/mysteriumnetwork/node) |
-| NymVPN | Fast and Anonymous modes require the Nym daemon and its rotating credentials. | [Nym router and configuration guidance](https://support.nym.com/hc/en-us/articles/32489677253137-Where-can-I-find-the-NymVPN-WireGuard-configuration-files) |
-| Deeper Network | The hardware uses AtomOS to select and apply DPN routing. The standalone DPN app also manages its own sessions. Both remain informational entries in the catalog. | [Deeper Connect](https://deeper-network-inc.gitbook.io/deeper-connect-knowledge-base/atom-os-functions/dpn/dpn-tunnel) · [Deeper DPN app](https://dpn.deeper.network/how-dpn-works) |
-| Orchid | Orchid marketplace access requires the Orchid client and its payment and session protocol. | [Orchid client documentation](https://docs.orchid.com/en/latest/using-orchid/) |
-
-For a companion proxy, restrict the listener to a private link and allow only the router to connect. In Blank VPN choose **Proxies → Add a proxy manually**, supply the companion's reachable address and port, and enable the exit. Choose **Block internet** on the device assignment to use the IPv4 kill switch. The companion must stop forwarding when its provider session ends. Blank VPN sees the proxy endpoint and its reachability, so verify the public exit IP and the failure behavior when stopping the companion's VPN session. Test UDP separately if the application needs it.
+VPN Login currently offers Mullvad. Existing exits saved with earlier releases remain available for routing. If the WebGUI opens over HTTP, enable HTTPS under **System → Settings → Administration**, then reopen the dashboard over HTTPS before signing in.
 
 ## Add proxy servers and subscriptions
 
@@ -123,7 +94,13 @@ The approved [amd64](src/share/blankvpn/core-catalog.json) and [aarch64](src/sha
 
 Core updates, the private subscription catalog, and recovery state use `/var/db/blank-vpn`. The storage panel shows available space, downloaded core size, and catalog size. Staging keeps at least 64 MiB free for settings and runtime state. The bundled cores are part of the package. OPNsense stores saved assignments and WireGuard settings in its normal configuration. Mullvad sign-in uses a short-lived WebGUI session, with a persistent WireGuard key for each saved exit.
 
-## Choose a device routing mode
+## Choose routing coverage
+
+Open **Devices**, choose the managed LANs or VLANs, select a coverage scope, then enable and save routing. Devices need to use OPNsense as their gateway for the policy to apply.
+
+- **Device-specific routing** applies saved policies to individual devices. Select **Assign** next to an observed device or enter a reserved IPv4 address.
+- **Whole-network coverage** uses one mode for the selected LANs and VLANs. Existing device assignments are saved for when you switch back. Full Tunneling uses one exit and blocks internet access if the exit is unavailable. It routes IPv4 through that exit and blocks internet-bound IPv6. Blocked mode denies internet access on both families. Off restores normal routing. Whole-network routing requires static IPv4 and static IPv6 or no IPv6 on the managed segments.
+
 
 | Mode | Internet behavior |
 | --- | --- |
@@ -132,7 +109,7 @@ Core updates, the private subscription catalog, and recovery state use `/var/db/
 | Disabled (No VPN) | Follow the native network policy and bypass Blank VPN service routing for the assigned addresses. |
 | Blocked (No Internet) | Block internet traffic from the assigned addresses and keep approved local access subject to native firewall rules. |
 
-In **Settings**, select which interfaces use Multi-Path. Enable **Apply Multi-Path only to devices assigned that mode** to keep other devices on their normal route. In **Devices**, choose the mode for each reserved LAN IPv4 address. Add the device’s stable IPv6 address to cover that address as well. On shared LANs, other IPv6 addresses follow the native policy. Use a dedicated strict interface for network-wide internet IPv6 blocking.
+Under **Devices → Advanced routing settings**, choose the Multi-Path interfaces and enable **Apply Multi-Path only to assigned devices** for device-specific use. In **Devices**, choose the mode for each reserved LAN IPv4 address. Add the device’s stable IPv6 address to cover that address as well. On shared LANs, other IPv6 addresses follow the native policy. Use a dedicated strict interface for network-wide internet IPv6 blocking.
 
 You can run multiple provider exits together, with up to 32 VPN profiles and eight active proxy exits. A phone can use Mullvad, a TV ExpressVPN, a tablet a proxy, and a Mac NordVPN. With Multi-Path, select a different exit for each service, such as a Japan exit for Netflix, a USA exit for Hulu, and a China exit for WeChat. Each service uses the domains you enter. Presets are starting lists that you can edit.
 
@@ -140,13 +117,13 @@ You can run multiple provider exits together, with up to 32 VPN profiles and eig
 
 The standard OPNsense FreeBSD Tailscale exit node uses userspace forwarding. PF sees the router’s connection after Tailscale has translated it, so it cannot enforce a per-peer internet policy there. The dashboard is still reachable over that Tailscale interface. [Tailscale forwarding modes](https://tailscale.com/docs/reference/kernel-vs-userspace-routers)
 
-To apply per-peer policy, use a source-preserving routed exit path, such as a Linux Tailscale gateway on a dedicated OPNsense transit interface. Configure return routes for the peer addresses and use an OPNsense packet capture to confirm that both original addresses arrive on that interface before assigning the peer. Under **Settings**, add that OPT or VLAN interface to both **Managed interfaces** and **Tailscale transit interfaces**. Then choose **Devices → Assign an IP address → Tailscale peer on a routed link**, enter the peer IPv4 and IPv6 addresses, and choose a mode. On a failed Full Tunneling exit with a kill switch, the configured peer addresses remain blocked from the internet. [Tailscale source address preservation](https://tailscale.com/docs/features/subnet-routers)
+To apply per-peer policy, use a source-preserving routed exit path, such as a Linux Tailscale gateway on a dedicated OPNsense transit interface. Configure return routes for the peer addresses and use an OPNsense packet capture to confirm that both original addresses arrive on that interface before assigning the peer. Under **Devices → Advanced routing settings**, add that OPT or VLAN interface to both **Managed interfaces** and **Tailscale transit interfaces**. Then choose **Devices → Assign an IP address → Tailscale peer on a routed link**, enter the peer IPv4 and IPv6 addresses, and choose a mode. On a failed Full Tunneling exit with a kill switch, the configured peer addresses remain blocked from the internet. [Tailscale source address preservation](https://tailscale.com/docs/features/subnet-routers)
 
 ## Route Netflix or another service
 
-1. Select **Set up Multi-Path on LAN** and save the settings. For another network, add its interface ID under both **Managed interfaces** and **Multi-Path interfaces**. Leave strict mode disabled for those interfaces. The router needs a working native resolver on `127.0.0.1:53` and the OPNsense Dnsmasq package with PF ipset support.
-2. Under **Multi-Path**, choose **Netflix**, select your Japan exit, and add the service. The preset includes Netflix website and media domains such as `netflix.com`, `nflxvideo.net`, and `nflximg.net`. For a custom service, enter your own domain suffixes. Both `netflix.com` and `*.netflix.com` cover the apex and its subdomains.
-3. On the test client, restart the application and refresh its DNS cache. Use ordinary DNS on the managed interface for the test. Check that the learned address count increases and use the router’s packet captures to confirm the intended tunnel and ordinary WAN traffic separately.
+1. Open **Multi-Path Settings**. Choose the Netflix preset, paste your own domains, or load a plain-text or comma-separated file. Each list accepts up to 1,000 unique domains and 128 KiB of input. Enter domains on separate lines or separated by commas. Lines may include `#` comments. Both `netflix.com` and `*.netflix.com` cover the apex and its subdomains.
+2. Save the list with an exit selected, or leave it unassigned and edit it later. An unassigned list adds no DNS or firewall rules. Edit any list to replace the domains from a file, change its exit, or download the editor contents as a text file.
+3. Choose whole-network **Multi-Path** under **Devices**, or enable Multi-Path for selected interfaces under **Advanced routing settings** and assign the Multi-Path mode to devices. Use ordinary DNS on the managed interface. Restart the test application and refresh its DNS cache. Check the learned address count and confirm the expected path from the client.
 
 Smart Routing forwards matching DNS through the chosen tunnel and uses the regular resolver for other names. Learned IPv4 destinations use the VPN and learned IPv6 destinations are blocked. When the exit is unavailable, known destinations are blocked. Smart Routing classifies DNS-observed IPs. Shared IPs, existing connections, encrypted DNS, HTTPS record address hints, and endpoints obtained without an observed DNS lookup can affect which connections match. If two services learn the same destination IP, the first saved service rule has precedence. Learned entries are aged out after about a day and relearned from DNS. Mullvad exit IPs may be blocked by Netflix. [Mullvad Netflix guidance](https://mullvad.net/en/help/watching-netflix-with-split-tunneling)
 

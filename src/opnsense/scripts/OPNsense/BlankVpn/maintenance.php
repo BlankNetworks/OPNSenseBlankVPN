@@ -61,7 +61,7 @@ try {
             Operations::exclusive(function () {
                 $model = new BlankVpn();
                 ProxyCores::recover($model);
-                $settings = Policy::settings($model);
+                $settings = Policy::routingSettings(Policy::settings($model));
                 $proxyRoutes = ProxyRuntime::routes($model);
                 ProxyCatalog::refreshDue(array_column($proxyRoutes, 'node'));
                 $previousProxies = ProxyRuntime::lastStatus()['active'];
@@ -125,7 +125,24 @@ try {
                     Policy::writeState('health-reload', '1');
                     Firewall::reload($model);
                     $after = Firewall::loadedRules();
-                    foreach (Policy::assignments($model) as $id => $row) {
+                    $segments = [];
+                    if ($settings['coverage'] === 'network' && $settings['networkMode'] === 'full') {
+                        foreach ($settings['interfaces'] as $interface) {
+                            $marker = Policy::marker('device', 'network:' . $interface);
+                            if (($loaded[$marker] ?? null) !== ($after[$marker] ?? null)) {
+                                $segments[] = $interface;
+                            }
+                        }
+                    }
+                    if ($segments !== []) {
+                        try {
+                            Operations::resetSegments($segments, $settings);
+                        } catch (\Throwable) {
+                            syslog(LOG_WARNING, 'Blank VPN could not reset old whole-network sessions.');
+                        }
+                    }
+                    $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model) : [];
+                    foreach ($assignments as $id => $row) {
                         if ($row['profile'] === '') {
                             continue;
                         }

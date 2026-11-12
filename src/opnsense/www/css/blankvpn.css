@@ -1,10 +1,66 @@
 .blankvpn {
-    max-width: 1320px;
-    margin: 0 auto;
-    padding: 1rem 0 2rem;
+    color-scheme: light;
+    --bv-page: #f5f7fb;
+    --bv-surface: #fff;
+    --bv-raised: #f0f3f8;
+    --bv-ink: #18253b;
+    --bv-muted: #506078;
+    --bv-line: #d4dce8;
+    --bv-accent: #264b86;
+    --bv-on-accent: #fff;
+    --bv-focus: #315ea7;
+    --bv-alert: #edf3ff;
+    --bv-error: #fff0f1;
+    --bv-error-ink: #8e273c;
+    --bv-shadow: 0 1px 3px #17273c0d;
+    max-width: 1250px;
+    margin: 1rem auto 2rem;
+    padding: clamp(.9rem, 2.5vw, 2.4rem);
+    border: 1px solid var(--bv-line);
+    border-radius: 1rem;
+    background: var(--bv-page);
+    color: var(--bv-ink);
+    font-family: Inter, system-ui, -apple-system, sans-serif;
 }
 
-.blankvpn [hidden] {
+.blankvpn[data-appearance="night"] {
+    color-scheme: dark;
+    --bv-page: #101725;
+    --bv-surface: #172132;
+    --bv-raised: #202c40;
+    --bv-ink: #eef3fd;
+    --bv-muted: #b1c0d6;
+    --bv-line: #34425b;
+    --bv-accent: #adcbff;
+    --bv-on-accent: #14243f;
+    --bv-focus: #adcbff;
+    --bv-alert: #233450;
+    --bv-error: #402632;
+    --bv-error-ink: #ffd3dd;
+    --bv-shadow: 0 1px 3px #0003;
+}
+
+@media (prefers-color-scheme: dark) {
+    .blankvpn[data-appearance="system"] {
+        color-scheme: dark;
+        --bv-page: #101725;
+        --bv-surface: #172132;
+        --bv-raised: #202c40;
+        --bv-ink: #eef3fd;
+        --bv-muted: #b1c0d6;
+        --bv-line: #34425b;
+        --bv-accent: #adcbff;
+        --bv-on-accent: #14243f;
+        --bv-focus: #adcbff;
+        --bv-alert: #233450;
+        --bv-error: #402632;
+        --bv-error-ink: #ffd3dd;
+        --bv-shadow: 0 1px 3px #0003;
+    }
+}
+
+.blankvpn [hidden],
+.blankvpn[data-can-manage="false"] [data-manage-only] {
     display: none !important;
 }
 
@@ -12,51 +68,231 @@
 .blankvpn h2,
 .blankvpn h3 {
     margin: 0;
+    color: inherit;
+    line-height: 1.25;
 }
 
-.blankvpn h2,
+.blankvpn h1 {
+    font-size: clamp(2rem, 3.2vw, 2.9rem);
+    font-weight: 720;
+    letter-spacing: -.045em;
+}
+
+.blankvpn h2 {
+    font-size: 1.35em;
+    font-weight: 680;
+    letter-spacing: -.02em;
+}
+
+.blankvpn h3,
 .blankvpn summary {
-    font-size: 1.25em;
-    font-weight: 600;
+    font-size: 1.05em;
+    font-weight: 650;
 }
 
-.blankvpn h3 {
-    font-size: 1.08em;
-    margin-bottom: .9rem;
+.blankvpn .bv-hero {
+    min-height: 3.5rem;
+}
+
+.blankvpn .bv-navigation {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .2rem .5rem;
+    margin: 1rem 0 1.25rem;
+    border-bottom: 1px solid var(--bv-line);
+}
+
+.blankvpn .bv-navigation button {
+    appearance: none;
+    padding: .75rem clamp(.5rem, 1.4vw, 1.1rem);
+    border: 0;
+    border-bottom: 3px solid transparent;
+    background: transparent;
+    color: var(--bv-muted);
+    font: inherit;
+    font-weight: 620;
+    cursor: pointer;
+}
+
+.blankvpn .bv-navigation button:hover {
+    color: var(--bv-accent);
+}
+
+.blankvpn .bv-navigation [aria-pressed="true"] {
+    border-bottom-color: var(--bv-accent);
+    color: var(--bv-accent);
 }
 
 .blankvpn .bv-panel {
-    border: 1px solid currentColor;
-    border-color: color-mix(in srgb, currentColor 20%, transparent);
-    border-radius: .5rem;
-    padding: 1rem;
+    padding: clamp(1rem, 2.4vw, 1.65rem);
+    margin: 0 0 1rem;
+    border: 1px solid var(--bv-line);
+    border-radius: .8rem;
+    background: var(--bv-surface);
+    box-shadow: var(--bv-shadow);
+}
+
+.blankvpn .bv-panel .bv-panel {
     margin: 1rem 0;
+    background: var(--bv-raised);
+    box-shadow: none;
 }
 
 .blankvpn .bv-heading,
 .blankvpn .bv-actions {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: .6rem 1rem;
+    gap: .55rem 1rem;
     flex-wrap: wrap;
 }
 
-.blankvpn .bv-actions {
-    justify-content: flex-start;
+.blankvpn .bv-heading {
+    justify-content: space-between;
 }
 
-.blankvpn .bv-provider-method + .bv-provider-method {
-    margin-top: .5rem;
+.blankvpn .bv-heading p,
+.blankvpn .bv-actions p {
+    margin: .25rem 0;
 }
 
-.blankvpn .bv-heading p {
-    margin: .35rem 0 0;
+.blankvpn .bv-fields,
+.blankvpn .bv-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+    gap: .75rem 1rem;
+    margin: .85rem 0;
+}
+
+.blankvpn .bv-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+}
+
+.blankvpn .bv-inline-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    align-items: center;
+}
+
+.blankvpn .bv-inline-form input {
+    flex: 0 1 16rem;
+    width: 100%;
+}
+
+.blankvpn label {
+    display: block;
+    margin-bottom: .3rem;
+    font-weight: 560;
+}
+
+.blankvpn label .form-control {
+    margin-top: .35rem;
+}
+
+.blankvpn .form-control,
+.blankvpn .btn-default {
+    border: 1px solid var(--bv-line);
+    border-radius: .45rem;
+    background-color: var(--bv-surface);
+    color: var(--bv-ink);
+    box-shadow: none;
+}
+
+.blankvpn select.form-control {
+    appearance: auto !important;
+    background-image: none !important;
+    background-repeat: no-repeat !important;
+    padding-right: .55rem;
+}
+
+.blankvpn .form-control::placeholder,
+.blankvpn .text-muted,
+.blankvpn td > small {
+    color: var(--bv-muted);
+}
+
+.blankvpn .btn-primary {
+    border: 1px solid var(--bv-accent);
+    border-radius: .45rem;
+    background: var(--bv-accent);
+    color: var(--bv-on-accent);
+}
+
+.blankvpn .btn:hover:not(:disabled) {
+    filter: brightness(.95);
+}
+
+.blankvpn :is(button, input, select, textarea, summary, a):focus-visible {
+    outline: 2px solid var(--bv-focus);
+    outline-offset: 2px;
+}
+
+.blankvpn a {
+    color: var(--bv-accent);
+    text-decoration: underline;
+    text-underline-offset: .15em;
+}
+
+.blankvpn .bv-check {
+    display: flex;
+    align-items: baseline;
+    gap: .5rem;
+    font-weight: normal;
+}
+
+.blankvpn .bv-check input {
+    margin: 0;
+}
+
+.blankvpn .bv-advanced,
+.blankvpn .bv-list-editor,
+.blankvpn #bv-register-form {
+    margin: 1rem 0;
+    padding-top: 1rem;
+    border-top: 1px solid var(--bv-line);
+}
+
+.blankvpn summary {
+    cursor: pointer;
+}
+
+.blankvpn .bv-account-status:not(:empty),
+.blankvpn #bv-login-form,
+.blankvpn #bv-settings-form {
+    margin-top: 1rem;
+}
+
+.blankvpn .bv-config-text {
+    font-family: ui-monospace, monospace;
+    resize: vertical;
+}
+
+.blankvpn .bv-file-actions {
+    align-items: end;
+}
+
+.blankvpn .bv-file-actions label {
+    margin: 0;
+}
+
+.blankvpn .bv-callout,
+.blankvpn #bv-message {
+    margin: .65rem 0 1rem;
+    padding: .8rem 1rem;
+    border: 1px solid var(--bv-line);
+    border-radius: .55rem;
+    background: var(--bv-alert);
+    color: var(--bv-ink);
+}
+
+.blankvpn #bv-message.alert-danger {
+    background: var(--bv-error);
+    color: var(--bv-error-ink);
 }
 
 .blankvpn .bv-scroll {
     overflow-x: auto;
-    margin-top: .75rem;
+    margin-top: .85rem;
 }
 
 .blankvpn .bv-table {
@@ -66,84 +302,36 @@
 
 .blankvpn .bv-table td,
 .blankvpn .bv-table th {
+    border-color: var(--bv-line);
     vertical-align: middle;
+}
+
+.blankvpn .bv-table thead th {
+    border-bottom: 1px solid var(--bv-line);
+    background: var(--bv-raised);
+    color: var(--bv-muted);
+    font-size: .9em;
+    font-weight: 650;
 }
 
 .blankvpn .bv-table td > small {
     display: block;
-    margin-top: .25rem;
+    margin-top: .2rem;
     overflow-wrap: anywhere;
 }
 
 .blankvpn .bv-table td > .btn {
-    margin: .2rem .35rem .2rem 0;
+    margin: .2rem .3rem .2rem 0;
 }
 
-.blankvpn .bv-devices,
 .blankvpn .bv-profiles,
 .blankvpn .bv-connections-table {
-    min-width: 42rem;
+    min-width: 38rem;
 }
 
 .blankvpn .bv-empty {
     padding: 1rem;
     text-align: center;
-}
-
-.blankvpn .bv-fields,
-.blankvpn .bv-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
-    gap: .8rem 1rem;
-    margin: .75rem 0;
-}
-
-.blankvpn .bv-grid {
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 28rem), 1fr));
-    gap: 1.75rem;
-}
-
-.blankvpn label {
-    display: block;
-}
-
-.blankvpn label .form-control {
-    margin-top: .35rem;
-}
-
-.blankvpn .bv-check {
-    display: flex;
-    gap: .55rem;
-    align-items: baseline;
-    font-weight: normal;
-}
-
-.blankvpn .bv-check input {
-    margin: 0;
-}
-
-.blankvpn summary {
-    cursor: pointer;
-    width: max-content;
-    max-width: 100%;
-}
-
-.blankvpn details[open] summary {
-    margin-bottom: .85rem;
-}
-
-.blankvpn .bv-config-text {
-    font-family: ui-monospace, monospace;
-    resize: vertical;
-}
-
-.blankvpn .bv-account-status:not(:empty),
-.blankvpn .bv-relay-heading {
-    margin-top: .9rem;
-}
-
-.blankvpn .bv-warnings {
-    padding-left: 2.25rem;
 }
 
 @media (max-width: 767px) {
@@ -152,7 +340,6 @@
     .blankvpn .bv-devices tr,
     .blankvpn .bv-devices td {
         display: block;
-        min-width: 0;
     }
 
     .blankvpn .bv-devices thead {
@@ -164,8 +351,7 @@
     }
 
     .blankvpn .bv-devices tr + tr {
-        border-top: 1px solid currentColor;
-        border-color: color-mix(in srgb, currentColor 20%, transparent);
+        border-top: 1px solid var(--bv-line);
         margin-top: .65rem;
         padding-top: .5rem;
     }
@@ -178,212 +364,5 @@
     .blankvpn .bv-devices td[data-label]::before {
         content: attr(data-label) " ";
         font-weight: 600;
-    }
-
-    .blankvpn .bv-devices td > small {
-        margin-top: .1rem;
-    }
-}
-
-.blankvpn #bv-message {
-    position: sticky;
-    top: 3.75rem;
-    z-index: 2;
-}
-
-.blankvpn[data-can-manage="false"] [data-manage-only] {
-    display: none !important;
-}
-
-.blankvpn {
-    color-scheme: light;
-    --bv-bg: #f4f2ed;
-    --bv-surface: #fffefa;
-    --bv-raised: #f8f6f1;
-    --bv-ink: #202922;
-    --bv-muted: #59645a;
-    --bv-line: #deded2;
-    --bv-accent: #245646;
-    --bv-on-accent: #ffffff;
-    --bv-focus: #2c7560;
-    --bv-hero: #18382d;
-    --bv-hero-ink: #fbf8ee;
-    --bv-hero-muted: #c6d8cb;
-    --bv-metal: #c6a775;
-    --bv-shadow: 0 10px 28px #25352a12;
-    margin: 1rem auto 2rem;
-    padding: clamp(.75rem, 2vw, 2rem);
-    border: 1px solid var(--bv-line);
-    border-radius: 1rem;
-    background: var(--bv-bg);
-    color: var(--bv-ink);
-    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-.blankvpn[data-appearance="night"] {
-    color-scheme: dark;
-    --bv-bg: #151b18;
-    --bv-surface: #1e2823;
-    --bv-raised: #242f29;
-    --bv-ink: #eaf0e9;
-    --bv-muted: #b7c4b9;
-    --bv-line: #39483e;
-    --bv-accent: #a6d3be;
-    --bv-on-accent: #10271c;
-    --bv-focus: #b2e7d0;
-    --bv-hero: #132b22;
-    --bv-hero-ink: #fcf8ed;
-    --bv-hero-muted: #bed2c6;
-    --bv-shadow: 0 10px 28px #0003;
-}
-
-@media (prefers-color-scheme: dark) {
-    .blankvpn[data-appearance="system"] {
-        color-scheme: dark;
-        --bv-bg: #151b18;
-        --bv-surface: #1e2823;
-        --bv-raised: #242f29;
-        --bv-ink: #eaf0e9;
-        --bv-muted: #b7c4b9;
-        --bv-line: #39483e;
-        --bv-accent: #a6d3be;
-        --bv-on-accent: #10271c;
-        --bv-focus: #b2e7d0;
-        --bv-hero: #132b22;
-        --bv-hero-ink: #fcf8ed;
-        --bv-hero-muted: #bed2c6;
-        --bv-shadow: 0 10px 28px #0003;
-    }
-}
-
-.blankvpn .bv-hero {
-    padding: clamp(1.25rem, 3vw, 2.4rem);
-    border: 1px solid #c6a77566;
-    border-radius: .85rem;
-    background: linear-gradient(110deg, var(--bv-hero), #224237);
-    color: var(--bv-hero-ink);
-    box-shadow: inset 0 2px var(--bv-metal), var(--bv-shadow);
-}
-
-.blankvpn .bv-hero h1 {
-    font-size: clamp(2.15rem, 4vw, 3.4rem);
-    font-weight: 730;
-    letter-spacing: -.045em;
-    line-height: 1.08;
-}
-
-.blankvpn .bv-hero .text-muted {
-    color: var(--bv-hero-muted);
-    max-width: 44ch;
-}
-
-.blankvpn .bv-utilities .form-control,
-.blankvpn .bv-utilities .btn-default {
-    width: auto;
-    background: #ffffff12;
-    color: var(--bv-hero-ink);
-    border-color: #e3ecd666;
-}
-
-.blankvpn .bv-utilities option {
-    background: var(--bv-surface);
-    color: var(--bv-ink);
-}
-
-.blankvpn .bv-navigation {
-    margin: 1rem 0;
-    gap: .35rem;
-}
-
-.blankvpn .bv-navigation .btn {
-    padding: .62rem .95rem;
-    font-weight: 620;
-}
-
-.blankvpn .bv-panel {
-    padding: clamp(1rem, 2vw, 1.55rem);
-    border-color: var(--bv-line);
-    border-radius: .8rem;
-    background: var(--bv-surface);
-    box-shadow: var(--bv-shadow);
-}
-
-.blankvpn .bv-panel .bv-panel {
-    background: var(--bv-raised);
-    box-shadow: none;
-}
-
-.blankvpn h2,
-.blankvpn summary {
-    letter-spacing: -.015em;
-}
-
-.blankvpn .text-muted,
-.blankvpn td > small {
-    color: var(--bv-muted);
-}
-
-.blankvpn a {
-    color: var(--bv-accent);
-    text-decoration: underline;
-    text-underline-offset: .15em;
-}
-
-.blankvpn .form-control,
-.blankvpn .btn-default {
-    border: 1px solid var(--bv-line);
-    background: var(--bv-raised);
-    color: var(--bv-ink);
-    border-radius: .48rem;
-    box-shadow: none;
-}
-
-.blankvpn .form-control::placeholder {
-    color: var(--bv-muted);
-}
-
-.blankvpn .btn-primary {
-    border-color: var(--bv-accent);
-    border-radius: .48rem;
-    background: var(--bv-accent);
-    color: var(--bv-on-accent);
-}
-
-.blankvpn .btn:hover:not(:disabled) {
-    filter: brightness(.94);
-}
-
-.blankvpn :is(button, input, select, textarea, summary, a):focus-visible {
-    outline: 2px solid var(--bv-focus);
-    outline-offset: 2px;
-}
-
-.blankvpn .bv-hero :is(button, select):focus-visible {
-    outline-color: var(--bv-hero-muted);
-}
-
-.blankvpn .bv-table thead th {
-    border-bottom: 1px solid var(--bv-line);
-    background: var(--bv-raised);
-    color: var(--bv-muted);
-    font-size: .92em;
-    font-weight: 650;
-}
-
-.blankvpn .bv-table td {
-    border-color: var(--bv-line);
-}
-
-@media (max-width: 767px) {
-    .blankvpn .bv-hero {
-        align-items: flex-start;
-    }
-
-    .blankvpn .bv-navigation .btn {
-        flex: 1 1 auto;
-    }
-
-    .blankvpn .bv-devices tr + tr {
-        border-color: var(--bv-line);
     }
 }

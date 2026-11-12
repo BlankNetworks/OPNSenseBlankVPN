@@ -1,7 +1,7 @@
 <menu>
     <VPN>
         <BlankVpn VisibleName="Blank VPN" cssClass="fa fa-shield fa-fw">
-            <Devices order="10" url="/ui/blankvpn/index"/>
+            <Dashboard order="10" url="/ui/blankvpn/index"/>
         </BlankVpn>
     </VPN>
 </menu>

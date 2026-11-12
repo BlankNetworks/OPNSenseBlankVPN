@@ -55,7 +55,7 @@ final class CoreController extends ApiControllerBase
     {
         $this->response->setHeader('Cache-Control', 'no-store');
         try {
-            if (!$this->request->isSecure() || ($post && !$this->request->isPost()) ||
+            if ($this->request->getScheme() !== 'https' || ($post && !$this->request->isPost()) ||
                 !function_exists('posix_geteuid') || posix_geteuid() !== 0) {
                 throw new \DomainException('Open the standard OPNsense WebGUI over HTTPS to manage cores.');
             }

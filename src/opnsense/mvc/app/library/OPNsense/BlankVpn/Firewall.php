@@ -11,7 +11,7 @@ final class Firewall
     public static function installRules(Plugin $firewall): void
     {
         $model = new BlankVpn();
-        $settings = Policy::settings($model);
+        $settings = Policy::routingSettings(Policy::settings($model));
         if (!$settings['enabled']) {
             return;
         }
@@ -44,10 +44,15 @@ final class Firewall
         $firewall->setGatewayGroups($proxyGateways);
         unset($profile);
 
-        $assignments = Policy::assignments($model);
-        self::registerAssignments($firewall, $settings, $interfaces, $assignments, $profiles, $health, $diagnostics);
+        $assignments = [];
+        if ($settings['coverage'] === 'network') {
+            self::registerNetworkPolicy($firewall, $settings, $interfaces, $profiles, $health);
+        } else {
+            $assignments = Policy::assignments($model);
+            self::registerAssignments($firewall, $settings, $interfaces, $assignments, $profiles, $health, $diagnostics);
+        }
 
-        $services = SmartRouting::services($model);
+        $services = SmartRouting::boundServices(SmartRouting::services($model));
         if (SmartRouting::active($settings, $services)) {
             self::registerSmartRoutes($firewall, $settings, $interfaces, $services, $profiles, $health, $assignments, $diagnostics);
         }
@@ -69,6 +74,39 @@ final class Firewall
                 'label' => Policy::marker('block', $interface),
                 'descr' => 'Blank VPN managed segment default deny'
             ]);
+        }
+    }
+
+    private static function registerNetworkPolicy(
+        Plugin $firewall,
+        array $settings,
+        array $interfaces,
+        array $profiles,
+        array $health
+    ): void {
+        if (!in_array($settings['networkMode'], ['full', 'blocked'], true)) {
+            return;
+        }
+        $profile = $settings['networkMode'] === 'full'
+            ? self::selectProfile($firewall, $profiles[$settings['networkProfile']] ?? [], [], $health)
+            : null;
+        foreach ($settings['interfaces'] as $interface) {
+            if (!Policy::interfaceId($interface) || empty($interfaces[$interface]['if'])) {
+                continue;
+            }
+            $id = 'network:' . $interface;
+            if ($profile !== null) {
+                $firewall->registerFilterRule(Policy::PRIORITY + 10, [
+                    'type' => 'pass', 'direction' => 'in', 'interface' => $interface, 'ipprotocol' => 'inet',
+                    'to' => '<' . Policy::LOCAL_TABLE . '>', 'to_not' => true, 'quick' => true, 'disablereplyto' => true,
+                    'statetype' => 'keep', 'gateway' => $profile['gateway'], 'skip_rules_gw_down' => true,
+                    'label' => Policy::marker('device', $id), 'descr' => 'Blank VPN whole-network routing'
+                ] + self::stateOptions($profile));
+                self::registerClientNat($firewall, $profile, $interface, 'any', 60);
+                self::redirectDns($firewall, $interface, 'any', (int)$profile['dnsPort'], $id, 58);
+            }
+            self::registerGuard($firewall, $id, $interface, 'any', 'inet');
+            self::registerGuard($firewall, $id, $interface, 'any', 'inet6');
         }
     }
 

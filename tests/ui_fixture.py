@@ -2,7 +2,6 @@
 """Run the current dashboard view and assets against a browser API fixture."""
 
 import argparse
-import json
 import platform
 import re
 import subprocess
@@ -23,12 +22,11 @@ def main():
     css = (ROOT / "src/opnsense/www/css/blankvpn.css").read_text()
     app = (ROOT / "src/opnsense/www/js/blankvpn.js").read_text()
     fixture = (ROOT / "tests/ui-fixture.js").read_text()
-    providers = json.loads((ROOT / "src/share/blankvpn/providers.json").read_text())
-    provider_data = json.dumps(providers).replace("<", "\\u003c")
     document = (
         '<!doctype html><meta charset="utf-8"><meta name="viewport" '
         'content="width=device-width, initial-scale=1">'
-        f"<style>{css}</style><body>{view}<script id='provider-fixture' type='application/json'>{provider_data}</script>"
+        f"<style>{css}</style><style>select.form-control {{ background-image: linear-gradient(black, black); }}</style>"
+        f"<body>{view}"
         f"<script>{fixture}</script><script>{app}</script></body>"
     )
     with tempfile.TemporaryDirectory(prefix="blank-vpn-ui-") as directory:

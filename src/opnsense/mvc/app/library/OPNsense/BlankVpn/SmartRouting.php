@@ -11,7 +11,8 @@ final class SmartRouting
 {
     public const PORT = Resolver::LOCAL_PORT + 6;
     public const MAX_SERVICES = 16;
-    public const MAX_DOMAINS = 24;
+    public const MAX_DOMAINS = 1000;
+    public const MAX_DOMAIN_BYTES = 131072;
     public const TABLE_MAX_AGE = 86400;
     public const PRESETS = [
         'Netflix' => ['netflix.com', 'netflix.net', 'nflxext.com', 'nflximg.com', 'nflximg.net',
@@ -26,18 +27,25 @@ final class SmartRouting
         foreach ($model->services->service->iterateItems() as $id => $node) {
             $row = Policy::fields($node);
             $services[$id] = [
-                'id' => $id, 'name' => $row['name'], 'profile' => $row['profile'],
+                'id' => $id, 'name' => $row['name'], 'profile' => $row['profile'] ?? '',
                 'domains' => self::domains($row['domains'])
             ];
         }
         return $services;
     }
 
+    public static function boundServices(array $services): array
+    {
+        return array_filter($services, static fn (array $service): bool => ($service['profile'] ?? '') !== '');
+    }
+
     public static function domains(string $input): array
     {
-        if (strlen($input) > 2048) {
+        if (strlen($input) > self::MAX_DOMAIN_BYTES) {
             throw new DomainException('The Smart Routing domain list is too long.');
         }
+        $input = preg_replace('/^\xEF\xBB\xBF/', '', $input);
+        $input = preg_replace('/#[^\r\n]*/', '', $input);
         $domains = [];
         foreach (preg_split('/[\s,]+/', trim($input), -1, PREG_SPLIT_NO_EMPTY) as $item) {
             $domain = strtolower($item);
@@ -55,7 +63,7 @@ final class SmartRouting
             $domains[$domain] = true;
         }
         if (count($domains) < 1 || count($domains) > self::MAX_DOMAINS) {
-            throw new DomainException('Add between one and 24 domain suffixes per service.');
+            throw new DomainException('Add between one and ' . self::MAX_DOMAINS . ' unique domains per list.');
         }
         return array_keys($domains);
     }
@@ -67,17 +75,36 @@ final class SmartRouting
 
     public static function checkOverlap(array $services, string $editedId, array $domains): void
     {
+        $existing = [];
+        $parents = [];
         foreach ($services as $id => $service) {
             if ($id === $editedId) {
                 continue;
             }
-            foreach ($service['domains'] as $existing) {
-                foreach ($domains as $domain) {
-                    if (self::matches($domain, $existing) || self::matches($existing, $domain)) {
-                        throw new DomainException('A domain suffix overlaps another Smart Routing service.');
-                    }
+            foreach ($service['domains'] as $domain) {
+                $existing[$domain] = true;
+                foreach (self::parentDomains($domain) as $parent) {
+                    $parents[$parent] = true;
                 }
             }
+        }
+        foreach ($domains as $domain) {
+            if (isset($existing[$domain]) || isset($parents[$domain])) {
+                throw new DomainException('A domain overlaps another routed list.');
+            }
+            foreach (self::parentDomains($domain) as $parent) {
+                if (isset($existing[$parent])) {
+                    throw new DomainException('A domain overlaps another routed list.');
+                }
+            }
+        }
+    }
+
+    private static function parentDomains(string $domain): \Generator
+    {
+        while (($dot = strpos($domain, '.')) !== false) {
+            $domain = substr($domain, $dot + 1);
+            yield $domain;
         }
     }
 
@@ -104,7 +131,7 @@ final class SmartRouting
     public static function dnsDirectives(array $services, array $profiles): array
     {
         $lines = [];
-        foreach ($services as $service) {
+        foreach (self::boundServices($services) as $service) {
             $profile = $profiles[$service['profile']] ?? [];
             $source = explode('/', $profile['address'] ?? '')[0];
             $servers = self::profileDns($profile);
@@ -129,7 +156,7 @@ final class SmartRouting
 
     public static function active(array $settings, array $services): bool
     {
-        return $settings['enabled'] && $settings['smartInterfaces'] !== [] && $services !== [];
+        return $settings['enabled'] && $settings['smartInterfaces'] !== [] && self::boundServices($services) !== [];
     }
 
     public static function status(): array
@@ -142,7 +169,7 @@ final class SmartRouting
     public static function countLearned(array $services): array
     {
         $counts = [];
-        foreach ($services as $id => $service) {
+        foreach (self::boundServices($services) as $id => $service) {
             try {
                 $output = Resolver::command(['/sbin/pfctl', '-t', self::table($service), '-T', 'show']);
                 $lines = preg_split('/\R/', trim($output), -1, PREG_SPLIT_NO_EMPTY);
@@ -156,7 +183,7 @@ final class SmartRouting
 
     public static function expire(array $services): void
     {
-        foreach ($services as $service) {
+        foreach (self::boundServices($services) as $service) {
             Resolver::command(
                 ['/sbin/pfctl', '-t', self::table($service), '-T', 'expire', (string)self::TABLE_MAX_AGE],
                 false

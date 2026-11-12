@@ -32,8 +32,8 @@ final class Resolver
 
     public static function reconcile(BlankVpn $model): void
     {
-        $settings = Policy::settings($model);
-        $services = SmartRouting::services($model);
+        $settings = Policy::routingSettings(Policy::settings($model));
+        $services = SmartRouting::boundServices(SmartRouting::services($model));
         $smart = SmartRouting::active($settings, $services);
         $wanted = [];
         if ($settings['enabled']) {

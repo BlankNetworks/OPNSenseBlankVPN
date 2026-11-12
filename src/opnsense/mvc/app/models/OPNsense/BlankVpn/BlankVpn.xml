@@ -1,11 +1,14 @@
 <model>
     <mount>//OPNsense/BlankVpn</mount>
-    <version>1.4.0</version>
+    <version>1.5.0</version>
     <description>Blank VPN configuration and native object ownership</description>
     <items>
         <settings>
             <enabled type="BooleanField"><Default>0</Default></enabled>
             <interfaces type="TextField"/>
+            <coverage type="TextField"><Default>device</Default></coverage>
+            <networkMode type="TextField"><Default>disabled</Default></networkMode>
+            <networkProfile type="TextField"/>
             <strictInterfaces type="TextField"/>
             <smartInterfaces type="TextField"/>
             <smartAssignedOnly type="BooleanField"><Default>0</Default></smartAssignedOnly>
@@ -67,7 +70,7 @@
             <service type="ArrayField">
                 <name type="TextField"><Required>Y</Required></name>
                 <domains type="TextField"><Required>Y</Required></domains>
-                <profile type="TextField"><Required>Y</Required></profile>
+                <profile type="TextField"/>
             </service>
         </services>
     </items>

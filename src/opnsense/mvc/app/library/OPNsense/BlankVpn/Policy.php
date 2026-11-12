@@ -25,9 +25,24 @@ final class Policy
             $result[$key] = array_values(array_filter(explode(',', $stored[$key] ?? ''), 'strlen'));
         }
         $result['smartAssignedOnly'] = ($stored['smartAssignedOnly'] ?? '0') === '1';
+        $result['coverage'] = ($stored['coverage'] ?? '') === 'network' ? 'network' : 'device';
+        $result['networkMode'] = in_array($stored['networkMode'] ?? '', ['full', 'multi', 'blocked', 'disabled'], true)
+            ? $stored['networkMode'] : 'disabled';
+        $result['networkProfile'] = $stored['networkProfile'] ?? '';
         $result['dashboardBind'] = ($stored['dashboardBind'] ?? '') === 'tailnet' ? 'tailnet' : 'lan';
         $result['hostname'] = $stored['hostname'] ?? 'blankvpn.home.arpa';
         return $result;
+    }
+
+    public static function routingSettings(array $settings): array
+    {
+        if (($settings['coverage'] ?? '') === 'network') {
+            $settings['interfaces'] = array_values(array_diff($settings['interfaces'], $settings['tailscaleInterfaces']));
+            $settings['smartInterfaces'] = $settings['networkMode'] === 'multi' ? $settings['interfaces'] : [];
+            $settings['strictInterfaces'] = [];
+            $settings['smartAssignedOnly'] = false;
+        }
+        return $settings;
     }
 
     public static function profiles(BlankVpn $model): array
