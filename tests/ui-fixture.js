@@ -5,15 +5,20 @@ const reply = {
         profiles: [{id:'vpn1', name:'Canada', relay:'ca-test-wg-001', interface:'wg1', dns:['10.64.0.1'], latestHandshake:1794490200, status:'Recent handshake', receivedBytes:4096, sentBytes:2048}],
         assignments: [],
         services: [],
+        canManageCores: true,
         nativeGateways: [{id:'gw1', gateway:'NORD', protocol:'OpenVPN'}],
         mullvadSignedIn: false,
         proxyCores: {mihomo:true,tun2socks:true,xray:true,"sing-box":true},
         servicePresets: {Netflix:['netflix.com','nflxvideo.net']},
-        settings: {enabled:true, interfaces:['lan'], availableInterfaces:[{id:'lan', name:'LAN'}], strictInterfaces:[], localNetworks:[], hostname:'opnsense.home.arpa'},
+        settings: {dashboardBind:'lan',dashboardAddresses:{lan:'10.0.0.1',tailnet:'100.101.102.103'},enabled:true, interfaces:['lan'], availableInterfaces:[{id:'lan', name:'LAN'}], strictInterfaces:[], localNetworks:[], hostname:'opnsense.home.arpa'},
         warnings: []
     },
     relays: {relays:[{id:'ca-test-wg-001',country:'Canada',city:'Test',hostname:'ca-test-wg-001',active:true},{id:'ca-test-wg-002',country:'Canada',city:'Test',hostname:'ca-test-wg-002',active:false}], stale:false, fetchedAt:1794490200},
     connections: {connections:[{protocol:'tcp', source:'10.0.0.20', sourcePort:1234, destination:'2001:db8::25', destinationPort:443, age:'00:00:10', bytes:[1024,1024]}]},
+    status: {ok:true, cores:[{id:'mihomo',version:'1.19.34',installed:true,source:'Bundled',
+        available:{version:'1.19.35',sha256:'a'.repeat(64)},update:true,rollback:false}],
+        storage:{freeBytes:1073741824,coreBytes:0,catalogBytes:1024,reserveBytes:67108864}},
+    check: {ok:true, cores:[], storage:{freeBytes:1073741824,coreBytes:0,catalogBytes:1024,reserveBytes:67108864}},
     account: {ok:true, devices:[{name:'Test router'}], maxDevices:5, expiresAt:'2027-01-01'},
     proxyCatalog: {nodes:[{id:'proxy-1', name:'Example proxy', host:'192.0.2.9', port:1080, core:'mihomo',
         protocol:'socks5', legacy:true, sources:['feed-1']}], feeds:[{id:'feed-1', name:'Test feed', count:1, auto:true, usage:{upload:1024,download:1024,total:1048576,expire:1798761600}}]},
@@ -38,6 +43,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('device-list').textContent.includes('<b>Device</b>'), 'device name should remain literal text');
     assert(!bv('device-list').querySelector('b'), 'device name injected HTML');
     assert(bv('device-list').textContent.includes('10.0.0.21'), 'additional IPv4 omitted');
+    bv('appearance').value = 'night';
+    bv('appearance').dispatchEvent(new Event('change'));
+    assert(getComputedStyle(document.getElementById('blankvpn')).colorScheme === 'dark', 'night theme did not apply');
+    bv('appearance').value = 'day';
+    bv('appearance').dispatchEvent(new Event('change'));
+    assert(getComputedStyle(document.getElementById('blankvpn')).colorScheme === 'light', 'day theme did not apply');
     bv('device-list').querySelector('button').click();
     assert(bv('ip').value === '10.0.0.20', 'assignment address not populated');
     assert(bv('identity').textContent.includes('reservation was observed'), 'reservation not shown');
@@ -47,6 +58,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'assign' && x.method === 'POST' && x.data.profile === 'vpn1' && x.data.failure === 'block'), 'incorrect assignment payload');
     assert(bv('assignment').hidden, 'successful assignment did not close');
+    bv('add-device').click();
+    bv('device-kind').value = 'tailnet';
+    bv('device-kind').dispatchEvent(new Event('change'));
+    bv('mode').value = 'blocked';
+    bv('mode').dispatchEvent(new Event('change'));
+    assert(bv('ipv6').required && bv('profile-field').hidden && bv('mac-field').hidden, 'Tailscale block form has incorrect fields');
+    bv('close-assignment').click();
     bv('device-list').querySelectorAll('button')[1].click();
     await wait();
     assert(bv('connection-list').textContent.includes('[2001:db8::25]:443'), 'IPv6 destination rendering failed');
@@ -89,6 +107,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('smart-interfaces').value === 'lan' && bv('managed').value === 'lan', 'LAN setup did not prefill');
     document.querySelector('[data-bv-section="proxies"]').click();
     await wait();
+    bv('core-manager').open = true;
+    await wait();
+    assert(bv('core-list').textContent.includes('Mihomo (Clash)') &&
+        bv('core-storage').textContent.includes('1.0 GiB free'), 'core status and storage not displayed');
+    bv('core-check').click();
+    await wait();
+    assert(requests.some(x => x.action === 'check' && x.method === 'POST'), 'approved catalog check did not run');
     assert(bv('proxy-list').textContent.includes('Example proxy'), 'proxy catalog not displayed');
     assert(bv('subscription-list').textContent.includes('Test feed'), 'proxy subscription not displayed');
     assert(bv('subscription-list').textContent.includes('2.0 KiB used / 1.0 MiB'), 'subscription quota not displayed');
@@ -106,10 +131,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'importProxies') && bv('proxy-body').value === '', 'proxy import was not submitted and cleared');
     bv('settings').open = true;
+    bv('dashboard-bind').value = 'tailnet';
+    bv('dashboard-bind').dispatchEvent(new Event('change'));
+    assert(bv('bind-address').textContent.includes('100.101.102.103'), 'Tailscale dashboard address not displayed');
     bv('settings-form').requestSubmit(bv('settings-form').querySelector('button[type=submit]'));
     await wait();
     assert(requests.some(x => x.action === 'settings' && x.data.interfaces[0] === 'lan' &&
-      x.data.smartInterfaces[0] === 'lan'), 'routing settings did not serialize');
+      x.data.smartInterfaces[0] === 'lan' && x.data.dashboardBind === 'tailnet'), 'routing settings did not serialize');
     bv('refresh-relays').click();
     await wait();
     assert(bv('relay').options[1].value === 'ca-test-wg-003', 'cached relay lost after refresh error');

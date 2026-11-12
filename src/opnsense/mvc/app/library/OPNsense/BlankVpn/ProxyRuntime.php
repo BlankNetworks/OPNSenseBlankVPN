@@ -27,7 +27,7 @@ final class ProxyRuntime
         foreach ($model->proxyRoutes->route->iterateItems() as $id => $node) {
             $values = Policy::fields($node);
             $slot = (int)$values['slot'];
-            if ($slot < 0 || $slot >= self::SLOTS || isset($slots[$slot]) ||
+            if (!in_array($values['core'] ?? '', ['mihomo', 'xray', 'sing-box'], true) || $slot < 0 || $slot >= self::SLOTS || isset($slots[$slot]) ||
                 !preg_match('/^[a-f0-9]{64}$/D', $values['node'])) {
                 continue;
             }
@@ -78,7 +78,31 @@ final class ProxyRuntime
 
     private static function binary(string $tool): string
     {
-        return $tool === 'sing-box' && !self::safeBinary(self::BIN[$tool]) ? self::SYSTEM_SING_BOX : self::BIN[$tool];
+        return ProxyCores::override($tool) ?? self::base($tool);
+    }
+
+    private static function base(string $tool): string
+    {
+        return $tool === 'sing-box' && self::usesSystemSingBox() ? self::SYSTEM_SING_BOX : self::BIN[$tool];
+    }
+
+    public static function usesSystemSingBox(): bool
+    {
+        return !self::safeBinary(self::BIN['sing-box']) && self::safeBinary(self::SYSTEM_SING_BOX);
+    }
+
+    public static function hasBase(string $tool): bool
+    {
+        return isset(self::BIN[$tool]) && self::safeBinary(self::base($tool));
+    }
+
+    private static function binaries(string $core): array
+    {
+        $paths = ['bridge' => self::binary('tun2socks'), 'mihomo' => self::binary('mihomo')];
+        if ($core !== 'mihomo') {
+            $paths['adapter'] = self::binary($core);
+        }
+        return $paths;
     }
 
     private static function safeBinary(string $path): bool
@@ -140,7 +164,12 @@ final class ProxyRuntime
     {
         $slot = $route['slot'];
         $state = self::marker($slot);
-        if (($state['node'] ?? null) !== $route['node'] || ($state['id'] ?? null) !== $route['id'] ||
+        $paths = self::binaries($route['core']);
+        $recorded = $state['binaries'] ?? array_filter([
+            'bridge' => self::BIN['tun2socks'], 'mihomo' => self::BIN['mihomo'],
+            'adapter' => $route['core'] === 'mihomo' ? null : self::base($route['core'])
+        ]);
+        if ($recorded !== $paths || ($state['node'] ?? null) !== $route['node'] || ($state['id'] ?? null) !== $route['id'] ||
             self::pid($slot, 'bridge') === null || self::pid($slot, 'mihomo') === null ||
             ($route['core'] !== 'mihomo' && self::pid($slot, 'adapter') === null)) {
             return false;
@@ -236,23 +265,25 @@ final class ProxyRuntime
             throw new RuntimeException('The proxy runtime directory is not private.');
         }
         $configuration = self::configuration($route, $node);
-        self::save($paths . '/owner.json', ['id' => $route['id'], 'node' => $route['node'], 'core' => $node['core']]);
+        $binaries = self::binaries($node['core']);
+        self::save($paths . '/owner.json', [
+            'id' => $route['id'], 'node' => $route['node'], 'core' => $node['core'], 'binaries' => $binaries
+        ]);
         try {
             if ($configuration['adapter'] !== null) {
                 $adapter = $paths . '/adapter.json';
                 self::save($adapter, $configuration['adapter']);
-                $bin = self::binary($node['core']);
                 $args = $node['core'] === 'xray' ? ['run', '-config', $adapter] : ['run', '-c', $adapter];
-                self::launch($slot, 'adapter', [$bin, ...$args]);
+                self::launch($slot, 'adapter', [$binaries['adapter'], ...$args]);
                 self::waitForSocket($route['adapterPort'], $slot, 'adapter');
             }
             $mihomo = $paths . '/mihomo.json';
             self::save($mihomo, $configuration['mihomo']);
-            self::launch($slot, 'mihomo', [self::BIN['mihomo'], '-d', $paths, '-f', $mihomo]);
+            self::launch($slot, 'mihomo', [$binaries['mihomo'], '-d', $paths, '-f', $mihomo]);
             self::waitForSocket($route['socksPort'], $slot, 'mihomo');
             self::waitForSocket($route['proxyDns'], $slot, 'mihomo', 'udp4');
             self::launch($slot, 'bridge', [
-                self::BIN['tun2socks'], '--device', 'tun://' . $interface,
+                $binaries['bridge'], '--device', 'tun://' . $interface,
                 '--proxy', 'socks5://127.0.0.1:' . $route['socksPort'], '--loglevel', 'error', '--mtu', '1400'
             ]);
             for ($attempt = 0; $attempt < 20; $attempt++) {
@@ -340,14 +371,30 @@ final class ProxyRuntime
             return null;
         }
         $args = trim(Resolver::command(['/bin/ps', '-ww', '-p', $value, '-o', 'command='], false));
+        $marker = self::marker($slot);
+        $tool = match ($name) {
+            'bridge' => 'tun2socks',
+            'mihomo' => 'mihomo',
+            'adapter' => $marker['core'] ?? '',
+            default => ''
+        };
+        $recorded = $marker['binaries'][$name] ?? null;
+        if (is_string($recorded) && isset(self::BIN[$tool])) {
+            $known = $recorded === self::BIN[$tool] || ($tool === 'sing-box' && $recorded === self::SYSTEM_SING_BOX) ||
+                ProxyCores::isManagedPath($tool, $recorded);
+            $matches = $known && str_starts_with($args, $recorded . ' ');
+        } else {
+            $matches = isset(self::BIN[$tool]) && (str_starts_with($args, self::BIN[$tool] . ' ') ||
+                ($tool === 'sing-box' && str_starts_with($args, self::SYSTEM_SING_BOX . ' ')));
+        }
+        if (!$matches) {
+            return null;
+        }
         $valid = match ($name) {
-            'bridge' => str_starts_with($args, self::BIN['tun2socks'] . ' ') &&
-                str_contains($args, 'tun://tun' . (200 + $slot) . ' ') &&
+            'bridge' => str_contains($args, 'tun://tun' . (200 + $slot) . ' ') &&
                 str_contains($args, 'socks5://127.0.0.1:' . (47220 + $slot) . ' '),
-            'mihomo' => str_starts_with($args, self::BIN['mihomo'] . ' ') && str_ends_with($args, $paths . '/mihomo.json'),
-            'adapter' => (str_starts_with($args, self::BIN['xray'] . ' ') || str_starts_with($args, self::BIN['sing-box'] . ' ') ||
-                str_starts_with($args, self::SYSTEM_SING_BOX . ' ')) &&
-                str_ends_with($args, $paths . '/adapter.json'),
+            'mihomo' => str_ends_with($args, $paths . '/mihomo.json'),
+            'adapter' => str_ends_with($args, $paths . '/adapter.json'),
             default => false
         };
         return $valid ? (int)$value : null;

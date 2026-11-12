@@ -24,9 +24,11 @@ final class Firewall
         $interfaces = iterator_to_array($firewall->getInterfaceMapping());
 
         $proxyGateways = [];
+        $pausedCore = ProxyCores::pausedCore();
         foreach ($profiles as &$profile) {
             if (($profile['kind'] ?? '') === 'proxy') {
-                $profile['owned'] = ProxyRuntime::ready($profile);
+                $profile['owned'] = ($pausedCore === null || !ProxyCores::uses($profile, $pausedCore)) &&
+                    ProxyRuntime::ready($profile);
                 if ($profile['owned']) {
                     $proxyGateways[$profile['gateway']] = [[
                         'ipprotocol' => 'inet', 'int' => $profile['interface'], 'gwip' => $profile['peer'], 'weight' => 1
@@ -42,11 +44,12 @@ final class Firewall
         $firewall->setGatewayGroups($proxyGateways);
         unset($profile);
 
-        self::registerAssignments($firewall, $settings, $interfaces, Policy::assignments($model), $profiles, $health, $diagnostics);
+        $assignments = Policy::assignments($model);
+        self::registerAssignments($firewall, $settings, $interfaces, $assignments, $profiles, $health, $diagnostics);
 
         $services = SmartRouting::services($model);
         if (SmartRouting::active($settings, $services)) {
-            self::registerSmartRoutes($firewall, $settings, $interfaces, $services, $profiles, $health);
+            self::registerSmartRoutes($firewall, $settings, $interfaces, $services, $profiles, $health, $assignments, $diagnostics);
         }
 
         foreach ($settings['strictInterfaces'] as $interface) {
@@ -89,7 +92,18 @@ final class Firewall
             }
 
             $strict = in_array($interface, $settings['strictInterfaces'], true);
-            $reserved = $diagnostics->hasReservation($interface, $ip, $row['mac']);
+            $mode = Policy::mode($row);
+            $ipv6 = filter_var($row['ipv6'] ?? '', FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ?: '';
+            $reserved = self::hasAssignmentIdentity($settings, $row, $diagnostics);
+            if ($mode === 'multi') {
+                continue;
+            }
+            if ($mode === 'disabled' && in_array($interface, $settings['smartInterfaces'], true)) {
+                self::bypassSmartDns($firewall, $interface, $ip, 'inet');
+                if ($ipv6 !== '') {
+                    self::bypassSmartDns($firewall, $interface, $ipv6, 'inet6');
+                }
+            }
             $rule = [
                 'direction' => 'in', 'interface' => $interface, 'ipprotocol' => 'inet', 'from' => $ip,
                 'to' => '<' . Policy::LOCAL_TABLE . '>', 'to_not' => true, 'quick' => true, 'disablereplyto' => true
@@ -98,7 +112,15 @@ final class Firewall
                 'type' => 'pass', 'statetype' => 'keep', 'label' => Policy::marker('device', $id),
                 'descr' => 'Blank VPN device routing'
             ] + $rule;
-            if ($row['profile'] === '') {
+            if ($mode === 'blocked') {
+                self::redirectDns($firewall, $interface, $ip, Resolver::LOCAL_PORT, $id, 58);
+                self::registerGuard($firewall, $id, $interface, $ip, 'inet');
+                if ($ipv6 !== '') {
+                    self::registerGuard($firewall, $id, $interface, $ipv6, 'inet6');
+                }
+                continue;
+            }
+            if ($mode === 'disabled' || $row['profile'] === '') {
                 if ($strict && $reserved) {
                     self::allowNativeDns($firewall, $interface, $ip, $id);
                     $firewall->registerFilterRule(Policy::PRIORITY + 10, $pass);
@@ -120,23 +142,48 @@ final class Firewall
                     self::allowNativeDns($firewall, $interface, $ip, $id);
                     $firewall->registerFilterRule(Policy::PRIORITY + 10, $pass);
                 }
-                // On a shared LAN, explicit fallback returns this IP to the native and Smart Routing policies.
+                if (!$strict && in_array($interface, $settings['smartInterfaces'], true)) {
+                    self::bypassSmartDns($firewall, $interface, $ip, 'inet');
+                    if ($ipv6 !== '') {
+                        self::bypassSmartDns($firewall, $interface, $ipv6, 'inet6');
+                    }
+                }
                 continue;
             } else {
                 self::redirectDns($firewall, $interface, $ip, Resolver::LOCAL_PORT, $id, 58);
             }
 
-            // This guard remains installed even when the tunnel, gateway, or reservation disappears.
-            $firewall->registerFilterRule(Policy::PRIORITY + 11, [
-                'type' => 'block', 'label' => Policy::marker('kill', $id),
-                'descr' => 'Blank VPN per-IP fail-closed guard'
-            ] + $rule);
-            $firewall->registerFilterRule(Policy::PRIORITY + 7, [
-                'type' => 'block', 'interface' => $interface, 'ipprotocol' => 'inet', 'from' => $ip,
-                'protocol' => 'tcp/udp', 'to_port' => '53', 'quick' => true,
-                'label' => Policy::marker('kill_dns', $id)
-            ]);
+            self::registerGuard($firewall, $id, $interface, $ip, 'inet');
+            if ($ipv6 !== '' && $row['failure'] !== 'wan') {
+                self::registerGuard($firewall, $id, $interface, $ipv6, 'inet6');
+            }
         }
+    }
+
+    private static function hasAssignmentIdentity(array $settings, array $row, Diagnostics $diagnostics): bool
+    {
+        if (($row['kind'] ?? '') === 'tailnet') {
+            return in_array($row['interface'], $settings['tailscaleInterfaces'] ?? [], true) &&
+                Policy::tailnetInterface($row['interface']) &&
+                Policy::tailnetAddress($row['ip']) && Policy::tailnetAddress($row['ipv6'] ?? '', true);
+        }
+        return $diagnostics->hasReservation($row['interface'], $row['ip'], $row['mac']);
+    }
+
+    private static function registerGuard(Plugin $firewall, string $id, string $interface, string $ip, string $family): void
+    {
+        $suffix = $family === 'inet6' ? '_v6' : '';
+        $rule = [
+            'type' => 'block', 'direction' => 'in', 'interface' => $interface, 'ipprotocol' => $family,
+            'from' => $ip, 'quick' => true
+        ];
+        $firewall->registerFilterRule(Policy::PRIORITY + 11, [
+            'to' => '<' . Policy::LOCAL_TABLE . '>', 'to_not' => true,
+            'label' => Policy::marker('kill' . $suffix, $id), 'descr' => 'Blank VPN device internet guard'
+        ] + $rule);
+        $firewall->registerFilterRule(Policy::PRIORITY + 7, [
+            'protocol' => 'tcp/udp', 'to_port' => '53', 'label' => Policy::marker('kill_dns' . $suffix, $id)
+        ] + $rule);
     }
 
     private static function registerSmartRoutes(
@@ -145,7 +192,9 @@ final class Firewall
         array $interfaces,
         array $services,
         array $profiles,
-        array $health
+        array $health,
+        array $assignments = [],
+        ?Diagnostics $diagnostics = null
     ): void {
         foreach ($services as $service) {
             $firewall->registerTable(SmartRouting::table($service), true);
@@ -157,15 +206,50 @@ final class Firewall
             ) {
                 continue;
             }
-            foreach (['inet', 'inet6'] as $family) {
-                self::redirectDns($firewall, $interface, 'any', SmartRouting::PORT, $interface, 64, true, $family);
-            }
             $tag = Policy::marker('smart', $interface);
-            $firewall->registerFilterRule(Policy::PRIORITY + 12, [
+            $match = [
                 'type' => 'match', 'interface' => $interface, 'ipprotocol' => 'inet46', 'quick' => false,
                 'to' => '<' . Policy::LOCAL_TABLE . '>', 'to_not' => true, 'tag' => $tag,
-                'descr' => 'Blank VPN Smart Routing excludes local destinations'
-            ]);
+                'descr' => 'Blank VPN Multi-Path source and destination scope'
+            ];
+            $assignedOnly = !empty($settings['smartAssignedOnly']);
+            $sources = [];
+            if (!$assignedOnly) {
+                foreach (['inet', 'inet6'] as $family) {
+                    self::redirectDns($firewall, $interface, 'any', SmartRouting::PORT, $interface, 64, true, $family);
+                }
+            }
+            foreach ($assignments as $id => $row) {
+                if ($row['interface'] !== $interface) {
+                    continue;
+                }
+                $mode = Policy::mode($row);
+                $included = $mode === 'multi' && $diagnostics !== null &&
+                    self::hasAssignmentIdentity($settings, $row, $diagnostics);
+                if ($assignedOnly ? !$included : ($included || $mode === 'default')) {
+                    continue;
+                }
+                foreach (['inet' => $row['ip'], 'inet6' => $row['ipv6'] ?? ''] as $family => $source) {
+                    if (!filter_var($source, FILTER_VALIDATE_IP, $family === 'inet' ? FILTER_FLAG_IPV4 : FILTER_FLAG_IPV6)) {
+                        continue;
+                    }
+                    $sources[] = $source;
+                    if ($assignedOnly) {
+                        self::redirectDns($firewall, $interface, $source, SmartRouting::PORT, $id, 64, false, $family);
+                    }
+                }
+            }
+            if ($sources !== []) {
+                $table = Policy::marker('src', $interface);
+                // PF table names are limited to 31 characters.
+                $table = substr($table, 0, 31);
+                $file = Policy::writeState($table, implode("\n", array_unique($sources)) . "\n");
+                $firewall->registerTable($table, true, $file);
+                $match += ['from' => '<' . $table . '>', 'from_not' => !$assignedOnly];
+            }
+            if (!$assignedOnly || $sources !== []) {
+                $firewall->registerFilterRule(Policy::PRIORITY + 12, $match);
+            }
             foreach (array_values($services) as $index => $service) {
                 $id = $service['id'] . ':' . $interface;
                 $table = '<' . SmartRouting::table($service) . '>';
@@ -215,15 +299,20 @@ final class Firewall
         ]);
     }
 
-    private static function allowNativeDns(Plugin $firewall, string $interface, string $ip, string $id): void
+    private static function bypassSmartDns(Plugin $firewall, string $interface, string $ip, string $family): void
     {
         if (self::dnsRedirectionAvailable()) {
             $firewall->registerDestinationNatRule(55, [
-                'nordr' => true, 'interface' => $interface, 'ipprotocol' => 'inet',
+                'nordr' => true, 'interface' => $interface, 'ipprotocol' => $family,
                 'from' => $ip, 'protocol' => 'tcp/udp', 'to_port' => '53', 'natreflection' => 'disable',
-                'descr' => 'Blank VPN explicitly permits regular DNS'
+                'descr' => 'Blank VPN uses regular DNS for this address'
             ]);
         }
+    }
+
+    private static function allowNativeDns(Plugin $firewall, string $interface, string $ip, string $id): void
+    {
+        self::bypassSmartDns($firewall, $interface, $ip, 'inet');
         $dns = [
             'type' => 'pass', 'interface' => $interface, 'ipprotocol' => 'inet',
             'from' => $ip, 'protocol' => 'tcp/udp', 'to_port' => '53',
@@ -248,8 +337,7 @@ final class Firewall
         bool $default = false,
         string $family = 'inet'
     ): void {
-        if (!self::dnsRedirectionAvailable() || $port < Resolver::LOCAL_PORT ||
-            $port >= ProxyRuntime::FIRST_DNS_PORT + ProxyRuntime::SLOTS) {
+        if (!self::dnsRedirectionAvailable() || !Resolver::allowedPort($port)) {
             return;
         }
         $tag = Policy::marker('dns', $id . ':' . $family);
@@ -394,8 +482,10 @@ final class Firewall
             return;
         }
         foreach (Policy::assignments($model) as $id => $row) {
-            if ($row['profile'] !== '' && $row['failure'] !== 'wan' &&
-                ($loaded[Policy::marker('kill', $id)]['action'] ?? '') !== 'block') {
+            $mode = Policy::mode($row);
+            if (($mode === 'blocked' || ($mode === 'full' && $row['failure'] !== 'wan')) &&
+                (($loaded[Policy::marker('kill', $id)]['action'] ?? '') !== 'block' ||
+                (!empty($row['ipv6']) && ($loaded[Policy::marker('kill_v6', $id)]['action'] ?? '') !== 'block'))) {
                 throw new \RuntimeException('A per-IP fail-closed firewall guard is missing.');
             }
         }

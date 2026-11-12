@@ -190,3 +190,196 @@
 .blankvpn[data-can-manage="false"] [data-manage-only] {
     display: none !important;
 }
+
+.blankvpn {
+    color-scheme: light;
+    --bv-bg: #f4f2ed;
+    --bv-surface: #fffefa;
+    --bv-raised: #f8f6f1;
+    --bv-ink: #202922;
+    --bv-muted: #59645a;
+    --bv-line: #deded2;
+    --bv-accent: #245646;
+    --bv-on-accent: #ffffff;
+    --bv-focus: #2c7560;
+    --bv-hero: #18382d;
+    --bv-hero-ink: #fbf8ee;
+    --bv-hero-muted: #c6d8cb;
+    --bv-metal: #c6a775;
+    --bv-shadow: 0 10px 28px #25352a12;
+    margin: 1rem auto 2rem;
+    padding: clamp(.75rem, 2vw, 2rem);
+    border: 1px solid var(--bv-line);
+    border-radius: 1rem;
+    background: var(--bv-bg);
+    color: var(--bv-ink);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.blankvpn[data-appearance="night"] {
+    color-scheme: dark;
+    --bv-bg: #151b18;
+    --bv-surface: #1e2823;
+    --bv-raised: #242f29;
+    --bv-ink: #eaf0e9;
+    --bv-muted: #b7c4b9;
+    --bv-line: #39483e;
+    --bv-accent: #a6d3be;
+    --bv-on-accent: #10271c;
+    --bv-focus: #b2e7d0;
+    --bv-hero: #132b22;
+    --bv-hero-ink: #fcf8ed;
+    --bv-hero-muted: #bed2c6;
+    --bv-shadow: 0 10px 28px #0003;
+}
+
+@media (prefers-color-scheme: dark) {
+    .blankvpn[data-appearance="system"] {
+        color-scheme: dark;
+        --bv-bg: #151b18;
+        --bv-surface: #1e2823;
+        --bv-raised: #242f29;
+        --bv-ink: #eaf0e9;
+        --bv-muted: #b7c4b9;
+        --bv-line: #39483e;
+        --bv-accent: #a6d3be;
+        --bv-on-accent: #10271c;
+        --bv-focus: #b2e7d0;
+        --bv-hero: #132b22;
+        --bv-hero-ink: #fcf8ed;
+        --bv-hero-muted: #bed2c6;
+        --bv-shadow: 0 10px 28px #0003;
+    }
+}
+
+.blankvpn .bv-hero {
+    padding: clamp(1.25rem, 3vw, 2.4rem);
+    border: 1px solid #c6a77566;
+    border-radius: .85rem;
+    background: linear-gradient(110deg, var(--bv-hero), #224237);
+    color: var(--bv-hero-ink);
+    box-shadow: inset 0 2px var(--bv-metal), var(--bv-shadow);
+}
+
+.blankvpn .bv-hero h1 {
+    font-size: clamp(2.15rem, 4vw, 3.4rem);
+    font-weight: 730;
+    letter-spacing: -.045em;
+    line-height: 1.08;
+}
+
+.blankvpn .bv-hero .text-muted {
+    color: var(--bv-hero-muted);
+    max-width: 44ch;
+}
+
+.blankvpn .bv-utilities .form-control,
+.blankvpn .bv-utilities .btn-default {
+    width: auto;
+    background: #ffffff12;
+    color: var(--bv-hero-ink);
+    border-color: #e3ecd666;
+}
+
+.blankvpn .bv-utilities option {
+    background: var(--bv-surface);
+    color: var(--bv-ink);
+}
+
+.blankvpn .bv-navigation {
+    margin: 1rem 0;
+    gap: .35rem;
+}
+
+.blankvpn .bv-navigation .btn {
+    padding: .62rem .95rem;
+    font-weight: 620;
+}
+
+.blankvpn .bv-panel {
+    padding: clamp(1rem, 2vw, 1.55rem);
+    border-color: var(--bv-line);
+    border-radius: .8rem;
+    background: var(--bv-surface);
+    box-shadow: var(--bv-shadow);
+}
+
+.blankvpn .bv-panel .bv-panel {
+    background: var(--bv-raised);
+    box-shadow: none;
+}
+
+.blankvpn h2,
+.blankvpn summary {
+    letter-spacing: -.015em;
+}
+
+.blankvpn .text-muted,
+.blankvpn td > small {
+    color: var(--bv-muted);
+}
+
+.blankvpn a {
+    color: var(--bv-accent);
+    text-decoration: underline;
+    text-underline-offset: .15em;
+}
+
+.blankvpn .form-control,
+.blankvpn .btn-default {
+    border: 1px solid var(--bv-line);
+    background: var(--bv-raised);
+    color: var(--bv-ink);
+    border-radius: .48rem;
+    box-shadow: none;
+}
+
+.blankvpn .form-control::placeholder {
+    color: var(--bv-muted);
+}
+
+.blankvpn .btn-primary {
+    border-color: var(--bv-accent);
+    border-radius: .48rem;
+    background: var(--bv-accent);
+    color: var(--bv-on-accent);
+}
+
+.blankvpn .btn:hover:not(:disabled) {
+    filter: brightness(.94);
+}
+
+.blankvpn :is(button, input, select, textarea, summary, a):focus-visible {
+    outline: 2px solid var(--bv-focus);
+    outline-offset: 2px;
+}
+
+.blankvpn .bv-hero :is(button, select):focus-visible {
+    outline-color: var(--bv-hero-muted);
+}
+
+.blankvpn .bv-table thead th {
+    border-bottom: 1px solid var(--bv-line);
+    background: var(--bv-raised);
+    color: var(--bv-muted);
+    font-size: .92em;
+    font-weight: 650;
+}
+
+.blankvpn .bv-table td {
+    border-color: var(--bv-line);
+}
+
+@media (max-width: 767px) {
+    .blankvpn .bv-hero {
+        align-items: flex-start;
+    }
+
+    .blankvpn .bv-navigation .btn {
+        flex: 1 1 auto;
+    }
+
+    .blankvpn .bv-devices tr + tr {
+        border-color: var(--bv-line);
+    }
+}

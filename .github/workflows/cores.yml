@@ -1,0 +1,34 @@
+name: Build an independent sing-box update
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Upstream sing-box version without v
+        required: true
+        type: string
+      upstream_commit:
+        description: Full commit SHA of the upstream version tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build and publish the FreeBSD amd64 update
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CORE_VERSION: ${{ inputs.version }}
+          UPSTREAM_COMMIT: ${{ inputs.upstream_commit }}
+        run: |
+          sh build/prepare-sing-box.sh "$CORE_VERSION" "$UPSTREAM_COMMIT" "$RUNNER_TEMP/sing-box"
+          sh build/publish-sing-box.sh "$CORE_VERSION" "$RUNNER_TEMP/sing-box/sing-box" "$UPSTREAM_COMMIT"

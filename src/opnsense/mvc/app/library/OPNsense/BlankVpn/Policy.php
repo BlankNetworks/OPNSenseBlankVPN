@@ -21,10 +21,12 @@ final class Policy
     {
         $stored = self::fields($model->settings);
         $result = ['enabled' => ($stored['enabled'] ?? '0') === '1'];
-        foreach (['interfaces', 'strictInterfaces', 'smartInterfaces', 'localNetworks'] as $key) {
+        foreach (['interfaces', 'strictInterfaces', 'smartInterfaces', 'tailscaleInterfaces', 'localNetworks'] as $key) {
             $result[$key] = array_values(array_filter(explode(',', $stored[$key] ?? ''), 'strlen'));
         }
-        $result['hostname'] = $stored['hostname'] ?? 'opnsense.home.arpa';
+        $result['smartAssignedOnly'] = ($stored['smartAssignedOnly'] ?? '0') === '1';
+        $result['dashboardBind'] = ($stored['dashboardBind'] ?? '') === 'tailnet' ? 'tailnet' : 'lan';
+        $result['hostname'] = $stored['hostname'] ?? 'blankvpn.home.arpa';
         return $result;
     }
 
@@ -55,6 +57,36 @@ final class Policy
         return $assignments;
     }
 
+    public static function mode(array $assignment): string
+    {
+        return ($assignment['mode'] ?? '') ?: (($assignment['profile'] ?? '') !== '' ? 'full' : 'default');
+    }
+
+    public static function tailnetAddress(string $address, bool $ipv6 = false): bool
+    {
+        return self::contains($ipv6 ? 'fd7a:115c:a1e0::/48' : '100.64.0.0/10', $address);
+    }
+
+    public static function tailnetInterface(string $interface): bool
+    {
+        $candidate = self::availableInterfaces()[$interface] ?? [];
+        return str_starts_with($interface, 'opt') && isset($candidate['device']) &&
+            !preg_match('/^tailscale[0-9]*$/D', $candidate['device']);
+    }
+
+    public static function ipv6Address(string $value): string
+    {
+        if ($value === '') {
+            return '';
+        }
+        if (!filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ||
+            self::contains('fe80::/10', $value) || self::contains('ff00::/8', $value) ||
+            in_array($value, ['::', '::1'], true)) {
+            throw new \DomainException('Enter a stable IPv6 unicast address for this device.');
+        }
+        return inet_ntop(inet_pton($value));
+    }
+
     public static function availableInterfaces(): array
     {
         $interfaces = [];
@@ -64,7 +96,7 @@ final class Policy
                 !self::interfaceId($id) || !isset($node->enable) ||
                 !empty((string)$node->gateway) || !empty((string)$node->gatewayv6) ||
                 !empty((string)$node->gateway_interface) || !preg_match('/^[a-z][a-z0-9_.:-]{0,31}$/iD', $device) ||
-                preg_match('/^(wg|ovpn[cs]?|ipsec|enc|tun|tap|ppp|lo)[0-9]/i', $device)
+                preg_match('/^(wg|ovpn[cs]?|ipsec|enc|tun|tap|ppp|lo|tailscale)[0-9]/i', $device)
             ) {
                 continue;
             }

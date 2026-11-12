@@ -15,7 +15,9 @@ final class SmartRouting
     public const TABLE_MAX_AGE = 86400;
     public const PRESETS = [
         'Netflix' => ['netflix.com', 'netflix.net', 'nflxext.com', 'nflximg.com', 'nflximg.net',
-            'nflxsearch.net', 'nflxso.net', 'nflxvideo.net']
+            'nflxsearch.net', 'nflxso.net', 'nflxvideo.net'],
+        'Hulu' => ['hulu.com', 'hulustream.com', 'huluim.com'],
+        'WeChat' => ['wechat.com', 'weixin.qq.com']
     ];
 
     public static function services(BlankVpn $model): array

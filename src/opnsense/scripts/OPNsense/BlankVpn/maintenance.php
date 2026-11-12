@@ -8,6 +8,7 @@ use OPNsense\BlankVpn\Mullvad;
 use OPNsense\BlankVpn\Operations;
 use OPNsense\BlankVpn\Policy;
 use OPNsense\BlankVpn\ProxyCatalog;
+use OPNsense\BlankVpn\ProxyCores;
 use OPNsense\BlankVpn\ProxyRuntime;
 use OPNsense\BlankVpn\Resolver;
 use OPNsense\BlankVpn\SmartRouting;
@@ -43,7 +44,7 @@ try {
             break;
         case 'reset_ip':
             $ip = $argv[2] ?? '';
-            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            if (!filter_var($ip, FILTER_VALIDATE_IP)) {
                 exit(64);
             }
             Resolver::command(['/sbin/pfctl', '-k', $ip]);
@@ -59,6 +60,7 @@ try {
         case 'maintain':
             Operations::exclusive(function () {
                 $model = new BlankVpn();
+                ProxyCores::recover($model);
                 $settings = Policy::settings($model);
                 $proxyRoutes = ProxyRuntime::routes($model);
                 ProxyCatalog::refreshDue(array_column($proxyRoutes, 'node'));

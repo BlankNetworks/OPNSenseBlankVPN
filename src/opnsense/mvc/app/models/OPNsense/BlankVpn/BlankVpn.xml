@@ -1,6 +1,6 @@
 <model>
     <mount>//OPNsense/BlankVpn</mount>
-    <version>1.3.0</version>
+    <version>1.4.0</version>
     <description>Blank VPN configuration and native object ownership</description>
     <items>
         <settings>
@@ -8,8 +8,11 @@
             <interfaces type="TextField"/>
             <strictInterfaces type="TextField"/>
             <smartInterfaces type="TextField"/>
+            <smartAssignedOnly type="BooleanField"><Default>0</Default></smartAssignedOnly>
+            <tailscaleInterfaces type="TextField"/>
             <localNetworks type="TextField"/>
-            <hostname type="TextField"><Default>opnsense.home.arpa</Default></hostname>
+            <dashboardBind type="TextField"><Default>lan</Default></dashboardBind>
+            <hostname type="TextField"><Default>blankvpn.home.arpa</Default></hostname>
         </settings>
         <profiles>
             <profile type="ArrayField">
@@ -27,7 +30,7 @@
                 <device type="TextField"><Required>Y</Required></device>
                 <protocol type="TextField"><Required>Y</Required></protocol>
                 <dns type="TextField"><Required>Y</Required></dns>
-                <dnsPort type="IntegerField"><MinimumValue>46651</MinimumValue><MaximumValue>46655</MaximumValue><Required>Y</Required></dnsPort>
+                <dnsPort type="IntegerField"><MinimumValue>46651</MinimumValue><MaximumValue>46706</MaximumValue><Required>Y</Required></dnsPort>
             </route>
         </nativeRoutes>
         <proxyRoutes>
@@ -43,7 +46,10 @@
             <assignment type="ArrayField">
                 <ip type="TextField"><Required>Y</Required></ip>
                 <interface type="TextField"><Required>Y</Required></interface>
-                <mac type="TextField"><Required>Y</Required></mac>
+                <mac type="TextField"/>
+                <ipv6 type="TextField"/>
+                <kind type="TextField"/>
+                <mode type="TextField"/>
                 <label type="TextField"/>
                 <profile type="TextField"/>
                 <backup type="TextField"/>

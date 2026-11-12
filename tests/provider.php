@@ -37,9 +37,9 @@ final class FixtureMullvad extends Mullvad
                 ],
             ];
         }
-        if ($path === '/auth/v1/webtoken') {
+        if ($path === '/auth/v1/token') {
             check($token === null && $body === ['account_number' => '0000000000000000'], 'Unexpected login payload.');
-            return ['access_token' => 'test-bearer-token'];
+            return ['access_token' => 'test-bearer-token', 'expiry' => gmdate(DATE_ATOM, time() + 3600)];
         }
         check($token === 'test-bearer-token', 'Expected the backend bearer token.');
         if ($path === '/accounts/v1/accounts/me') {

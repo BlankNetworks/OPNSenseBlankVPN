@@ -124,9 +124,9 @@ final class Operations
 
     public static function resetKillSwitch(string $ip): void
     {
-        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ||
+        if (!filter_var($ip, FILTER_VALIDATE_IP) ||
             trim((new Backend())->configdpRun('blankvpn reset_ip', [$ip], false, 10)) !== 'ok') {
-            throw new \RuntimeException('The firewall could not reset previous connections for this IPv4 address.');
+            throw new \RuntimeException('The firewall could not reset previous connections for this address.');
         }
     }
 

@@ -3,10 +3,11 @@
 declare(strict_types=1);
 
 use OPNsense\BlankVpn\ProxyCatalog;
+use OPNsense\BlankVpn\ProxyCores;
 use OPNsense\BlankVpn\ProxyImport;
 use OPNsense\BlankVpn\ProxyRuntime;
 
-foreach (['ProxyCatalog', 'ProxyImport', 'ProxyRuntime'] as $file) {
+foreach (['Policy', 'ProxyCatalog', 'ProxyCores', 'ProxyImport', 'ProxyRuntime'] as $file) {
     require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/' . $file . '.php';
 }
 
@@ -67,6 +68,17 @@ assertProxy(ProxyCatalog::subscriptionUsage('Upload=12; download=34; total=100; 
     ['upload' => 12, 'download' => 34, 'total' => 100, 'expire' => 1798761600], 'Read quota and expiry headers.');
 assertProxy(ProxyCatalog::subscriptionUsage('upload=1; upload=2; total=9223372036854775808; expire=-1; download=0') ===
     ['download' => 0], 'Ignore duplicate, overflowed and negative metadata.');
+
+$catalog = ProxyCores::parseCatalog((string)file_get_contents(__DIR__ . '/../src/share/blankvpn/core-catalog.json'));
+assertProxy(str_starts_with(ProxyCores::releaseUrl('mihomo', $catalog['mihomo']), 'https://github.com/MetaCubeX/mihomo/'),
+    'Derive downloads from the approved source.');
+try {
+    ProxyCores::releaseUrl('mihomo', array_replace($catalog['mihomo'], ['asset' => '../../unexpected']));
+    throw new RuntimeException('An unexpected asset path was accepted.');
+} catch (DomainException) {
+}
+assertProxy(ProxyCores::uses(['core' => 'xray'], 'mihomo') && !ProxyCores::uses(['core' => 'xray'], 'sing-box'),
+    'A core update must only affect the exits that use it.');
 
 $route = ProxyRuntime::route('proxy-exit', 0, proxyNode($ss)['id'], 'test', 'mihomo', 'ss');
 $ssConfig = ProxyRuntime::configuration($route, proxyNode($ss));

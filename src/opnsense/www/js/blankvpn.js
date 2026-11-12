@@ -8,6 +8,8 @@
             return;
         }
 
+        const modes = {full: 'Full Tunneling', multi: 'Multi-Path Tunneling',
+            disabled: 'Disabled (No VPN)', blocked: 'Blocked (No Internet)'};
         const state = {
             devices: [],
             profiles: [],
@@ -16,6 +18,7 @@
             proxyNodes: [],
             proxyFeeds: [],
             proxyCores: {},
+            canManageCores: false,
             section: 'devices',
             mullvadSignedIn: false,
             presets: {},
@@ -64,16 +67,20 @@
             return error instanceof Error ? error.message : fallback;
         }
 
-        async function api(action, payload, path = '') {
+        async function api(action, payload, path = '', controller = 'service') {
             const method = payload === undefined ? 'GET' : 'POST';
             const request = {
-                url: '/api/blankvpn/service/' + action + path,
+                url: '/api/blankvpn/' + controller + '/' + action + path,
                 method,
                 dataType: 'json',
                 cache: false,
-                timeout: 45000
+                timeout: controller === 'core' ? 240000 : 45000
             };
-            if (method === 'POST') {
+            if (payload instanceof FormData) {
+                request.contentType = false;
+                request.processData = false;
+                request.data = payload;
+            } else if (method === 'POST') {
                 request.contentType = 'application/json; charset=UTF-8';
                 request.data = JSON.stringify(payload);
             }
@@ -223,7 +230,7 @@
                 if (!matched.has(assignment.id)) {
                     entries.push({
                         assignment,
-                        device: {ip: assignment.ip, mac: assignment.mac, interface: assignment.interface}
+                        device: {ip: assignment.ip, mac: assignment.mac, ipv6: assignment.ipv6, interface: assignment.interface}
                     });
                 }
             }
@@ -239,18 +246,20 @@
                 const name = assignment?.label || device.name || ip || 'Unnamed device';
                 const ipv4 = list(device.ipv4Addresses || device.ipv4);
                 const ipv6 = list(device.ipv6);
-                cell(row, name, '', device.mac);
+                cell(row, name, '', assignment?.kind === 'tailnet' ? 'Tailscale peer' : device.mac);
                 cell(row, ipv4.join(', ') || ipv6.join(', ') || ip, 'Addresses', ipv4.length ? ipv6.join(', ') : '');
                 cell(row, device.interfaceName || networkName(device.interface), 'Network',
                     device.stable === true ? 'Fixed IPv4 reservation' : '');
                 const seen = device.lastSeen ? 'Seen ' + date(device.lastSeen) : 'Last seen unknown';
                 cell(
                     row,
-                    assignment ? profileName(assignment.profile) : 'Network default',
+                    assignment ? (modes[assignment.mode] || (assignment.profile ? modes.full : 'Network default')) : 'Network default',
                     'Assignment',
                     assignment?.profile
-                        ? (assignment.failure === 'backup' ? 'Backup: ' + profileName(assignment.backup)
-                            : assignment.failure === 'wan' ? 'Falls back to normal internet' : (assignment.killSwitchActive ? 'IPv4 kill switch installed' : 'IPv4 kill switch configured'))
+                        ? [profileName(assignment.profile),
+                            assignment.failure === 'backup' ? 'Backup ' + profileName(assignment.backup)
+                                : assignment.failure === 'wan' ? 'Normal internet fallback'
+                                    : (assignment.killSwitchActive ? 'Kill switch installed' : 'Kill switch configured')].join(' · ')
                         : ''
                 );
                 const assignedProfile = state.profiles.find((profile) => profile.id === assignment?.profile);
@@ -338,7 +347,19 @@
             byId('managed').value = list(settings.interfaces).join(', ');
             byId('strict').value = list(settings.strictInterfaces).join(', ');
             byId('smart-interfaces').value = list(settings.smartInterfaces).join(', ');
+            byId('tailnet-interfaces').value = list(settings.tailscaleInterfaces).join(', ');
+            byId('smart-assigned').checked = settings.smartAssignedOnly === true;
+            byId('dashboard-bind').value = settings.dashboardBind || 'lan';
+            renderDashboardAddress();
             byId('local').value = list(settings.localNetworks).join(', ');
+        }
+
+        function renderDashboardAddress() {
+            const address = state.settings?.dashboardAddresses?.[byId('dashboard-bind').value];
+            const port = state.settings?.dashboardPort || 443;
+            byId('bind-address').textContent = address
+                ? 'Current address · https://' + address + (port === 443 ? '' : ':' + port) + '/ui/blankvpn/index'
+                : 'The selected router interface has no IPv4 address.';
         }
 
         function renderServices() {
@@ -351,7 +372,7 @@
                 || interfaces.includes('lan') || list(state.settings?.strictInterfaces).includes('lan');
             const body = byId('service-list');
             if (state.services.length === 0) {
-                empty(body, 'No service rules. Choose Netflix or enter your own domains.', 4);
+                empty(body, 'No service rules. Choose Netflix, Hulu, WeChat, or enter your own domains.', 4);
             } else {
                 body.replaceChildren();
                 for (const service of state.services) {
@@ -409,6 +430,62 @@
                 renderProxyCatalog();
             } catch (error) {
                 notice(errorMessage(error, 'Proxy catalog unavailable.'), 'danger');
+            }
+        }
+
+        function coreApi(action, payload) {
+            return api(action, payload, '', 'core');
+        }
+
+        function renderCores(data) {
+            const cores = array(data.cores);
+            const body = byId('core-list');
+            body.replaceChildren();
+            const storage = data.storage || {};
+            byId('core-storage').textContent = data.pending ? 'A core change is in progress.'
+                : [formatBytes(Math.floor(storage.freeBytes || 0)) + ' free on the state filesystem',
+                    formatBytes(storage.coreBytes) + ' core updates',
+                    formatBytes(storage.catalogBytes) + ' proxy catalog',
+                    formatBytes(storage.reserveBytes) + ' reserved as free space'].join(' · ');
+            for (const core of cores) {
+                const row = body.insertRow();
+                cell(row, core.id === 'mihomo' ? 'Mihomo (Clash)' : core.id);
+                cell(row, core.installed ? shown(core.version, 'Installed') : 'Unavailable', '',
+                    core.installed ? core.source : '');
+                cell(row, core.available?.version || '—');
+                const actions = row.insertCell();
+                if (core.update) {
+                    actions.append(button('Install', (event) => {
+                        if (window.confirm('Install ' + core.id + ' ' + core.available.version + '? Its proxy exits will briefly restart.')) {
+                            void mutate(event.currentTarget, () => coreApi('install', {
+                                core: core.id, digest: core.available.sha256
+                            }), 'Core updated.', renderCores);
+                        }
+                    }, 'Install update for ' + core.id));
+                }
+                if (core.rollback) {
+                    actions.append(button('Roll back', (event) => {
+                        if (window.confirm('Roll back ' + core.id + '? Its proxy exits will briefly restart.')) {
+                            void mutate(event.currentTarget, () => coreApi('rollback', {core: core.id}),
+                                'Core rolled back.', renderCores);
+                        }
+                    }, 'Roll back ' + core.id));
+                }
+            }
+            options(byId('core-upload-id'), cores.filter((core) => core.available)
+                .map((core) => ({value: core.id, label: core.id + ' ' + core.available.version})), 'Choose an approved release');
+            byId('core-upload-id').onchange = () => {
+                const selected = cores.find((core) => core.id === byId('core-upload-id').value);
+                byId('core-upload-id').dataset.digest = selected?.available?.sha256 || '';
+            };
+            byId('core-upload-id').onchange();
+        }
+
+        async function refreshCores() {
+            try {
+                renderCores(await coreApi('status'));
+            } catch (error) {
+                byId('core-storage').textContent = errorMessage(error, 'Core status is unavailable.');
             }
         }
 
@@ -517,6 +594,8 @@
                 state.assignments = array(data.assignments);
                 state.services = array(data.services);
                 state.proxyCores = data.proxyCores || {};
+                state.canManageCores = data.canManageCores === true;
+                byId('core-manager').hidden = !state.canManageCores;
                 state.presets = data.servicePresets || {};
                 state.settings = data.settings;
                 state.canManage = data.canManage !== false;
@@ -569,27 +648,40 @@
         }
 
         function updateFailure() {
-            const primary = byId('profile').value;
+            const mode = byId('mode').value;
+            const full = mode === 'full';
+            const primary = full ? byId('profile').value : '';
             const failover = byId('failure');
+            const tailnet = byId('device-kind').value === 'tailnet';
+            byId('mac-field').hidden = tailnet;
+            byId('mac').required = !tailnet;
+            byId('ipv6').required = tailnet;
+            byId('profile-field').hidden = !full;
+            byId('profile').required = full;
             byId('failure-field').hidden = !primary;
             const showBackup = primary && failover.value === 'backup';
             byId('backup-field').hidden = !showBackup;
             byId('backup').required = Boolean(showBackup);
-            const choices = state.profiles.filter((profile) => profile.id !== primary)
-                .map(exitChoice);
-            options(byId('backup'), choices, 'Choose a backup exit');
+            options(byId('backup'), state.profiles.filter((profile) => profile.id !== primary).map(exitChoice), 'Choose a backup exit');
             const profile = state.profiles.find((item) => item.id === primary);
             byId('profile').setCustomValidity(primary && !profile ? 'Choose an available route.' : '');
+            const interfaceId = byId('interface').value.trim();
             const notes = [];
-            if (profile) {
-                const strict = list(state.settings?.strictInterfaces).includes(byId('interface').value.trim());
-                notes.push(strict ? 'This strict interface blocks internet-bound IPv6.'
-                    : 'This policy covers the selected IPv4 address. IPv6 follows your normal firewall rules.');
-                if (failover.value === 'block') {
-                    notes.push('Applying a new kill switch resets connections originating from this IPv4 address.');
-                }
-                if (profile.dns) {
-                    notes.push('Profile DNS: ' + shown(profile.dns) + '.');
+            if (tailnet) {
+                notes.push('Use the peer IPv4 and IPv6 addresses seen on your source-preserving transit interface.');
+            }
+            if (mode === 'multi') {
+                notes.push(list(state.settings?.smartInterfaces).includes(interfaceId)
+                    ? 'Matched services use their assigned exits. Other traffic uses normal internet.'
+                    : 'Enable Multi-Path on this interface in Settings.');
+            }
+            if (mode === 'blocked') {
+                notes.push('Internet is blocked for the assigned addresses. Approved local access follows your firewall rules.');
+            }
+            if (mode === 'full' || mode === 'blocked') {
+                const strict = list(state.settings?.strictInterfaces).includes(interfaceId);
+                if (!strict && !byId('ipv6').value.trim()) {
+                    notes.push('Enter a stable IPv6 address to cover it too.');
                 }
             }
             byId('route-note').textContent = notes.join(' ');
@@ -602,6 +694,10 @@
             byId('ip').value = assignment?.ip || deviceIp(device);
             byId('interface').value = assignment?.interface || device.interface || '';
             byId('mac').value = assignment?.mac || device.mac || '';
+            byId('ipv6').value = assignment?.ipv6 || '';
+            byId('device-kind').value = assignment?.kind || 'lan';
+            byId('device-kind').disabled = Boolean(assignment);
+            byId('mode').value = modes[assignment?.mode] ? assignment.mode : (assignment && !assignment.profile ? 'disabled' : 'full');
             byId('ip').readOnly = Boolean(assignment);
             byId('interface').readOnly = Boolean(assignment);
             byId('mac').readOnly = Boolean(assignment);
@@ -611,12 +707,12 @@
             if (selected && !choices.some((choice) => choice.value === selected)) {
                 choices.push({value: selected, label: 'Unavailable VPN profile'});
             }
-            options(byId('profile'), choices, 'Normal internet', selected);
+            options(byId('profile'), choices, 'Choose an exit', selected);
             byId('failure').value = assignment?.failure || 'block';
             byId('switch-now').checked = false;
             updateFailure();
             byId('backup').value = assignment?.backup || '';
-            byId('identity').textContent = device.stable === true
+            byId('identity').textContent = assignment?.kind === 'tailnet' ? '' : device.stable === true
                 ? 'A matching reservation was observed for this address.'
                 : 'Address stability is unverified. A VPN assignment requires a fixed IPv4 reservation on a managed interface.';
             byId('remove-assignment').hidden = !assignment;
@@ -637,7 +733,7 @@
                 const reconnectWarning = result.reconnected?.incomplete
                     ? ' Some existing sessions could not be reset.' : '';
                 const warning = result.warning ? ' ' + result.warning : reconnectWarning;
-                notice(message + (result.killSwitchReset ? ' Previous connections from this IPv4 address were reset.' : '')
+                notice(message + (result.killSwitchReset ? ' Previous connections from the assigned addresses were reset.' : '')
                     + warning, warning ? 'warning' : 'success');
                 if (onSuccess) {
                     onSuccess(result);
@@ -875,6 +971,9 @@
             state.editing = null;
             byId('add-device').focus();
         });
+        byId('mode').addEventListener('change', updateFailure);
+        byId('device-kind').addEventListener('change', updateFailure);
+        byId('ipv6').addEventListener('input', updateFailure);
         byId('profile').addEventListener('change', updateFailure);
         byId('failure').addEventListener('change', updateFailure);
         byId('interface').addEventListener('change', updateFailure);
@@ -884,6 +983,9 @@
                 ip: byId('ip').value.trim(),
                 interface: byId('interface').value.trim(),
                 mac: byId('mac').value.trim(),
+                ipv6: byId('ipv6').value.trim(),
+                kind: byId('device-kind').value,
+                mode: byId('mode').value,
                 label: byId('device-label').value.trim(),
                 profile: byId('profile').value,
                 backup: byId('backup').required ? byId('backup').value : '',
@@ -1039,6 +1141,38 @@
         });
         manualFields();
 
+        byId('core-manager').addEventListener('toggle', () => {
+            if (byId('core-manager').open && state.canManageCores) {
+                void refreshCores();
+            }
+        });
+        byId('core-check').addEventListener('click', (event) => {
+            void mutate(event.currentTarget, () => coreApi('check', {}), 'Approved core catalog refreshed.', renderCores);
+        });
+        byId('core-upload').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const select = byId('core-upload-id');
+            const file = byId('core-archive').files[0];
+            if (!file || !select.dataset.digest) {
+                return;
+            }
+            if (file.size > 100 * 1024 * 1024) {
+                notice('Choose an approved archive smaller than 100 MiB.', 'danger');
+                return;
+            }
+            if (!window.confirm('Verify and install this archive? Its proxy exits will briefly restart.')) {
+                return;
+            }
+            const data = new FormData();
+            data.append('core', select.value);
+            data.append('digest', select.dataset.digest);
+            data.append('upload', '1');
+            data.append('archive', file);
+            void mutate(event.submitter, () => coreApi('install', data), 'Core archive installed.', (result) => {
+                event.target.reset();
+                renderCores(result);
+            });
+        });
         byId('proxy-search').addEventListener('input', renderProxyCatalog);
         byId('proxy-import').addEventListener('submit', (event) => {
             event.preventDefault();
@@ -1060,6 +1194,7 @@
                 void refreshProxyCatalog();
             });
         });
+        byId('dashboard-bind').addEventListener('change', renderDashboardAddress);
         byId('settings-form').addEventListener('input', () => {
             state.settingsDirty = true;
         });
@@ -1071,6 +1206,9 @@
                 interfaces: list(byId('managed').value),
                 strictInterfaces: list(byId('strict').value),
                 smartInterfaces: list(byId('smart-interfaces').value),
+                smartAssignedOnly: byId('smart-assigned').checked,
+                tailscaleInterfaces: list(byId('tailnet-interfaces').value),
+                dashboardBind: byId('dashboard-bind').value,
                 localNetworks: list(byId('local').value)
             };
             const knownStrict = list(state.settings?.strictInterfaces);
@@ -1092,6 +1230,24 @@
             byId('manual-parameters').value = '';
         });
 
+        const appearance = byId('appearance');
+        try {
+            const saved = localStorage.getItem('blankvpn-appearance');
+            if (['system', 'day', 'night'].includes(saved)) {
+                appearance.value = saved;
+            }
+        } catch {
+            appearance.value = 'system';
+        }
+        root.dataset.appearance = appearance.value;
+        appearance.addEventListener('change', () => {
+            root.dataset.appearance = appearance.value;
+            try {
+                localStorage.setItem('blankvpn-appearance', appearance.value);
+            } catch {
+                // The current theme still applies when browser storage is unavailable.
+            }
+        });
         void refreshDashboard();
         window.setInterval(() => {
             if (!document.hidden && !state.busy && byId('assignment').hidden && !root.contains(document.activeElement)) {

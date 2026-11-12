@@ -8,15 +8,26 @@ final class Resolver
 {
     public const LOCAL_PORT = 46650;
 
+    private static function vpnPorts(): array
+    {
+        return [...range(self::LOCAL_PORT + 1, self::LOCAL_PORT + 5), ...range(46680, 46706)];
+    }
+
+    public static function allowedPort(int $port): bool
+    {
+        return $port === self::LOCAL_PORT || $port === SmartRouting::PORT || in_array($port, self::vpnPorts(), true) ||
+            ($port >= ProxyRuntime::FIRST_DNS_PORT && $port < ProxyRuntime::FIRST_DNS_PORT + ProxyRuntime::SLOTS);
+    }
+
     public static function freePort(array $profiles): int
     {
         $ports = array_column($profiles, 'dnsPort');
-        for ($port = self::LOCAL_PORT + 1; $port <= self::LOCAL_PORT + 5; $port++) {
+        foreach (self::vpnPorts() as $port) {
             if (!in_array($port, $ports, true)) {
                 return $port;
             }
         }
-        throw new \DomainException('All five Blank VPN profile slots are in use.');
+        throw new \DomainException('All 32 Blank VPN profile slots are in use.');
     }
 
     public static function reconcile(BlankVpn $model): void
@@ -27,9 +38,9 @@ final class Resolver
         $wanted = [];
         if ($settings['enabled']) {
             $hostname = $settings['hostname'];
-            $host = (string)Config::getInstance()->object()->interfaces->lan->ipaddr;
-            if (!self::validHostname($hostname) || !filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-                throw new \DomainException('Set a local dashboard hostname and a static IPv4 address on LAN.');
+            $host = self::dashboardAddresses()[$settings['dashboardBind']];
+            if (!self::validHostname($hostname)) {
+                throw new \DomainException('Set a valid local dashboard hostname.');
             }
             $profiles = Policy::routes($model);
             $wanted[self::LOCAL_PORT] = self::configuration(self::LOCAL_PORT, $hostname, $host, []);
@@ -41,7 +52,7 @@ final class Resolver
                     continue;
                 }
                 $source = explode('/', $profile['address'] ?? '')[0];
-                if ($port <= self::LOCAL_PORT || $port > self::LOCAL_PORT + 5 ||
+                if (!in_array($port, self::vpnPorts(), true) ||
                     !filter_var($source, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
                     continue;
                 }
@@ -54,7 +65,8 @@ final class Resolver
             }
         }
 
-        for ($port = self::LOCAL_PORT; $port < ProxyRuntime::FIRST_DNS_PORT + ProxyRuntime::SLOTS; $port++) {
+        foreach ([self::LOCAL_PORT, SmartRouting::PORT, ...self::vpnPorts(),
+            ...range(ProxyRuntime::FIRST_DNS_PORT, ProxyRuntime::FIRST_DNS_PORT + ProxyRuntime::SLOTS - 1)] as $port) {
             $name = "dns-{$port}.conf";
             $config = Policy::STATE_DIR . '/' . $name;
             $pid = self::running($port);
@@ -87,9 +99,29 @@ final class Resolver
         }
     }
 
+    public static function dashboardAddresses(): array
+    {
+        $config = Config::getInstance()->object();
+        $lan = (string)$config->interfaces->lan->ipaddr;
+        $tailnet = '';
+        foreach (net_get_interfaces() ?: [] as $name => $interface) {
+            if (!preg_match('/^tailscale[0-9]+$/D', $name) || empty($interface['up'])) {
+                continue;
+            }
+            foreach ($interface['unicast'] ?? [] as $entry) {
+                $address = $entry['address'] ?? '';
+                if (is_string($address) && Policy::tailnetAddress($address)) {
+                    $tailnet = $address;
+                    break 2;
+                }
+            }
+        }
+        return ['lan' => filter_var($lan, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ?: '', 'tailnet' => $tailnet];
+    }
+
     public static function validHostname(string $host): bool
     {
-        return strlen($host) <= 120 && preg_match('/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+home\.arpa$/D', $host) === 1;
+        return $host === 'blankvpn.local' || (strlen($host) <= 120 && preg_match('/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+home\.arpa$/D', $host) === 1);
     }
 
     private static function checkNativeDns(string $hostname): void
@@ -128,8 +160,11 @@ final class Resolver
             'no-resolv', 'no-hosts', 'no-poll', 'dns-forward-max=64',
             $smart ? 'cache-size=0' : 'cache-size=256',
             'pid-file=' . Policy::STATE_DIR . "/dns-{$port}.pid",
-            'host-record=' . $hostname . ',' . $host
         ];
+        $rows[] = 'local=/' . $hostname . '/';
+        if ($host !== '') {
+            $rows[] = 'host-record=' . $hostname . ',' . $host;
+        }
         if ($smart) {
             // Relearn destinations on every upstream answer and bound ordinary client DNS caching.
             $rows[] = 'max-ttl=60';

@@ -19,6 +19,8 @@ jobs:
           for test in tests/*.php; do php "$test"; done
           node --check src/opnsense/www/js/blankvpn.js
           node --check tests/ui-fixture.js
+          python3 tests/ui_fixture.py --no-sandbox "$(command -v google-chrome)"
+          python3 tests/core-archive.py
       - name: Validate generated configurations with the upstream proxy cores
         run: sh tests/check-proxy-cores.sh
       - name: Build and verify package archive
@@ -50,18 +52,25 @@ jobs:
         run: |
           python3 build/package.py --cross --runtime-dir "$RUNNER_TEMP/blankvpn-runtime"
           cd dist
-          sha256sum -c os-blank-vpn-0.4.0.pkg.sha256
+          sha256sum -c os-blank-vpn-0.5.0.pkg.sha256
       - name: Publish the GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          tag=v0.4.0
+          tag=v0.5.0
           if gh release view "$tag" >/dev/null 2>&1; then
             test "$(gh release view "$tag" --json isDraft,targetCommitish --jq '.isDraft and (.targetCommitish == env.GITHUB_SHA)')" = true
           else
             gh release create "$tag" --draft --prerelease --target "$GITHUB_SHA" \
-              --title "Blank VPN 0.4.0 for OPNsense CE 26.7 amd64" --notes-file RELEASE_NOTES.md
+              --title "Blank VPN 0.5.0 for OPNsense CE 26.7 amd64" --notes-file RELEASE_NOTES.md
           fi
-          gh release upload "$tag" dist/os-blank-vpn-0.4.0.pkg dist/os-blank-vpn-0.4.0.pkg.sha256 --clobber
+          gh release upload "$tag" dist/os-blank-vpn-0.5.0.pkg dist/os-blank-vpn-0.5.0.pkg.sha256 --clobber
           gh release edit "$tag" --draft=false
+
+      - name: Publish the independent sing-box archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sh build/publish-sing-box.sh 1.14.4 "$RUNNER_TEMP/blankvpn-runtime/bin/sing-box" \
+            c005f35300ce76427dc285481ec5695f5b179cd2

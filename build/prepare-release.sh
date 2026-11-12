@@ -36,18 +36,12 @@ fetch_source()
 fetch_source mihomo MetaCubeX/mihomo 0455d0d28c4526937380505153e65a843d8612e8
 fetch_source tun2socks xjasonlyu/tun2socks 8dda19e8e4613e014f0b12f3e624fdff5e5f23b3
 fetch_source xray XTLS/Xray-core 676eaf66f8f05d4d558ee7a74b4736623d3feeb9
-fetch_source sing-box SagerNet/sing-box c005f35300ce76427dc285481ec5695f5b179cd2
 fetch_source pyyaml yaml/pyyaml 49790e73684bebad1df05ef8d828fa12f685bffb
 cp "$sources/pyyaml/lib/yaml/"*.py "$stage/yaml/"
 
-(
-    cd "$sources/sing-box"
-    export GOOS=freebsd GOARCH=amd64 GOAMD64=v1 CGO_ENABLED=0 GOTOOLCHAIN=auto
-    # Use the FreeBSD port's feature tags for the adapters used by Blank VPN.
-    go build -mod=readonly -trimpath -tags with_quic,with_wireguard,with_utls,with_gvisor,with_grpc \
-        -ldflags '-s -w -X github.com/sagernet/sing-box/constant.Version=1.14.4' \
-        -o "$stage/bin/sing-box" ./cmd/sing-box
-)
+sh build/prepare-sing-box.sh 1.14.4 c005f35300ce76427dc285481ec5695f5b179cd2 "$sources/sing-box"
+cp "$sources/sing-box/sing-box" "$stage/bin/sing-box"
+cp "$sources/sing-box/LICENSE" "$stage/licenses/sing-box.txt"
 
 for binary in "$stage/bin/"*; do
     go version -m "$binary" | grep -q 'GOOS=freebsd'

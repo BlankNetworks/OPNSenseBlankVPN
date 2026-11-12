@@ -15,4 +15,10 @@
             <pattern>api/blankvpn/service/*</pattern>
         </patterns>
     </page-blankvpn-manage>
+    <page-blankvpn-cores>
+        <name>VPN: Blank VPN: Manage approved proxy cores</name>
+        <patterns>
+            <pattern>api/blankvpn/core/*</pattern>
+        </patterns>
+    </page-blankvpn-cores>
 </acl>

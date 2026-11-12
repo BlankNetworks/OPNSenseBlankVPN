@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "os-blank-vpn"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 SERIES = "26.7"
 ABI = "FreeBSD:15:amd64"
 LEGACY_ABI = "freebsd:15:x86:64"

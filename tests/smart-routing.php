@@ -173,6 +173,24 @@ namespace {
         'A native exit needs an active source address.');
     checkRouting(NativeVpn::sourceAddress('ovpnc1', ['ovpnc1' => $address, 'wg3' => $address]) === '',
         'Reject a native exit when its source IP is also bound to a different interface.');
+    checkRouting(\OPNsense\BlankVpn\Resolver::freePort(array_map(
+        static fn (int $port): array => ['dnsPort' => $port], range(46651, 46655)
+    )) === 46680, 'Additional native profiles use ports outside the service and proxy ranges.');
+    $blocked = new Plugin();
+    $compileDevice->invoke(null, $blocked, $settings, $interfaces, ['device-a' => array_replace($assignment,
+        ['mode' => 'blocked', 'profile' => '', 'ipv6' => '2001:db8::23'])], $profiles, [], $diag);
+    checkRouting(!isset($blocked->rules[Policy::marker('device', 'device-a')]) &&
+        $blocked->rules[Policy::marker('kill', 'device-a')]['from'] === '192.0.2.23' &&
+        $blocked->rules[Policy::marker('kill_v6', 'device-a')]['from'] === '2001:db8::23',
+        'Blocked mode protects both assigned addresses without an exit.');
+    $scoped = new Plugin();
+    $compileSmart->invoke(null, $scoped, $settings + ['smartAssignedOnly' => true], $interfaces, $services, $profiles, []);
+    checkRouting(!isset($scoped->rules['match']) && $scoped->dns === [],
+        'Per-device Multi-Path does not classify or redirect unassigned devices.');
+    checkRouting(Policy::tailnetAddress('100.101.102.103') && Policy::tailnetAddress('fd7a:115c:a1e0::23', true) &&
+        !Policy::tailnetAddress('192.0.2.23'), 'Validate both Tailscale peer address families.');
+    checkRouting(\OPNsense\BlankVpn\Resolver::validHostname('blankvpn.local') &&
+        !\OPNsense\BlankVpn\Resolver::validHostname('other.local'), 'Permit the scoped mDNS name.');
     $diag->reserved = false;
     $moved = new Plugin();
     $compileDevice->invoke(null, $moved, $settings, $interfaces, ['device-a' => $assignment], $profiles, [], $diag);

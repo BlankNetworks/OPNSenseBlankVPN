@@ -11,7 +11,8 @@ use RuntimeException;
 class Mullvad
 {
     private const API = 'https://api.mullvad.net';
-    private const TOKEN = '/auth/v1/webtoken';
+    private const TOKEN = '/auth/v1/token';
+    private const DEVICE_LIMIT = 5;
     private const ACCOUNT = '/accounts/v1/accounts/me';
     private const DEVICES = '/accounts/v1/devices';
     private const RELAYS = '/www/relays/all';
@@ -73,12 +74,15 @@ class Mullvad
 
     public function authenticate(string $account): array
     {
-        $token = $this->token($account);
-        $details = $this->accountDetails($token);
+        $auth = $this->authorization($account);
+        $details = $this->accountDetails($auth['token']);
         unset($details['id']);
-        $details['devices'] = $this->devices($token);
-        $details['availableSlots'] = max(0, $details['maxDevices'] - count($details['devices']));
-        return ['token' => $token, 'account' => $details];
+        $devices = $this->devices($auth['token']);
+        $details['devices'] = array_map(static fn (array $device): array =>
+            array_intersect_key($device, array_flip(['name', 'created'])), $devices);
+        $details['availableSlots'] = max(0, $details['maxDevices'] - count($devices));
+        $details['canAddDevices'] = $details['canAddDevices'] && $details['availableSlots'] > 0 && !$details['expired'];
+        return $auth + ['account' => $details];
     }
 
     public function verifyBinding(string $account, string $binding): void
@@ -289,6 +293,11 @@ class Mullvad
 
     private function token(string $account): string
     {
+        return $this->authorization($account)['token'];
+    }
+
+    private function authorization(string $account): array
+    {
         $account = preg_replace('/[ \t\r\n-]+/', '', $account);
         if (!preg_match('/^[0-9]{16}$/D', $account)) {
             throw new InvalidArgumentException('Enter the 16-digit Mullvad account number.');
@@ -298,7 +307,11 @@ class Mullvad
         if (!is_string($token) || !preg_match('/^[A-Za-z0-9._~+\/=\-]{10,2048}$/D', $token)) {
             throw new RuntimeException('Mullvad returned an unexpected authorization response.');
         }
-        return $token;
+        $expiry = is_string($response['expiry'] ?? null) ? strtotime($response['expiry']) : false;
+        if ($expiry === false || $expiry <= time()) {
+            throw new RuntimeException('Mullvad returned an expired or invalid authorization token.');
+        }
+        return ['token' => $token, 'expires' => $expiry];
     }
 
     private function accountDetails(string $token): array
@@ -306,10 +319,10 @@ class Mullvad
         $data = $this->request(self::ACCOUNT, $token);
         $expiresAt = $data['expiry'] ?? null;
         $expires = is_string($expiresAt) ? strtotime($expiresAt) : false;
-        $maxDevices = $data['max_devices'] ?? null;
-        $canAdd = $data['can_add_devices'] ?? null;
+        $maxDevices = $data['max_devices'] ?? self::DEVICE_LIMIT;
+        $canAdd = $data['can_add_devices'] ?? true;
         $id = $data['id'] ?? '';
-        if (!is_string($id) || !$this->uuid($id) || $expires === false || !is_int($maxDevices) || $maxDevices < 1 || !is_bool($canAdd)) {
+        if (!is_string($id) || !preg_match('/^[a-zA-Z0-9_-]{1,128}$/D', $id) || $expires === false || !is_int($maxDevices) || $maxDevices < 1 || !is_bool($canAdd)) {
             throw new RuntimeException('Mullvad returned an unexpected account status.');
         }
         return [

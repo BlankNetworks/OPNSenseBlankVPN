@@ -29,6 +29,9 @@ class ServiceController extends ApiControllerBase
         return $this->respond(function () {
             $model = new BlankVpn();
             $settings = Policy::settings($model);
+            $settings['dashboardAddresses'] = Resolver::dashboardAddresses();
+            $port = (string)Config::getInstance()->object()->system->webgui->port;
+            $settings['dashboardPort'] = ctype_digit($port) && (int)$port <= 65535 && (int)$port > 0 ? (int)$port : 443;
             $settings['availableInterfaces'] = array_values(Policy::availableInterfaces());
             $profiles = Policy::profiles($model);
             $proxyRoutes = ProxyRuntime::routes($model);
@@ -83,8 +86,9 @@ class ServiceController extends ApiControllerBase
                 $rule = $loaded[Policy::marker('device', $id)] ?? null;
                 $guard = ($loaded[Policy::marker('kill', $id)]['action'] ?? '') === 'block';
                 $applied = $rule['gateway'] ?? ($guard ? 'IPv4 internet blocked' : 'Normal network policy');
+                $row['mode'] = Policy::mode($row);
                 $assignments[$id] = $row + [
-                    'device' => $row['interface'] . '/' . $row['mac'],
+                    'device' => $row['interface'] . '/' . (($row['kind'] ?? '') === 'tailnet' ? $row['ip'] : $row['mac']),
                     'verified' => false,
                     'killSwitchActive' => $guard && $row['failure'] === 'block',
                     'appliedRoute' => $applied
@@ -112,6 +116,8 @@ class ServiceController extends ApiControllerBase
             return $discovery + [
                 'profiles' => array_values($profiles),
                 'proxyCores' => ProxyRuntime::capabilities(),
+                'canManageCores' => self::nativeWritesAvailable() && is_string($username) &&
+                    (new ACL())->isPageAccessible($username, '/api/blankvpn/core/status'),
                 'mullvadSignedIn' => $this->mullvadToken() !== null,
                 'nativeGateways' => array_values(NativeVpn::gateways()),
                 'assignments' => array_values($assignments),
@@ -143,7 +149,8 @@ class ServiceController extends ApiControllerBase
             $login = (new Mullvad())->authenticate($this->input('account', 64));
             if (!$this->isExternalClient()) {
                 $this->session->set(self::MULLVAD_SESSION, [
-                    'token' => $login['token'], 'expires' => time() + self::MULLVAD_SESSION_SECONDS,
+                    'token' => $login['token'],
+                    'expires' => min($login['expires'], time() + self::MULLVAD_SESSION_SECONDS),
                     'user' => $this->getUserName()
                 ]);
             }
@@ -371,11 +378,21 @@ class ServiceController extends ApiControllerBase
             $interfaces = $this->listInput('interfaces');
             $strict = $this->listInput('strictInterfaces');
             $smart = $this->listInput('smartInterfaces');
+            $tailscale = $this->listInput('tailscaleInterfaces');
+            $assignedOnly = $this->flag('smartAssignedOnly');
             $local = $this->listInput('localNetworks');
-            $hostname = strtolower(trim($this->input('hostname', 120, 'opnsense.home.arpa')));
+            $hostname = strtolower(trim($this->input('hostname', 120, 'blankvpn.home.arpa')));
+            $bind = $this->input('dashboardBind', 12, 'lan');
+            if (!in_array($bind, ['lan', 'tailnet'], true)) {
+                throw new \DomainException('Choose the LAN or Tailscale IPv4 address for the dashboard.');
+            }
             if (array_diff($interfaces, array_keys(Policy::availableInterfaces())) ||
                 array_diff($strict, $interfaces) || array_diff($smart, $interfaces)) {
                 throw new \DomainException('Choose assigned LAN or VLAN interfaces for Smart Routing and strict management.');
+            }
+            if (array_diff($tailscale, $interfaces) || array_intersect($tailscale, $strict) ||
+                array_filter($tailscale, static fn (string $interface): bool => !Policy::tailnetInterface($interface))) {
+                throw new \DomainException('Choose a dedicated managed OPT or VLAN transit interface for source-preserving Tailscale traffic.');
             }
             if (array_intersect($strict, $smart)) {
                 throw new \DomainException('Use Smart Routing on a managed interface with normal internet as its default.');
@@ -390,7 +407,7 @@ class ServiceController extends ApiControllerBase
                 }
             }
             if (!Resolver::validHostname($hostname)) {
-                throw new \DomainException('Enter a valid dashboard hostname under home.arpa.');
+                throw new \DomainException('Enter blankvpn.local or a valid dashboard hostname under home.arpa.');
             }
             $networks = [];
             foreach ($local as $network) {
@@ -400,23 +417,37 @@ class ServiceController extends ApiControllerBase
                 }
                 $networks[] = $canonical;
             }
-            Operations::change(function (BlankVpn $model) use ($enabled, $interfaces, $strict, $smart, $networks, $hostname) {
+            Operations::change(function (BlankVpn $model) use ($enabled, $interfaces, $strict, $smart, $tailscale, $assignedOnly, $networks, $hostname, $bind) {
                 $before = Policy::settings($model);
                 $reset = [];
                 foreach (Policy::assignments($model) as $row) {
                     if (!in_array($row['interface'], $interfaces, true)) {
                         throw new \DomainException('Remove saved assignments before removing their managed interface.');
                     }
-                    if ($enabled && !$before['enabled'] && $row['profile'] !== '' && $row['failure'] === 'block') {
+                    $mode = Policy::mode($row);
+                    if (($row['kind'] ?? '') === 'tailnet' && !in_array($row['interface'], $tailscale, true)) {
+                        throw new \DomainException('Remove the saved Tailscale assignments before removing their transit interface.');
+                    }
+                    if ($mode === 'multi' && !in_array($row['interface'], $smart, true)) {
+                        throw new \DomainException('Move Multi-Path assignments before removing their service routing interface.');
+                    }
+                    if ($enabled && !$before['enabled'] && ($mode === 'blocked' ||
+                        ($mode === 'full' && $row['failure'] !== 'wan'))) {
                         $reset[] = $row['ip'];
+                        if (!empty($row['ipv6'])) {
+                            $reset[] = $row['ipv6'];
+                        }
                     }
                 }
                 $model->settings->enabled = $enabled ? '1' : '0';
                 $model->settings->interfaces = implode(',', $interfaces);
                 $model->settings->strictInterfaces = implode(',', $strict);
                 $model->settings->smartInterfaces = implode(',', $smart);
+                $model->settings->smartAssignedOnly = $assignedOnly ? '1' : '0';
+                $model->settings->tailscaleInterfaces = implode(',', $tailscale);
                 $model->settings->localNetworks = implode(',', array_unique($networks));
                 $model->settings->hostname = $hostname;
+                $model->settings->dashboardBind = $bind;
                 $newStrict = $enabled ? array_values(array_diff($strict, $before['enabled'] ? $before['strictInterfaces'] : [])) : [];
                 return [
                     'reload' => $before['enabled'] || $enabled,
@@ -434,25 +465,43 @@ class ServiceController extends ApiControllerBase
         return $this->respond(fn () => Operations::exclusive(function () {
             $ip = $this->input('ip', 45);
             $mac = strtolower($this->input('mac', 17));
+            $kind = $this->input('kind', 12, 'lan');
+            $ipv6 = Policy::ipv6Address(trim($this->input('ipv6', 45)));
             $interface = $this->input('interface', 20);
             $label = trim($this->input('label', 120));
             $profile = $this->input('profile', 64);
             $backup = $this->input('backup', 64);
+            $mode = $this->input('mode', 12, $profile === '' ? 'default' : 'full');
+            if (!in_array($mode, ['full', 'multi', 'disabled', 'blocked', 'default'], true) ||
+                !in_array($kind, ['lan', 'tailnet'], true) || ($mode === 'full' && $profile === '')) {
+                throw new \DomainException('Choose a valid routing mode and an exit for Full Tunneling.');
+            }
+            $profile = $mode === 'full' ? $profile : '';
             $failure = $profile === '' ? 'block' : $this->input('failure', 12, 'block');
             if (
                 !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ||
-                !Policy::validMac($mac) || !Policy::interfaceId($interface) || !Policy::failure($failure) ||
+                ($kind === 'lan' && !Policy::validMac($mac)) || !Policy::interfaceId($interface) || !Policy::failure($failure) ||
                 !preg_match('/^[^\p{C}<>]{0,100}$/uD', $label)
             ) {
                 throw new \DomainException('Choose a valid reserved IPv4 device, interface and routing policy.');
             }
-            if (!(new Diagnostics())->hasReservation($interface, $ip, $mac)) {
+            if ($kind === 'tailnet' && (!Policy::tailnetAddress($ip) || !Policy::tailnetAddress($ipv6, true))) {
+                throw new \DomainException('Enter both the Tailscale IPv4 and IPv6 addresses for this peer.');
+            }
+            if ($kind === 'lan' && !(new Diagnostics())->hasReservation($interface, $ip, $mac)) {
                 throw new \DomainException('Create a unique IPv4 DHCP reservation for this MAC and interface first.');
             }
-            $result = Operations::change(function (BlankVpn $model) use ($ip, $mac, $interface, $label, $profile, $backup, $failure) {
+            $result = Operations::change(function (BlankVpn $model) use ($ip, $ipv6, $mac, $kind, $mode, $interface, $label, $profile, $backup, $failure) {
                 $settings = Policy::settings($model);
                 if (!in_array($interface, $settings['interfaces'], true)) {
                     throw new \DomainException('Add this device’s LAN or VLAN under Routing settings before saving the policy.');
+                }
+                if ($kind === 'tailnet' && (!in_array($interface, $settings['tailscaleInterfaces'], true) ||
+                    !Policy::tailnetInterface($interface))) {
+                    throw new \DomainException('Select a configured Tailscale transit interface that preserves peer addresses.');
+                }
+                if ($mode === 'multi' && !in_array($interface, $settings['smartInterfaces'], true)) {
+                    throw new \DomainException('Enable Multi-Path service routing on this interface under Settings first.');
                 }
                 $profiles = Policy::routes($model);
                 if ($profile !== '' && (!isset($profiles[$profile]) || !self::routeConfigured($profiles[$profile]))) {
@@ -467,28 +516,36 @@ class ServiceController extends ApiControllerBase
                     if ($row['interface'] !== $interface) {
                         continue;
                     }
-                    if ($row['mac'] === $mac) {
+                    $tailnet = ($row['kind'] ?? '') === 'tailnet';
+                    if ($kind === 'tailnet' && $tailnet && $row['ip'] === $ip ||
+                        $kind === 'lan' && !$tailnet && $row['mac'] === $mac) {
                         $node = $model->assignments->assignment->getChild($id);
                         $prior = $row;
-                    } elseif ($row['ip'] === $ip) {
-                        throw new \DomainException('This IPv4 address already has an assignment. Remove that assignment first.');
+                    } elseif ($row['ip'] === $ip || ($ipv6 !== '' && ($row['ipv6'] ?? '') === $ipv6)) {
+                        throw new \DomainException('This address already has an assignment on the selected interface.');
                     }
                 }
                 if ($node === null) {
                     $node = $model->assignments->assignment->add();
                 }
                 $node->ip = $ip;
-                $node->mac = $mac;
+                $node->mac = $kind === 'lan' ? $mac : '';
+                $node->ipv6 = $ipv6;
+                $node->kind = $kind;
+                $node->mode = $mode;
                 $node->interface = $interface;
                 $node->label = $label;
                 $node->profile = $profile;
                 $node->backup = $failure === 'backup' ? $backup : '';
                 $node->failure = $failure;
-                $newKillSwitch = $settings['enabled'] && $profile !== '' && $failure === 'block' &&
-                    (($prior['ip'] ?? '') !== $ip || ($prior['profile'] ?? '') !== $profile || ($prior['failure'] ?? '') !== 'block');
+                $changed = ($prior['ip'] ?? '') !== $ip || ($prior['ipv6'] ?? '') !== $ipv6 ||
+                    Policy::mode($prior) !== $mode || ($prior['profile'] ?? '') !== $profile ||
+                    ($prior['backup'] ?? '') !== ($failure === 'backup' ? $backup : '') ||
+                    ($prior['failure'] ?? '') !== $failure;
                 return [
                     'settings' => $settings, 'reload' => $settings['enabled'],
-                    'killSwitchReset' => $newKillSwitch ? [$ip] : []
+                    'killSwitchReset' => $settings['enabled'] && $changed ?
+                        array_values(array_unique(array_filter([$ip, $ipv6, $prior['ip'] ?? '', $prior['ipv6'] ?? '']))) : []
                 ];
             });
             $reset = $result['killSwitchReset'] !== [];

@@ -2,32 +2,40 @@
 <script src="{{ cache_safe('/ui/js/blankvpn.js') }}" defer></script>
 
 <div id="blankvpn" class="blankvpn">
-    <header class="bv-heading">
+    <header class="bv-heading bv-hero">
         <div>
             <h1>Blank VPN</h1>
             <p class="text-muted">Route selected services or IPv4 devices through a VPN or proxy exit.</p>
         </div>
-        <button id="bv-refresh" type="button" class="btn btn-default">Refresh devices</button>
+        <div class="bv-actions bv-utilities">
+            <label for="bv-appearance" class="sr-only">Appearance</label>
+            <select id="bv-appearance" class="form-control" aria-label="Appearance">
+                <option value="system">System theme</option>
+                <option value="day">Day</option>
+                <option value="night">Night</option>
+            </select>
+            <button id="bv-refresh" type="button" class="btn btn-default">Refresh devices</button>
+        </div>
     </header>
 
     <div id="bv-message" class="alert" role="status" aria-live="polite" hidden></div>
     <ul id="bv-warnings" class="alert alert-warning bv-warnings" hidden></ul>
 
-    <nav class="bv-actions" aria-label="Blank VPN sections">
+    <nav class="bv-actions bv-navigation" aria-label="Blank VPN sections">
         <button type="button" class="btn btn-primary" data-bv-section="devices" aria-pressed="true">Devices</button>
         <button type="button" class="btn btn-default" data-bv-section="vpns" aria-pressed="false">VPNs</button>
         <button type="button" class="btn btn-default" data-bv-section="proxies" aria-pressed="false" data-manage-only>Proxies</button>
-        <button type="button" class="btn btn-default" data-bv-section="smart" aria-pressed="false">Smart Routing</button>
+        <button type="button" class="btn btn-default" data-bv-section="smart" aria-pressed="false">Multi-Path</button>
         <button type="button" class="btn btn-default" data-bv-section="settings" aria-pressed="false" data-manage-only>Settings</button>
     </nav>
 
     <section class="bv-panel" data-bv-panel="smart" aria-labelledby="bv-smart-title" hidden>
         <div class="bv-heading">
             <div>
-                <h2 id="bv-smart-title">Smart Routing</h2>
+                <h2 id="bv-smart-title">Multi-Path Tunneling</h2>
                 <p id="bv-smart-status" class="text-muted"></p>
             </div>
-            <button id="bv-use-lan" data-manage-only type="button" class="btn btn-default">Set up Smart Routing on LAN</button>
+            <button id="bv-use-lan" data-manage-only type="button" class="btn btn-default">Set up Multi-Path on LAN</button>
         </div>
         <div class="bv-scroll">
             <table class="table bv-table bv-services">
@@ -98,13 +106,28 @@
         <form id="bv-assign-form">
             <div class="bv-fields">
                 <label>Device label <input id="bv-device-label" type="text" class="form-control" maxlength="80"></label>
-                <label>Local IP address <input id="bv-ip" type="text" class="form-control" autocomplete="off" spellcheck="false" required></label>
+                <label>Address source
+                    <select id="bv-device-kind" class="form-control">
+                        <option value="lan">LAN DHCP reservation</option>
+                        <option value="tailnet">Tailscale peer on a routed link</option>
+                    </select>
+                </label>
+                <label>IPv4 address <input id="bv-ip" type="text" class="form-control" autocomplete="off" spellcheck="false" required></label>
                 <label>Interface
                     <input id="bv-interface" type="text" class="form-control" list="bv-interface-list" autocomplete="off" required>
                     <datalist id="bv-interface-list"></datalist>
                 </label>
-                <label>MAC address <input id="bv-mac" type="text" class="form-control" autocomplete="off" spellcheck="false" required></label>
-                <label>Internet route <select id="bv-profile" class="form-control"></select></label>
+                <label id="bv-mac-field">MAC address <input id="bv-mac" type="text" class="form-control" autocomplete="off" spellcheck="false" required></label>
+                <label>IPv6 address <input id="bv-ipv6" type="text" class="form-control" autocomplete="off" spellcheck="false"></label>
+                <label>Routing mode
+                    <select id="bv-mode" class="form-control">
+                        <option value="full">Full Tunneling</option>
+                        <option value="multi">Multi-Path Tunneling</option>
+                        <option value="disabled">Disabled (No VPN)</option>
+                        <option value="blocked">Blocked (No Internet)</option>
+                    </select>
+                </label>
+                <label id="bv-profile-field">Exit <select id="bv-profile" class="form-control"></select></label>
                 <label id="bv-failure-field">If the exit fails
                     <select id="bv-failure" class="form-control">
                         <option value="block">Block IPv4 internet (kill switch)</option>
@@ -200,7 +223,7 @@
                         <label>City <select id="bv-city" class="form-control"><option value="">All cities</option></select></label>
                         <label>Exact server <select id="bv-relay" class="form-control" required><option value="">Select a server</option></select></label>
                     </div>
-                    <p class="text-muted">Adding a new exit registers a WireGuard device on this account.</p>
+                    <p class="text-muted">Adding a new exit generates a WireGuard key on this router and uses one Mullvad device slot. Multiple LAN devices can share the same exit.</p>
                     <label id="bv-retarget-row" hidden>Reuse an unassigned Mullvad profile
                         <select id="bv-retarget" class="form-control"><option value="">Use a new profile</option></select>
                     </label>
@@ -215,7 +238,7 @@
                     <label>WireGuard configuration
                         <textarea id="bv-import-config" class="form-control bv-config-text" rows="9" maxlength="16384" autocomplete="off" spellcheck="false" required></textarea>
                     </label>
-                    <p class="text-muted">Paste a WireGuard configuration from a provider such as Proton VPN or Surfshark. The configuration contains a private key.</p>
+                    <p class="text-muted">Paste a WireGuard configuration from your provider. For manual Mullvad setup, download one from the <a href="https://mullvad.net/en/account/wireguard-config" target="_blank" rel="noopener noreferrer">Mullvad WireGuard generator</a>.</p>
                     <button type="submit" class="btn btn-primary">Import exit</button>
                 </form>
             </section>
@@ -237,6 +260,27 @@
     <details class="bv-panel" id="bv-proxies" data-bv-panel="proxies" data-manage-only hidden>
         <summary>Proxy servers and subscriptions</summary>
         <p id="bv-proxy-cores" class="text-muted"></p>
+        <details id="bv-core-manager" class="bv-panel" hidden>
+            <summary>Core updates and storage</summary>
+            <div class="bv-heading">
+                <p id="bv-core-storage" class="text-muted" aria-live="polite"></p>
+                <button id="bv-core-check" type="button" class="btn btn-default">Check for updates</button>
+            </div>
+            <div class="bv-scroll">
+                <table class="table bv-table">
+                    <thead><tr><th scope="col">Core</th><th scope="col">Installed</th><th scope="col">Approved release</th><th scope="col">Actions</th></tr></thead>
+                    <tbody id="bv-core-list"></tbody>
+                </table>
+            </div>
+            <form id="bv-core-upload">
+                <div class="bv-fields">
+                    <label>Core <select id="bv-core-upload-id" class="form-control" required></select></label>
+                    <label>Approved archive <input id="bv-core-archive" class="form-control" type="file" accept=".gz,.zip,application/gzip,application/zip" required></label>
+                </div>
+                <button type="submit" class="btn btn-default">Verify and install archive</button>
+            </form>
+            <p class="text-muted">Installing or rolling back a core briefly interrupts exits that use it.</p>
+        </details>
         <div class="bv-grid">
             <form id="bv-proxy-import">
                 <label>Proxy links or configuration
@@ -313,23 +357,37 @@
             <label class="bv-check"><input type="checkbox" id="bv-enabled"> Enable Blank VPN routing</label>
             <div class="bv-fields">
                 <label>Dashboard hostname
-                    <input id="bv-hostname" type="text" class="form-control" placeholder="opnsense.home.arpa" autocomplete="off" spellcheck="false" maxlength="120">
+                    <input id="bv-hostname" type="text" class="form-control" placeholder="blankvpn.home.arpa" autocomplete="off" spellcheck="false" maxlength="120">
+                </label>
+                <label>Bind dashboard IP
+                    <select id="bv-dashboard-bind" class="form-control">
+                        <option value="lan">Router LAN IPv4</option>
+                        <option value="tailnet">Router Tailscale IPv4</option>
+                    </select>
                 </label>
                 <label>Managed interfaces
                     <input id="bv-managed" type="text" class="form-control" placeholder="lan, opt1" autocomplete="off">
                 </label>
-                <label>Smart Routing interfaces
+                <label>Multi-Path interfaces
                     <input id="bv-smart-interfaces" type="text" class="form-control" placeholder="lan" autocomplete="off">
                 </label>
                 <label>Strict VPN interfaces
                     <input id="bv-strict" type="text" class="form-control" placeholder="opt1" autocomplete="off">
                 </label>
+                <label>Tailscale transit interfaces
+                    <input id="bv-tailnet-interfaces" type="text" class="form-control" placeholder="opt2" autocomplete="off">
+                </label>
                 <label>Approved local networks
                     <input id="bv-local" type="text" class="form-control" placeholder="IPv4 or IPv6 CIDR ranges" autocomplete="off">
                 </label>
             </div>
-            <p class="text-muted">For clients using your regular resolver, add a local DNS record for the dashboard. Set the hostname in the OPNsense web GUI and use a trusted HTTPS certificate that covers it. To open the dashboard after login, set <code>ui/blankvpn/index</code> as Preferred landing page under System → Access → Users.</p>
-            <p id="bv-settings-note" class="text-muted">Use comma-separated interface IDs. Smart Routing keeps the normal route for unmatched traffic. Strict VPN interfaces block internet access for unassigned devices and should use a dedicated network.</p>
+            <label class="bv-check">
+                <input id="bv-smart-assigned" type="checkbox">
+                Apply Multi-Path only to devices assigned that mode
+            </label>
+            <p id="bv-bind-address" class="text-muted" aria-live="polite"></p>
+            <p class="text-muted">Add the dashboard name to the WebGUI alternate hostnames and use a trusted certificate. A LAN mDNS publisher can advertise blankvpn.local. Use the Tailscale address, MagicDNS, or split DNS for remote access.</p>
+            <p id="bv-settings-note" class="text-muted">Use comma-separated interface IDs. Tailscale transit interfaces must preserve the peer's original IP addresses. Strict VPN interfaces block internet access for unassigned devices.</p>
             <button type="submit" class="btn btn-primary">Save routing settings</button>
         </form>
     </details>
