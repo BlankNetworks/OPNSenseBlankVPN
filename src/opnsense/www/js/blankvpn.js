@@ -12,7 +12,6 @@
         const insecureWebGui = window.location.protocol === 'http:';
         const maxDomainBytes = 131072;
         const state = {
-            devices: [],
             profiles: [],
             assignments: [],
             services: [],
@@ -36,6 +35,10 @@
             settingsDirty: false,
             catalogLoaded: false,
             signingIn: false,
+            mullvadLoginSaved: false,
+            restoreAttempted: false,
+            testingRelay: false,
+            tailscaleDirty: false,
             loginRevision: 0,
             activeSmartInterfaces: []
         };
@@ -198,7 +201,10 @@
             if (section === 'proxies' && state.canManage) {
                 void refreshProxyCatalog();
             }
-            if (section !== 'devices') {
+            if (section === 'vpns') {
+                restoreSavedLogin();
+            }
+            if (section !== 'network') {
                 byId('assignment').hidden = true;
                 state.editing = null;
                 byId('connections').hidden = true;
@@ -211,94 +217,42 @@
             return profile?.name || profile?.relay || (id ? 'Unavailable VPN profile' : 'Normal internet');
         }
 
-        function deviceIp(device) {
-            return device.ip || device.reservationIpv4 || list(device.ipv4)[0] || list(device.ipv6)[0] || '';
-        }
-
-        function deviceAssignment(device) {
-            const ips = new Set([device.ip, ...list(device.ipv4Addresses || device.ipv4), ...list(device.ipv6)].filter(Boolean));
-            return state.assignments.find((assignment) =>
-                assignment.interface === device.interface && ips.has(assignment.ip)
-                && (!assignment.mac || !device.mac || assignment.mac.toLowerCase() === device.mac.toLowerCase())
-            );
-        }
-
         function networkName(id) {
             const entry = state.availableInterfaces.find((item) => item.id === id);
-            return entry?.name ? (entry.name === id ? id : entry.name + ' (' + id + ')') : shown(id);
+            if (!entry) {
+                return shown(id);
+            }
+            return entry.device && entry.name !== entry.device
+                ? [entry.device, entry.name].filter(Boolean).join(' · ') : (entry.device || entry.name || id);
         }
 
-        function renderDevices() {
+        function renderDeviceRules() {
             const body = byId('device-list');
             const wholeNetwork = state.settings?.coverage === 'network';
             byId('add-device').hidden = wholeNetwork;
-            const entries = state.devices.map((device) => ({device, assignment: deviceAssignment(device)}));
-            const matched = new Set(entries.map(({assignment}) => assignment?.id));
-            for (const assignment of state.assignments) {
-                if (!matched.has(assignment.id)) {
-                    entries.push({
-                        assignment,
-                        device: {ip: assignment.ip, mac: assignment.mac, ipv6: assignment.ipv6, interface: assignment.interface}
-                    });
-                }
-            }
-            if (!entries.length) {
-                empty(body, 'No device observations or saved assignments. Add a local IP address to begin.');
+            body.replaceChildren();
+            if (!state.assignments.length) {
+                empty(body, 'No saved device rules.');
                 return;
             }
-
-            body.replaceChildren();
-            for (const {device, assignment} of entries) {
+            for (const assignment of state.assignments) {
                 const row = body.insertRow();
-                const ip = assignment?.ip || deviceIp(device);
-                const name = assignment?.label || device.name || ip || 'Unnamed device';
-                const ipv4 = list(device.ipv4Addresses || device.ipv4);
-                const ipv6 = list(device.ipv6);
-                cell(row, name, '', assignment?.kind === 'tailnet' ? 'Tailscale peer' : device.mac);
-                cell(row, ipv4.join(', ') || ipv6.join(', ') || ip, 'Addresses', ipv4.length ? ipv6.join(', ') : '');
-                cell(row, device.interfaceName || networkName(device.interface), 'Network',
-                    device.stable === true ? 'Fixed IPv4 reservation' : '');
-                const seen = device.lastSeen ? 'Seen ' + date(device.lastSeen) : 'Last seen unknown';
-                const managed = wholeNetwork && list(state.settings?.interfaces).includes(device.interface)
-                    && !list(state.settings?.tailscaleInterfaces).includes(device.interface);
-                if (wholeNetwork) {
-                    cell(row, managed && state.settings?.enabled ? modes[state.settings.networkMode] : 'Off', 'Assignment',
-                        managed && state.settings?.enabled && state.settings.networkMode === 'full'
-                            ? profileName(state.settings.networkProfile) : '');
-                } else {
-                    cell(
-                        row,
-                        assignment ? (modes[assignment.mode] || (assignment.profile ? modes.full : 'Network default')) : 'Network default',
-                        'Assignment',
-                        assignment?.profile
-                            ? [profileName(assignment.profile),
-                                assignment.failure === 'backup' ? 'Backup ' + profileName(assignment.backup)
-                                    : assignment.failure === 'wan' ? 'Normal internet fallback'
-                                        : (assignment.killSwitchActive ? 'Kill switch installed' : 'Kill switch configured')].join(' · ')
-                            : ''
-                    );
-                }
-                const assignedProfile = state.profiles.find((profile) => profile.id === assignment?.profile);
-                const observed = !wholeNetwork && assignment?.profile
-                    ? shown(assignedProfile?.status, 'Tunnel status unknown')
-                    : seen;
-                const egress = !wholeNetwork && assignment?.profile
-                    ? (assignment.verified === true ? 'Egress verified'
-                        : 'Client egress unverified')
-                    : '';
-                const applied = wholeNetwork ? null : assignment?.appliedRoute;
-                const appliedText = typeof applied === 'string' && applied
-                    ? 'Rules report ' + (state.profiles.some((profile) => profile.id === applied) ? profileName(applied) : applied)
-                    : '';
-                cell(row, observed, 'Status', [appliedText, egress, egress ? seen : ''].filter(Boolean).join(' · '));
+                const name = assignment.label || assignment.ip;
+                cell(row, name, '', assignment.kind === 'tailnet' ? 'Tailscale device' : assignment.mac);
+                cell(row, assignment.ip, 'Addresses', assignment.ipv6);
+                cell(row, networkName(assignment.interface), 'Interface');
+                cell(row, modes[assignment.mode] || 'Normal internet', 'Rule',
+                    assignment.profile ? profileName(assignment.profile) : '');
+                const status = wholeNetwork ? 'Paused by whole-network routing'
+                    : !state.settings?.enabled ? 'Routing off'
+                        : assignment.appliedRoute || 'Rule saved';
+                cell(row, status, 'Status', !wholeNetwork && assignment.killSwitchActive ? 'Kill switch active' : '');
                 const actions = row.insertCell();
                 actions.setAttribute('role', 'cell');
-                if (state.canManage && !wholeNetwork && ip && device.interface) {
-                    actions.append(button('Assign', () => openAssignment(device, assignment), 'Assign ' + name));
+                if (state.canManage) {
+                    actions.append(button('Edit', () => openAssignment(assignment), 'Edit ' + name));
                 }
-                if (ip) {
-                    actions.append(button('Connections', () => openConnections(ip, name), 'Connections for ' + name));
-                }
+                actions.append(button('Connections', () => openConnections(assignment.ip, name), 'Connections for ' + name));
             }
         }
 
@@ -339,6 +293,7 @@
                         remove.title = 'Remove this exit from routing policies first.';
                     }
                     if (state.canManage) {
+                        actions.append(button('Test exit', (event) => void testExit(event.currentTarget, profile, 'vpn-test')));
                         actions.append(remove);
                     }
                 }
@@ -354,6 +309,68 @@
             updateFailure();
         }
 
+        function checkedInterfaces(id) {
+            return [...byId(id).querySelectorAll('input:checked')].map((input) => input.value);
+        }
+
+        function availablePorts() {
+            return [...state.availableInterfaces].sort((a, b) => {
+                if (a.id === 'lan' || b.id === 'lan') {
+                    return Number(b.id === 'lan') - Number(a.id === 'lan');
+                }
+                return (a.device || a.id).localeCompare(b.device || b.id, undefined, {numeric: true});
+            });
+        }
+
+        function renderInterfaceChoices(id, ports, selected, emptyText) {
+            const target = byId(id);
+            target.replaceChildren();
+            const missing = selected.filter((value) => !ports.some((port) => port.id === value));
+            for (const port of [...ports, ...missing.map((value) => ({id: value, name: 'Unavailable interface'}))]) {
+                const label = document.createElement('label');
+                const input = document.createElement('input');
+                input.type = 'checkbox';
+                input.value = port.id;
+                input.checked = selected.includes(port.id);
+                const title = document.createElement('span');
+                title.textContent = port.device || port.id;
+                if (port.name && port.name !== port.device) {
+                    const alias = document.createElement('small');
+                    alias.textContent = port.name;
+                    title.append(alias);
+                }
+                label.append(input, title);
+                target.append(label);
+            }
+            if (!target.children.length) {
+                const note = document.createElement('p');
+                note.className = 'text-muted';
+                note.textContent = emptyText;
+                target.append(note);
+            }
+        }
+
+        function renderInterfaceRules(ports, settings) {
+            const target = byId('interface-rules');
+            target.replaceChildren();
+            for (const port of ports) {
+                const label = document.createElement('label');
+                label.dataset.interface = port.id;
+                label.textContent = networkName(port.id);
+                const select = document.createElement('select');
+                select.className = 'form-control';
+                select.append(new Option('Use device rules', ''), new Option('Use Multi-Path domain lists', 'smart'),
+                    new Option('Block devices without a rule', 'strict'));
+                select.value = list(settings.strictInterfaces).includes(port.id) ? 'strict'
+                    : list(settings.smartInterfaces).includes(port.id) ? 'smart' : '';
+                if (list(settings.tailscaleInterfaces).includes(port.id)) {
+                    select.querySelector('[value="strict"]').disabled = true;
+                }
+                label.append(select);
+                target.append(label);
+            }
+        }
+
         function renderSettings() {
             const select = byId('network-profile');
             const savedExit = state.settingsDirty ? select.value : (state.settings?.networkProfile || '');
@@ -362,23 +379,17 @@
                 choices.push({value: savedExit, label: 'Unavailable exit'});
             }
             options(select, choices, 'Choose an exit', savedExit);
-            if (!state.settings || state.settingsDirty) {
-                updateCoverage();
-                return;
-            }
             const settings = state.settings;
-            byId('coverage').value = settings.coverage || 'device';
-            byId('network-mode').value = settings.networkMode || 'disabled';
-            byId('enabled').checked = settings.enabled === true || settings.enabled === '1';
-            byId('hostname').value = settings.hostname || '';
-            byId('managed').value = list(settings.interfaces).join(', ');
-            byId('strict').value = list(settings.strictInterfaces).join(', ');
-            byId('smart-interfaces').value = list(settings.smartInterfaces).join(', ');
-            byId('tailnet-interfaces').value = list(settings.tailscaleInterfaces).join(', ');
-            byId('smart-assigned').checked = settings.smartAssignedOnly === true;
-            byId('dashboard-bind').value = settings.dashboardBind || 'lan';
-            renderDashboardAddress();
-            byId('local').value = list(settings.localNetworks).join(', ');
+            if (settings && !state.settingsDirty) {
+                byId('coverage').value = settings.coverage || 'device';
+                byId('network-mode').value = settings.networkMode || 'disabled';
+                byId('enabled').checked = settings.enabled === true || settings.enabled === '1';
+                const ports = availablePorts();
+                renderInterfaceChoices('managed', ports, list(settings.interfaces), 'No assigned home Ethernet or VLAN interfaces.');
+                renderInterfaceRules(ports, settings);
+                byId('smart-assigned').checked = settings.smartAssignedOnly === true;
+                byId('local').value = list(settings.localNetworks).join(', ');
+            }
             updateCoverage();
         }
 
@@ -391,6 +402,11 @@
             const network = byId('coverage').value === 'network';
             const mode = byId('network-mode').value;
             const exit = byId('network-profile');
+            const selected = checkedInterfaces('managed');
+            byId('device-options').hidden = network;
+            for (const label of byId('interface-rules').children) {
+                label.hidden = !selected.includes(label.dataset.interface);
+            }
             byId('network-fields').hidden = !network;
             byId('network-profile-field').hidden = !network || mode !== 'full';
             exit.required = network && mode === 'full';
@@ -403,15 +419,52 @@
                 disabled: 'Devices use your normal OPNsense routing.'
             };
             byId('coverage-note').textContent = network ? summary[mode]
-                : 'Choose a mode and exit for each device in the table below.';
+                : 'Select the ports you want to manage, then add rules for individual devices below.';
+        }
+
+        function renderTailscale() {
+            const settings = state.settings;
+            if (!settings) {
+                return;
+            }
+            const address = settings.dashboardAddresses?.tailnet;
+            byId('tailscale-status').textContent = address
+                ? 'Connected · ' + address + (settings.tailscaleExitAdvertised ? ' · Exit node advertised' : '')
+                : settings.tailscaleInstalled ? 'Tailscale installed. Connect OPNsense to your tailnet.'
+                    : 'Install the OPNsense Tailscale plugin to connect this router.';
+            byId('native-tailscale').hidden = !settings.tailscaleInstalled;
+            const selected = list(settings.tailscaleInterfaces);
+            byId('add-tailnet-device').hidden = settings.coverage === 'network' || selected.length === 0;
+            if (!state.tailscaleDirty) {
+                byId('hostname').value = settings.hostname || 'blankvpn.home.arpa';
+                byId('dashboard-bind').value = settings.dashboardBind || 'lan';
+                const eligible = availablePorts().filter((port) => port.id.startsWith('opt')
+                    && list(settings.interfaces).includes(port.id) && !list(settings.strictInterfaces).includes(port.id));
+                renderInterfaceChoices('tailnet-interfaces', eligible, selected,
+                    'Enable a dedicated Ethernet or VLAN link on the Network page first.');
+            }
+            renderDashboardAddress();
         }
 
         function renderDashboardAddress() {
-            const address = state.settings?.dashboardAddresses?.[byId('dashboard-bind').value];
-            const port = state.settings?.dashboardPort || 443;
+            const settings = state.settings;
+            const address = settings?.dashboardAddresses?.[byId('dashboard-bind').value];
+            const port = settings?.dashboardPort || 443;
+            const suffix = (port === 443 ? '' : ':' + port) + '/ui/blankvpn/index';
+            const hostname = settings?.hostname || 'blankvpn.home.arpa';
+            const url = 'https://' + hostname + suffix;
+            const link = byId('dashboard-link');
+            link.href = url;
+            link.textContent = url;
+            const direct = byId('address-link');
+            byId('address-row').hidden = !address;
+            if (address) {
+                direct.href = 'https://' + address + suffix;
+                direct.textContent = direct.href;
+            }
             byId('bind-address').textContent = address
-                ? 'Current address · https://' + address + (port === 443 ? '' : ':' + port) + '/ui/blankvpn/index'
-                : 'The selected router interface has no IPv4 address.';
+                ? 'Point the dashboard name at ' + address + ' in your DNS.'
+                : 'The selected interface has no IPv4 address yet.';
         }
 
         function renderServices() {
@@ -576,6 +629,11 @@
                 const actions = row.insertCell();
                 actions.append(button('Refresh', (event) => void mutate(event.currentTarget,
                     () => api('refreshSubscription', {id: feed.id}), 'Subscription refreshed.', () => void refreshProxyCatalog())));
+                actions.append(button(feed.auto ? 'Pause auto-refresh' : 'Enable auto-refresh', (event) => {
+                    const auto = !feed.auto;
+                    void mutate(event.currentTarget, () => api('setSubscriptionAuto', {id: feed.id, auto}),
+                        auto ? 'Automatic refresh enabled.' : 'Automatic refresh paused.', () => void refreshProxyCatalog());
+                }));
                 actions.append(button('Remove', (event) => {
                     if (window.confirm('Remove this proxy subscription? Any enabled exit keeps its current server.')) {
                         void mutate(event.currentTarget, () => api('removeSubscription', {id: feed.id}),
@@ -603,6 +661,9 @@
                 const exit = state.profiles.find((profile) => profile.node === node.id);
                 cell(row, node.core, '', exit?.status || '');
                 const actions = row.insertCell();
+                if (exit) {
+                    actions.append(button('Test exit', (event) => void testExit(event.currentTarget, exit, 'proxy-test')));
+                }
                 if (exit) {
                     const disable = button('Remove exit', (event) => removeProfile(exit, event.currentTarget));
                     disable.disabled = state.assignments.some((item) => [item.profile, item.backup].includes(exit.id))
@@ -651,7 +712,6 @@
             refresh.disabled = true;
             try {
                 const data = await api('dashboard');
-                state.devices = array(data.devices);
                 state.profiles = array(data.profiles);
                 state.assignments = array(data.assignments);
                 state.services = array(data.services);
@@ -664,16 +724,24 @@
                 state.activeSmartInterfaces = list(data.activeSmartInterfaces || data.settings?.smartInterfaces);
                 if (!state.signingIn && loginRevision === state.loginRevision) {
                     const signedIn = data.mullvadSignedIn === true && !insecureWebGui;
+                    const saved = data.mullvadLoginSaved === true && !insecureWebGui;
+                    if (saved !== state.mullvadLoginSaved) {
+                        byId('save-login').checked = saved;
+                        state.restoreAttempted = false;
+                    }
+                    state.mullvadLoginSaved = saved;
                     if (state.mullvadSignedIn && !signedIn) {
-                        byId('account-status').textContent = 'Mullvad sign-in expired. Sign in again to add exits.';
+                        byId('account-status').textContent = saved ? 'Reconnecting saved Mullvad login…'
+                            : 'Mullvad sign-in expired. Sign in again to add exits.';
                     }
                     setMullvadSignedIn(signedIn);
                     if (signedIn && !byId('account-status').textContent) {
                         byId('account-status').textContent = 'Signed in to Mullvad.';
                     }
+                    restoreSavedLogin();
                 }
                 if (!state.canManage && state.section === 'proxies') {
-                    showSection('devices');
+                    showSection('network');
                 }
                 root.dataset.canManage = String(state.canManage);
                 if (!state.canManage) {
@@ -681,11 +749,7 @@
                     state.editing = null;
                 }
                 state.availableInterfaces = array(data.settings?.availableInterfaces || data.availableInterfaces);
-                const datalist = byId('interface-list');
-                datalist.replaceChildren(...state.availableInterfaces.map(
-                    (item) => new Option(networkName(item.id), item.id)
-                ));
-                renderDevices();
+                renderDeviceRules();
                 renderProfiles();
                 if (state.catalogLoaded) {
                     renderRelays();
@@ -693,17 +757,18 @@
                 renderServices();
                 renderProxyCatalog();
                 renderSettings();
+                renderTailscale();
                 renderWarnings(array(data.warnings));
-                const count = state.devices.length;
+                const count = state.assignments.length;
                 const routing = data.settings?.enabled === true || data.settings?.enabled === '1';
-                byId('observed').textContent = count + ' observed device' + (count === 1 ? '' : 's')
+                byId('observed').textContent = count + ' saved rule' + (count === 1 ? '' : 's')
                     + ' · ' + (routing ? 'Routing enabled' : 'Routing disabled')
                     + ' · Refreshed ' + new Date().toLocaleTimeString();
             } catch (error) {
-                byId('observed').textContent = 'Device observations could not be refreshed.';
-                notice(errorMessage(error, 'Device observations are unavailable.'), 'danger');
+                byId('observed').textContent = 'Network settings could not be refreshed.';
+                notice(errorMessage(error, 'Saved rules are unavailable.'), 'danger');
                 if (!byId('device-list').children.length) {
-                    empty(byId('device-list'), 'Device observations are unavailable.');
+                    empty(byId('device-list'), 'Saved rules are unavailable.');
                 }
             } finally {
                 refresh.disabled = false;
@@ -736,7 +801,7 @@
             if (mode === 'multi') {
                 notes.push(list(state.settings?.smartInterfaces).includes(interfaceId)
                     ? 'Matched services use their assigned exits. Other traffic uses normal internet.'
-                    : 'Set up Multi-Path for this interface under Advanced routing settings.');
+                    : 'In Network → More routing options, select Use Multi-Path domain lists for this interface.');
             }
             if (mode === 'blocked') {
                 notes.push('Internet is blocked for the assigned addresses. Approved local access follows your firewall rules.');
@@ -750,21 +815,35 @@
             byId('route-note').textContent = notes.join(' ');
         }
 
-        function openAssignment(device = {}, assignment) {
-            state.editing = assignment || null;
+        function renderAssignmentInterfaces(previous = byId('interface').value) {
+            const managed = list(state.settings?.interfaces);
+            const tailnet = list(state.settings?.tailscaleInterfaces);
+            const peer = byId('device-kind').value === 'tailnet';
+            const choices = availablePorts().filter((port) => managed.includes(port.id)
+                && (peer ? tailnet.includes(port.id) : !tailnet.includes(port.id)))
+                .map((port) => ({value: port.id, label: networkName(port.id)}));
+            if (state.editing && previous && !choices.some((choice) => choice.value === previous)) {
+                choices.push({value: previous, label: networkName(previous)});
+            }
+            options(byId('interface'), choices, choices.length ? 'Choose an interface' : 'Enable an interface first',
+                previous || (choices.length === 1 ? choices[0].value : ''));
+        }
+
+        function openAssignment(assignment = null, kind = 'lan') {
+            state.editing = assignment;
             byId('assignment').hidden = false;
-            byId('assignment-title').textContent = 'Device assignment';
-            byId('ip').value = assignment?.ip || deviceIp(device);
-            byId('interface').value = assignment?.interface || device.interface || '';
-            byId('mac').value = assignment?.mac || device.mac || '';
+            byId('assignment-title').textContent = assignment ? 'Edit device rule' : 'Add device rule';
+            byId('ip').value = assignment?.ip || '';
+            byId('mac').value = assignment?.mac || '';
             byId('ipv6').value = assignment?.ipv6 || '';
-            byId('device-kind').value = assignment?.kind || 'lan';
+            byId('device-kind').value = assignment?.kind || kind;
             byId('device-kind').disabled = Boolean(assignment);
+            renderAssignmentInterfaces(assignment?.interface || '');
             byId('mode').value = modes[assignment?.mode] ? assignment.mode : (assignment && !assignment.profile ? 'disabled' : 'full');
             byId('ip').readOnly = Boolean(assignment);
-            byId('interface').readOnly = Boolean(assignment);
+            byId('interface').disabled = Boolean(assignment);
             byId('mac').readOnly = Boolean(assignment);
-            byId('device-label').value = assignment?.label || device.name || '';
+            byId('device-label').value = assignment?.label || '';
             const selected = assignment?.profile || '';
             const choices = state.profiles.map(exitChoice);
             if (selected && !choices.some((choice) => choice.value === selected)) {
@@ -775,9 +854,8 @@
             byId('switch-now').checked = false;
             updateFailure();
             byId('backup').value = assignment?.backup || '';
-            byId('identity').textContent = assignment?.kind === 'tailnet' ? '' : device.stable === true
-                ? 'A matching reservation was observed for this address.'
-                : 'Address stability is unverified. A VPN assignment requires a fixed IPv4 reservation on a managed interface.';
+            byId('identity').textContent = byId('device-kind').value === 'tailnet' ? ''
+                : 'Use the device’s reserved DHCP address and MAC.';
             byId('remove-assignment').hidden = !assignment;
             byId('assignment-title').focus();
         }
@@ -868,16 +946,64 @@
             const register = byId('register');
             register.disabled = !relay || !state.mullvadSignedIn;
             register.textContent = byId('retarget').value ? 'Change server' : 'Add Mullvad exit';
+            byId('test-relay').disabled = !relay || !state.mullvadSignedIn || state.testingRelay;
+        }
+
+        async function pingRelay() {
+            const relay = byId('relay').value;
+            const status = byId('relay-test');
+            state.testingRelay = true;
+            renderRelayChoice();
+            status.textContent = 'Pinging ' + relay + ' from OPNsense…';
+            try {
+                const result = await api('testRelay', {relay});
+                status.textContent = relay + (result.replied
+                    ? ' replied in ' + result.milliseconds + ' ms.'
+                    : ' did not answer ICMP. The WireGuard service may still be available.');
+            } catch (error) {
+                status.textContent = errorMessage(error, 'Could not ping ' + relay + '.');
+            } finally {
+                state.testingRelay = false;
+                renderRelayChoice();
+            }
+        }
+
+        async function testExit(control, exit, output) {
+            const status = byId(output);
+            const name = profileName(exit.id);
+            control.disabled = true;
+            status.textContent = 'Testing internet access through ' + name + '…';
+            try {
+                const result = await api('testExit', {id: exit.id});
+                status.textContent = name + (result.reachable === true
+                    ? ' passed the HTTPS test (' + result.milliseconds + ' ms).'
+                    : result.reachable === false ? ' did not pass the HTTPS test.'
+                        : ' could not be tested. Check that routing is enabled and the tunnel rules are loaded.');
+            } catch (error) {
+                status.textContent = errorMessage(error, 'The exit test could not be completed.');
+            } finally {
+                control.disabled = false;
+            }
         }
 
         function setMullvadSignedIn(signedIn) {
             state.mullvadSignedIn = signedIn;
             byId('login-form').hidden = signedIn || insecureWebGui;
             byId('register-form').hidden = !signedIn;
-            byId('sign-out').hidden = !signedIn;
+            byId('restore-login').hidden = insecureWebGui || signedIn || !state.mullvadLoginSaved;
+            byId('sign-out').hidden = insecureWebGui || (!signedIn && !state.mullvadLoginSaved);
+            byId('sign-out').textContent = state.mullvadLoginSaved
+                ? (signedIn ? 'Sign out and forget login' : 'Forget saved login') : 'Sign out';
             renderRelayChoice();
             if (signedIn && !state.catalogLoaded) {
                 void loadRelays();
+            }
+        }
+
+        function restoreSavedLogin() {
+            if (state.section === 'vpns' && state.canManage && state.mullvadLoginSaved && !state.mullvadSignedIn
+                && !state.signingIn && !state.restoreAttempted) {
+                void inspectAccount(true);
             }
         }
 
@@ -919,25 +1045,30 @@
             return value;
         }
 
-        async function inspectAccount() {
-            const control = byId('inspect-account');
+        async function inspectAccount(restore = false) {
+            const control = byId(restore ? 'restore-login' : 'inspect-account');
             const target = byId('account-status');
             if (insecureWebGui || state.signingIn) {
                 return;
             }
             control.disabled = true;
+            byId('sign-out').disabled = true;
             state.signingIn = true;
+            state.restoreAttempted = true;
             state.loginRevision++;
-            target.textContent = 'Signing in to Mullvad…';
+            target.textContent = restore ? 'Reconnecting saved Mullvad login…' : 'Signing in to Mullvad…';
             try {
-                const account = accountNumber();
+                const payload = restore ? {} : {account: accountNumber(), saveLogin: byId('save-login').checked};
                 byId('account').value = '';
-                const response = await api('account', {account});
+                const response = await api(restore ? 'restoreMullvad' : 'account', payload);
+                state.mullvadLoginSaved = response.saved === true;
+                state.restoreAttempted = false;
+                byId('save-login').checked = state.mullvadLoginSaved;
                 setMullvadSignedIn(true);
                 const devices = array(response.devices);
                 const limit = response.maxDevices ?? response.limit;
                 const expiry = response.expiresAt ?? response.expiry;
-                target.textContent = 'Signed in to Mullvad. ' + devices.length + (limit ? ' of ' + limit : '') + ' device slots used.'
+                target.textContent = (state.mullvadLoginSaved ? 'Signed in to Mullvad. Login saved. ' : 'Signed in to Mullvad. ') + devices.length + (limit ? ' of ' + limit : '') + ' device slots used.'
                     + (expiry ? (response.expired ? ' Account expired ' : ' Account expires ') + date(expiry) + '.' : '')
                     + (response.canAddDevices === false ? ' Mullvad reports that this account cannot add a device.' : '');
                 if (devices.length) {
@@ -955,6 +1086,7 @@
             } finally {
                 state.signingIn = false;
                 control.disabled = false;
+                byId('sign-out').disabled = false;
             }
         }
 
@@ -1062,7 +1194,12 @@
             byId('add-device').focus();
         });
         byId('mode').addEventListener('change', updateFailure);
-        byId('device-kind').addEventListener('change', updateFailure);
+        byId('device-kind').addEventListener('change', () => {
+            renderAssignmentInterfaces();
+            byId('identity').textContent = byId('device-kind').value === 'tailnet' ? ''
+                : 'Use the device’s reserved DHCP address and MAC.';
+            updateFailure();
+        });
         byId('ipv6').addEventListener('input', updateFailure);
         byId('profile').addEventListener('change', updateFailure);
         byId('failure').addEventListener('change', updateFailure);
@@ -1118,14 +1255,19 @@
         byId('country').addEventListener('change', renderRelays);
         byId('city').addEventListener('change', renderRelays);
         byId('relay').addEventListener('change', renderRelayChoice);
+        byId('test-relay').addEventListener('click', () => void pingRelay());
         byId('retarget').addEventListener('change', renderRelayChoice);
         byId('login-form').addEventListener('submit', (event) => {
             event.preventDefault();
             void inspectAccount();
         });
+        byId('restore-login').addEventListener('click', () => void inspectAccount(true));
         byId('sign-out').addEventListener('click', (event) => {
             void mutate(event.currentTarget, () => api('logoutMullvad', {}), 'Signed out of Mullvad.', () => {
                 state.loginRevision++;
+                state.mullvadLoginSaved = false;
+                state.restoreAttempted = false;
+                byId('save-login').checked = false;
                 setMullvadSignedIn(false);
                 byId('account-status').textContent = '';
             });
@@ -1147,19 +1289,23 @@
             }).then(renderRelayChoice);
         });
         byId('use-lan').addEventListener('click', () => {
-            showSection('devices');
+            showSection('network');
+            const port = byId('managed').querySelector('[value="lan"]');
+            if (!port) {
+                return;
+            }
             byId('enabled').checked = true;
-            byId('managed').value = [...new Set([...list(byId('managed').value), 'lan'])].join(', ');
-            byId('smart-interfaces').value = [...new Set([...list(byId('smart-interfaces').value), 'lan'])].join(', ');
+            port.checked = true;
             if (byId('coverage').value === 'network') {
                 byId('network-mode').value = 'multi';
             } else {
+                byId('interface-rules').querySelector('[data-interface="lan"] select').value = 'smart';
                 byId('smart-assigned').checked = true;
                 byId('advanced').open = true;
             }
             state.settingsDirty = true;
             updateCoverage();
-            byId('managed').focus();
+            port.focus();
         });
         byId('service-preset').addEventListener('change', (event) => {
             const preset = event.target.value;
@@ -1317,25 +1463,44 @@
                 void refreshProxyCatalog();
             });
         });
-        byId('dashboard-bind').addEventListener('change', renderDashboardAddress);
+        byId('tailscale-form').addEventListener('input', () => {
+            state.tailscaleDirty = true;
+            renderDashboardAddress();
+        });
+        byId('tailscale-form').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const payload = {
+                hostname: byId('hostname').value.trim(),
+                dashboardBind: byId('dashboard-bind').value,
+                tailscaleInterfaces: checkedInterfaces('tailnet-interfaces')
+            };
+            void mutate(event.submitter, () => api('tailscaleSettings', payload), 'Tailscale settings saved.', () => {
+                state.tailscaleDirty = false;
+            });
+        });
+        byId('add-tailnet-device').addEventListener('click', () => {
+            showSection('network');
+            openAssignment(null, 'tailnet');
+        });
         byId('settings-form').addEventListener('input', () => {
             state.settingsDirty = true;
             updateCoverage();
         });
         byId('settings-form').addEventListener('submit', (event) => {
             event.preventDefault();
+            const interfaces = checkedInterfaces('managed');
+            const rules = [...byId('interface-rules').children].filter((label) => interfaces.includes(label.dataset.interface));
+            const selected = (type) => rules.filter((label) => label.querySelector('select').value === type)
+                .map((label) => label.dataset.interface);
             const payload = {
                 enabled: byId('enabled').checked,
                 coverage: byId('coverage').value,
                 networkMode: byId('network-mode').value,
                 networkProfile: byId('network-profile').required ? byId('network-profile').value : '',
-                hostname: byId('hostname').value.trim(),
-                interfaces: list(byId('managed').value),
-                strictInterfaces: list(byId('strict').value),
-                smartInterfaces: list(byId('smart-interfaces').value),
+                interfaces,
+                strictInterfaces: selected('strict'),
+                smartInterfaces: selected('smart'),
                 smartAssignedOnly: byId('smart-assigned').checked,
-                tailscaleInterfaces: list(byId('tailnet-interfaces').value),
-                dashboardBind: byId('dashboard-bind').value,
                 localNetworks: list(byId('local').value)
             };
             const knownStrict = list(state.settings?.strictInterfaces);

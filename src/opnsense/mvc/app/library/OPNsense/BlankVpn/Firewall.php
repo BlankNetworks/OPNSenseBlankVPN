@@ -492,6 +492,20 @@ final class Firewall
         return is_array($data) ? $data : [];
     }
 
+    public static function probePathInstalled(array $profile, array $loaded): bool
+    {
+        $source = explode('/', $profile['address'] ?? '', 2)[0];
+        if (!filter_var($source, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            return false;
+        }
+        $marker = Policy::marker('probe', $profile['id'] . Policy::PROBE_IP);
+        $pass = $loaded[$marker] ?? [];
+        $guard = $loaded[$marker . '_block'] ?? [];
+        return ($pass['action'] ?? '') === 'pass' && ($pass['source'] ?? '') === $source &&
+            ($pass['gateway'] ?? null) === ($profile['interface'] ?? '') &&
+            ($guard['action'] ?? '') === 'block' && ($guard['source'] ?? '') === $source;
+    }
+
     public static function loadedRules(): ?array
     {
         $raw = (new Backend())->configdRun('blankvpn loaded', false, 15);

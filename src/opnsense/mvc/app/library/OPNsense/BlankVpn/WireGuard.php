@@ -409,7 +409,8 @@ final class WireGuard
             ($info['local_ip'] ?? '') === $address &&
             ($info['primary_ip'] ?? '') === self::PROBE_ADDRESS &&
             ($answer['Status'] ?? null) === 0;
-        return ['reachable' => $reachable, 'checkedAt' => time(), 'status' => $reachable ? 'reachable' : 'probe failed'];
+        return ['reachable' => $reachable, 'checkedAt' => time(), 'status' => $reachable ? 'reachable' : 'probe failed',
+            'milliseconds' => $reachable ? round($info['total_time'] * 1000, 1) : null];
     }
 
     private static function createInterface(string $device, string $owner): string

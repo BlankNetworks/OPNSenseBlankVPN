@@ -91,6 +91,16 @@ final class ProxyCatalog
         return $result;
     }
 
+    public static function setAutoRefresh(string $id, bool $enabled): void
+    {
+        $data = self::read();
+        if (!isset($data['feeds'][$id])) {
+            throw new DomainException('The proxy subscription was removed.');
+        }
+        $data['feeds'][$id]['auto'] = $enabled;
+        self::save($data);
+    }
+
     public static function refreshFeed(string $id, array $pinned): array
     {
         $data = self::read();

@@ -114,6 +114,13 @@ try {
 
     $account = '0000 0000 0000 0000';
     expectFailure(fn () => $provider->account('invalid'), '16-digit');
+    $provider->saveAccount('operator', $account);
+    $stored = glob($directory . '/mullvad-login-*.json');
+    check(count($stored) === 1 && (fileperms($stored[0]) & 0777) === 0600, 'The saved login must use a private file.');
+    check($provider->hasSavedAccount('operator') && $provider->savedAccount('operator') === '0000000000000000' &&
+        $provider->savedAccount('other-operator') === null, 'Saved accounts must be scoped to their WebGUI user.');
+    $provider->saveAccount('operator', null);
+    check(!$provider->hasSavedAccount('operator'), 'Forgetting the login must remove the saved account.');
     check($provider->account($account)['availableSlots'] === 1, 'Account slot count is wrong.');
     $provider->expireAccount = true;
     check($provider->account($account)['expired'], 'Expired account should be visible.');

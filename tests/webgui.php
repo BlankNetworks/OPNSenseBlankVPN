@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace OPNsense\Base {
     final class RequestFixture
     {
-        public function __construct(private string $scheme)
+        public function __construct(private string $scheme, private array $fields)
         {
         }
 
@@ -19,9 +19,9 @@ namespace OPNsense\Base {
             return true;
         }
 
-        public function getPost(string $key, ?string $filter, string $default): string
+        public function getPost(string $key, ?string $filter = null, mixed $default = null): mixed
         {
-            return $key === 'account' ? '0000000000000000' : $default;
+            return $this->fields[$key] ?? ($key === 'account' ? '0000000000000000' : $default);
         }
     }
 
@@ -51,9 +51,9 @@ namespace OPNsense\Base {
         protected SessionFixture $session;
         protected object $response;
 
-        public function __construct(string $scheme)
+        public function __construct(string $scheme, array $fields = [], private string $user = 'test-operator')
         {
-            $this->request = new RequestFixture($scheme);
+            $this->request = new RequestFixture($scheme, $fields);
             $this->session = new SessionFixture();
             $this->response = new class {
                 public function setHeader(string $key, string $value): void
@@ -69,7 +69,7 @@ namespace OPNsense\Base {
 
         public function getUserName(): string
         {
-            return 'test-operator';
+            return $this->user;
         }
     }
 }
@@ -90,9 +90,44 @@ namespace OPNsense\Core {
 }
 
 namespace OPNsense\BlankVpn {
+    final class Operations
+    {
+        public static function exclusive(callable $operation): mixed
+        {
+            return $operation();
+        }
+    }
+
+    final class Resolver
+    {
+        public static function command(array $command, bool $required): string
+        {
+            if ($command !== ['/sbin/ping', '-n', '-c', '1', '-W', '1500', '-t', '3', '8.8.8.8']) {
+                throw new \RuntimeException('Unexpected ping target or arguments.');
+            }
+            return '64 bytes from 8.8.8.8: icmp_seq=0 ttl=115 time=12.345 ms';
+        }
+    }
+
     final class Mullvad
     {
         public static int $calls = 0;
+        private static array $saved = [];
+
+        public function relays(): array
+        {
+            return ['relays' => [['id' => 'ca-test-wg-001', 'ipv4' => '8.8.8.8', 'active' => true]]];
+        }
+
+        public function saveAccount(string $user, ?string $account): void
+        {
+            self::$saved[$user] = $account;
+        }
+
+        public function savedAccount(string $user): ?string
+        {
+            return self::$saved[$user] ?? null;
+        }
 
         public function authenticate(string $account): array
         {
@@ -129,11 +164,26 @@ namespace {
         'Reject HTTP before contacting the provider and return a specific message.');
     $https = new ServiceController('https');
     $signedIn = $https->accountAction();
-    checkWebGui($signedIn === ['ok' => true, 'maxDevices' => 5] && Mullvad::$calls === 1,
+    checkWebGui($signedIn === ['ok' => true, 'maxDevices' => 5, 'saved' => false] && Mullvad::$calls === 1,
         'The native request wrapper must allow HTTPS sign-in without exposing the token.');
     $token = new ReflectionMethod(ServiceController::class, 'mullvadToken');
     checkWebGui($token->invoke($https) === 'test-provider-token', 'Sign-in must retain the token for tunnel creation.');
     checkWebGui($https->logoutMullvadAction()['ok'] && $token->invoke($https) === null,
         'Signing out must remove the provider token.');
+    checkWebGui(!$https->restoreMullvadAction()['ok'], 'Temporary login must not be saved.');
+    $remember = new ServiceController('https', ['saveLogin' => true]);
+    checkWebGui($remember->accountAction()['saved'] === true, 'Save login must be explicitly requested.');
+    $nextSession = new ServiceController('https');
+    checkWebGui($nextSession->restoreMullvadAction()['saved'] === true && $token->invoke($nextSession) === 'test-provider-token',
+        'A new WebGUI session must restore and reauthenticate its saved login.');
+    $otherUser = new ServiceController('https', [], 'another-operator');
+    checkWebGui(!$otherUser->restoreMullvadAction()['ok'], 'Another user must not inherit a saved credential.');
+    $nextSession->logoutMullvadAction();
+    checkWebGui(!$nextSession->restoreMullvadAction()['ok'], 'Sign-out must forget the saved credential.');
+    $ping = new ServiceController('https', ['relay' => 'ca-test-wg-001']);
+    checkWebGui($ping->testRelayAction() === ['ok' => true, 'relay' => 'ca-test-wg-001', 'replied' => true, 'milliseconds' => 12.345],
+        'The ping must use a catalog IP and report its latency.');
+    $unknown = new ServiceController('https', ['relay' => '127.0.0.1']);
+    checkWebGui(!$unknown->testRelayAction()['ok'], 'The relay test must reject caller-supplied destinations.');
     echo "OPNsense WebGUI request and Mullvad session fixtures passed.\n";
 }

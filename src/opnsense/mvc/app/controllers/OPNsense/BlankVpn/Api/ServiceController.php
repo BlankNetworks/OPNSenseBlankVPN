@@ -22,7 +22,6 @@ use OPNsense\BlankVpn\WireGuard;
 class ServiceController extends ApiControllerBase
 {
     private const MULLVAD_SESSION = 'blankvpn_mullvad_login';
-    private const MULLVAD_SESSION_SECONDS = 600;
 
     public function dashboardAction()
     {
@@ -31,6 +30,9 @@ class ServiceController extends ApiControllerBase
             $settings = Policy::settings($model);
             $routing = Policy::routingSettings($settings);
             $settings['dashboardAddresses'] = Resolver::dashboardAddresses();
+            $settings['tailscaleInstalled'] = is_executable('/usr/local/bin/tailscale');
+            $settings['tailscaleExitAdvertised'] =
+                (string)(Config::getInstance()->object()->OPNsense->tailscale->settings->advertiseExitNode ?? '') === '1';
             $port = (string)Config::getInstance()->object()->system->webgui->port;
             $settings['dashboardPort'] = ctype_digit($port) && (int)$port <= 65535 && (int)$port > 0 ? (int)$port : 443;
             $settings['availableInterfaces'] = array_values(Policy::availableInterfaces());
@@ -114,19 +116,23 @@ class ServiceController extends ApiControllerBase
             }
             $discovery['warnings'] = $warnings;
             $username = $this->getUserName();
+            $acl = new ACL();
+            $canManage = self::nativeWritesAvailable() && is_string($username) &&
+                $acl->isPageAccessible($username, '/api/blankvpn/service/assign');
+            $mullvadUser = $canManage ? $this->mullvadUser() : null;
             return $discovery + [
                 'profiles' => array_values($profiles),
                 'proxyCores' => ProxyRuntime::capabilities(),
                 'canManageCores' => self::nativeWritesAvailable() && is_string($username) &&
-                    (new ACL())->isPageAccessible($username, '/api/blankvpn/core/status'),
+                    $acl->isPageAccessible($username, '/api/blankvpn/core/status'),
                 'mullvadSignedIn' => $this->mullvadToken() !== null,
+                'mullvadLoginSaved' => $mullvadUser !== null && (new Mullvad())->hasSavedAccount($mullvadUser),
                 'assignments' => array_values($assignments),
                 'settings' => $settings,
                 'activeSmartInterfaces' => $routing['smartInterfaces'],
                 'services' => array_values($services),
                 'servicePresets' => SmartRouting::PRESETS,
-                'canManage' => self::nativeWritesAvailable() && is_string($username) &&
-                    (new ACL())->isPageAccessible($username, '/api/blankvpn/service/assign')
+                'canManage' => $canManage
             ];
         });
     }
@@ -141,42 +147,111 @@ class ServiceController extends ApiControllerBase
         return $this->respond(fn () => (new Mullvad())->relays(true), true, true);
     }
 
-    public function accountAction()
+    public function testRelayAction()
     {
         return $this->respond(function () {
-            if (!$this->isExternalClient()) {
-                $this->session->remove(self::MULLVAD_SESSION);
+            $relay = $this->relay(new Mullvad(), $this->input('relay', 100));
+            $address = $relay['ipv4'];
+            if (!filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_GLOBAL_RANGE)) {
+                throw new \DomainException('The relay has no public IPv4 endpoint.');
             }
-            $login = (new Mullvad())->authenticate($this->input('account', 64));
-            if (!$this->isExternalClient()) {
-                $this->session->set(self::MULLVAD_SESSION, [
-                    'token' => $login['token'],
-                    'expires' => min($login['expires'], time() + self::MULLVAD_SESSION_SECONDS),
-                    'user' => $this->getUserName()
-                ]);
+            $output = Resolver::command(['/sbin/ping', '-n', '-c', '1', '-W', '1500', '-t', '3', $address], false);
+            $reply = preg_match('/\btime[=<]([0-9]+(?:[.,][0-9]+)?) ms\b/', $output, $matches);
+            return ['relay' => $relay['id'], 'replied' => $reply === 1,
+                'milliseconds' => $reply === 1 ? (float)str_replace(',', '.', $matches[1]) : null];
+        }, true, true);
+    }
+
+    public function testExitAction()
+    {
+        return $this->respond(function () {
+            $route = Policy::routes(new BlankVpn())[$this->input('id', 64)] ?? null;
+            if ($route === null || !self::routeConfigured($route)) {
+                throw new \DomainException('Select a configured exit.');
             }
-            return $login['account'];
-        }, true, true, true);
+            if (($route['kind'] ?? '') === 'proxy') {
+                $probe = ProxyRuntime::probe($route);
+            } else {
+                $installed = Firewall::probePathInstalled($route, Firewall::loadedRules() ?? []);
+                $probe = ($route['kind'] ?? '') === 'native'
+                    ? WireGuard::probeSource($installed ? $route['address'] : '')
+                    : WireGuard::probe($route, $installed);
+            }
+            return ['reachable' => $probe['reachable'] ?? null, 'milliseconds' => $probe['milliseconds'] ?? null];
+        }, true, true);
+    }
+
+    public function accountAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $user = $this->mullvadUser();
+            $save = $this->flag('saveLogin');
+            if ($save && $user === null) {
+                throw new \DomainException('Use a WebGUI login to save a Mullvad account.');
+            }
+            $account = $this->input('account', 64);
+            $mullvad = new Mullvad();
+            $login = $mullvad->authenticate($account);
+            if ($user !== null) {
+                $mullvad->saveAccount($user, $save ? $account : null);
+                $this->storeMullvadSession($user, $login);
+            }
+            return $login['account'] + ['saved' => $save];
+        }), true, true, true);
+    }
+
+    public function restoreMullvadAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $user = $this->mullvadUser();
+            $mullvad = new Mullvad();
+            $account = $user === null ? null : $mullvad->savedAccount($user);
+            if ($account === null) {
+                throw new \DomainException('There is no saved Mullvad login for this WebGUI user.');
+            }
+            $login = $mullvad->authenticate($account);
+            $this->storeMullvadSession($user, $login);
+            return $login['account'] + ['saved' => true];
+        }), true, true, true);
     }
 
     public function logoutMullvadAction()
     {
-        return $this->respond(function () {
-            if (!$this->isExternalClient()) {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $user = $this->mullvadUser();
+            if ($user !== null) {
+                (new Mullvad())->saveAccount($user, null);
                 $this->session->remove(self::MULLVAD_SESSION);
             }
             return [];
-        }, true, true, true);
+        }), true, true, true);
     }
 
-    private function mullvadToken(): ?string
+    private function mullvadUser(): ?string
     {
         if ($this->isExternalClient() || $this->request->getScheme() !== 'https') {
             return null;
         }
+        $user = $this->getUserName();
+        return is_string($user) && $user !== '' ? $user : null;
+    }
+
+    private function storeMullvadSession(string $user, array $login): void
+    {
+        $this->session->set(self::MULLVAD_SESSION, [
+            'token' => $login['token'], 'expires' => $login['expires'], 'user' => $user
+        ]);
+    }
+
+    private function mullvadToken(): ?string
+    {
+        $user = $this->mullvadUser();
+        if ($user === null) {
+            return null;
+        }
         $login = $this->session->get(self::MULLVAD_SESSION);
         return is_array($login) && ($login['expires'] ?? 0) > time() &&
-            ($login['user'] ?? null) === $this->getUserName() ? ($login['token'] ?? null) : null;
+            ($login['user'] ?? null) === $user ? ($login['token'] ?? null) : null;
     }
 
     public function registerAction()
@@ -186,10 +261,17 @@ class ServiceController extends ApiControllerBase
             $name = $this->name($relayId);
             $account = $this->input('account', 64);
             $token = $account === '' ? $this->mullvadToken() : null;
-            if ($account === '' && $token === null) {
-                throw new \DomainException('Sign in to Mullvad before adding an exit.');
-            }
             $mullvad = new Mullvad();
+            if ($account === '' && $token === null) {
+                $user = $this->mullvadUser();
+                $saved = $user === null ? null : $mullvad->savedAccount($user);
+                if ($saved === null) {
+                    throw new \DomainException('Sign in to Mullvad before adding an exit.');
+                }
+                $login = $mullvad->authenticate($saved);
+                $this->storeMullvadSession($user, $login);
+                $token = $login['token'];
+            }
             $existing = Policy::profiles(new BlankVpn());
             foreach ($existing as $profile) {
                 if ($profile['relay'] === $relayId && $relayId !== '') {
@@ -379,12 +461,13 @@ class ServiceController extends ApiControllerBase
             $interfaces = $this->listInput('interfaces');
             $strict = $this->listInput('strictInterfaces');
             $smart = $this->listInput('smartInterfaces');
-            $tailscale = $this->listInput('tailscaleInterfaces');
+            $current = Policy::settings(new BlankVpn());
+            $tailscale = $this->request->hasPost('tailscaleInterfaces')
+                ? $this->listInput('tailscaleInterfaces') : $current['tailscaleInterfaces'];
             $assignedOnly = $this->flag('smartAssignedOnly');
             $local = $this->listInput('localNetworks');
-            $hostname = strtolower(trim($this->input('hostname', 120, 'blankvpn.home.arpa')));
-            $bind = $this->input('dashboardBind', 12, 'lan');
-            $current = Policy::settings(new BlankVpn());
+            $hostname = strtolower(trim($this->input('hostname', 120, $current['hostname'])));
+            $bind = $this->input('dashboardBind', 12, $current['dashboardBind']);
             $coverage = $this->input('coverage', 12, $current['coverage']);
             $networkMode = $this->input('networkMode', 12, $current['networkMode']);
             $networkProfile = $this->input('networkProfile', 64, $current['networkProfile']);
@@ -395,17 +478,12 @@ class ServiceController extends ApiControllerBase
             if ($coverage !== 'network' || $networkMode !== 'full') {
                 $networkProfile = '';
             }
-            if (!in_array($bind, ['lan', 'tailnet'], true)) {
-                throw new \DomainException('Choose the LAN or Tailscale IPv4 address for the dashboard.');
-            }
+            $this->validateDashboardBinding($hostname, $bind);
             if (array_diff($interfaces, array_keys(Policy::availableInterfaces())) ||
                 array_diff($strict, $interfaces) || array_diff($smart, $interfaces)) {
                 throw new \DomainException('Choose assigned LAN or VLAN interfaces for Smart Routing and strict management.');
             }
-            if (array_diff($tailscale, $interfaces) || array_intersect($tailscale, $strict) ||
-                array_filter($tailscale, static fn (string $interface): bool => !Policy::tailnetInterface($interface))) {
-                throw new \DomainException('Choose a dedicated managed OPT or VLAN transit interface for source-preserving Tailscale traffic.');
-            }
+            $this->validateTransitInterfaces($tailscale, $interfaces, $strict);
             if (array_intersect($strict, $smart)) {
                 throw new \DomainException('Use Smart Routing on a managed interface with normal internet as its default.');
             }
@@ -417,9 +495,6 @@ class ServiceController extends ApiControllerBase
                 if (!Firewall::dnsRedirectionAvailable()) {
                     throw new \DomainException('OPNsense automatic NAT reflection for port forwards conflicts with Blank VPN DNS redirection.');
                 }
-            }
-            if (!Resolver::validHostname($hostname)) {
-                throw new \DomainException('Enter blankvpn.local or a valid dashboard hostname under home.arpa.');
             }
             $networks = [];
             foreach ($local as $network) {
@@ -505,6 +580,59 @@ class ServiceController extends ApiControllerBase
             });
             return [];
         }), true, true);
+    }
+
+    public function tailscaleSettingsAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $hostname = strtolower(trim($this->input('hostname', 120)));
+            $bind = $this->input('dashboardBind', 12);
+            $tailscale = $this->listInput('tailscaleInterfaces');
+            $this->validateDashboardBinding($hostname, $bind);
+            Operations::change(function (BlankVpn $model) use ($hostname, $bind, $tailscale) {
+                $before = Policy::settings($model);
+                $this->validateTransitInterfaces($tailscale, $before['interfaces'], $before['strictInterfaces']);
+                foreach (Policy::assignments($model) as $row) {
+                    if (($row['kind'] ?? '') === 'tailnet' && !in_array($row['interface'], $tailscale, true)) {
+                        throw new \DomainException('Remove the saved Tailscale device rules before unchecking their interface.');
+                    }
+                }
+                $model->settings->tailscaleInterfaces = implode(',', $tailscale);
+                $model->settings->hostname = $hostname;
+                $model->settings->dashboardBind = $bind;
+                $after = Policy::settings($model);
+                $reset = [];
+                if ($after['enabled'] && $after['coverage'] === 'network' && $after['networkMode'] !== 'disabled') {
+                    $old = Policy::routingSettings($before)['interfaces'];
+                    $new = Policy::routingSettings($after)['interfaces'];
+                    if ($new === []) {
+                        throw new \DomainException('Leave at least one interface for the active whole-network rule.');
+                    }
+                    $reset = [...array_diff($old, $new), ...array_diff($new, $old)];
+                    Policy::segmentNetworks($reset);
+                }
+                return ['reload' => $after['enabled'], 'resetSegments' => $reset, 'settings' => $after];
+            });
+            return [];
+        }), true, true);
+    }
+
+    private function validateTransitInterfaces(array $tailscale, array $interfaces, array $strict): void
+    {
+        if (array_diff($tailscale, $interfaces) || array_intersect($tailscale, $strict) ||
+            array_filter($tailscale, static fn (string $interface): bool => !Policy::tailnetInterface($interface))) {
+            throw new \DomainException('Choose a dedicated interface enabled in Network for Tailscale traffic.');
+        }
+    }
+
+    private function validateDashboardBinding(string $hostname, string $bind): void
+    {
+        if (!in_array($bind, ['lan', 'tailnet'], true)) {
+            throw new \DomainException('Choose the home or Tailscale address for the dashboard.');
+        }
+        if (!Resolver::validHostname($hostname)) {
+            throw new \DomainException('Enter blankvpn.local or a valid dashboard hostname under home.arpa.');
+        }
     }
 
     public function assignAction()
@@ -722,6 +850,14 @@ class ServiceController extends ApiControllerBase
             $this->flag('auto'),
             array_column(ProxyRuntime::routes(new BlankVpn()), 'node')
         )), true, true, true);
+    }
+
+    public function setSubscriptionAutoAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            ProxyCatalog::setAutoRefresh($this->input('id', 64), $this->flag('auto'));
+            return [];
+        }), true, true);
     }
 
     public function refreshSubscriptionAction()

@@ -127,6 +127,11 @@ namespace {
         'owned' => true, 'gateway' => 'VPN', 'interface' => 'wg0', 'logicalInterface' => 'opt1',
         'dnsPort' => 46651
     ]];
+    $probe = Policy::marker('probe', 'jp' . Policy::PROBE_IP);
+    $loaded = [$probe => ['action' => 'pass', 'source' => '10.64.0.9', 'gateway' => 'wg0']];
+    checkRouting(!Firewall::probePathInstalled($profiles['jp'], $loaded), 'A manual exit test requires a fallback guard.');
+    $loaded[$probe . '_block'] = ['action' => 'block', 'source' => '10.64.0.9'];
+    checkRouting(Firewall::probePathInstalled($profiles['jp'], $loaded), 'A protected source may test its configured exit.');
     $directives = SmartRouting::dnsDirectives($services, $profiles);
     checkRouting(in_array('ipset=/netflix.com/' . $table, $directives, true), 'Learn from apex and wildcard DNS.');
     checkRouting(in_array('server=/nflxvideo.net/10.64.0.1@10.64.0.9', $directives, true), 'Send matched DNS through the chosen tunnel source.');

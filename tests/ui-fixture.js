@@ -3,13 +3,16 @@ const reply = {
     dashboard: {
         devices: [{ipv4: '10.0.0.20', ipv4Addresses: ['10.0.0.20', '10.0.0.21'], ipv6: ['fd00::20'], mac:'02:00:00:00:00:20', interface:'lan', interfaceName:'LAN', name:'<b>Device</b>', lastSeen:'2026-11-12T13:30:00Z', stable:true}],
         profiles: [{id:'vpn1', name:'Canada', relay:'ca-test-wg-001', interface:'wg1', dns:['10.64.0.1'], latestHandshake:1794490200, status:'Recent handshake', receivedBytes:4096, sentBytes:2048}],
-        assignments: [],
+        assignments: [{id:'device1',ip:'10.0.0.20',mac:'02:00:00:00:00:20',interface:'lan',
+            label:'<b>Device rule</b>',mode:'disabled',profile:'',kind:'lan'}],
         services: [],
         canManageCores: true,
         mullvadSignedIn: false,
         proxyCores: {mihomo:true,tun2socks:true,xray:true,"sing-box":true},
         servicePresets: {Netflix:['netflix.com','nflxvideo.net']},
-        settings: {dashboardBind:'lan',dashboardAddresses:{lan:'10.0.0.1',tailnet:'100.101.102.103'},enabled:true, interfaces:['lan'], availableInterfaces:[{id:'lan', name:'LAN'}], strictInterfaces:[], localNetworks:[], hostname:'opnsense.home.arpa'},
+        settings: {dashboardBind:'lan',dashboardAddresses:{lan:'10.0.0.1',tailnet:'100.101.102.103'},enabled:true, interfaces:['lan','opt2'], availableInterfaces:[{id:'opt1', name:'VLAN 2', device:'vlan02'},
+            {id:'opt2', name:'LAN 6', device:'igc5'}, {id:'lan', name:'LAN 1', device:'igc0'}],
+            tailscaleInterfaces:['opt2'], tailscaleInstalled:true, tailscaleExitAdvertised:true, strictInterfaces:[], localNetworks:[], hostname:'opnsense.home.arpa'},
         warnings: []
     },
     relays: {relays:[{id:'ca-test-wg-001',country:'Canada',city:'Test',hostname:'ca-test-wg-001',active:true},{id:'ca-test-wg-002',country:'Canada',city:'Test',hostname:'ca-test-wg-002',active:false}], stale:false, fetchedAt:1794490200},
@@ -22,6 +25,8 @@ const reply = {
     proxyCatalog: {nodes:[{id:'proxy-1', name:'Example proxy', host:'192.0.2.9', port:1080, core:'mihomo',
         protocol:'socks5', legacy:true, sources:['feed-1']}], feeds:[{id:'feed-1', name:'Test feed', count:1, auto:true, usage:{upload:1024,download:1024,total:1048576,expire:1798761600}}]},
     importProxies: {ok:true, imported:1, skipped:0},
+    testRelay: {ok:true, replied:true, milliseconds:12.345},
+    testExit: {ok:true, reachable:true, milliseconds:45.2},
     refreshRelays: {ok:true, relays:[{id:'ca-test-wg-003',country:'Canada',city:'Test',hostname:'ca-test-wg-003',active:true}], stale:true, error:'Provider unavailable'}
 };
 window.confirm = () => true;
@@ -30,14 +35,26 @@ window.jQuery.ajax = async (request) => {
     const action = request.url.split('/')[4];
     const data = request.data ? JSON.parse(request.data) : null;
     requests.push({action, method:request.method, data});
-    if (action === 'account') reply.dashboard.mullvadSignedIn = true;
-    if (action === 'logoutMullvad') reply.dashboard.mullvadSignedIn = false;
+    if (action === 'account') {
+        reply.dashboard.mullvadSignedIn = true;
+        reply.dashboard.mullvadLoginSaved = data.saveLogin;
+        return structuredClone({...reply.account, saved:data.saveLogin});
+    }
+    if (action === 'restoreMullvad') {
+        reply.dashboard.mullvadSignedIn = true;
+        return structuredClone({...reply.account, saved:true});
+    }
+    if (action === 'logoutMullvad') {
+        reply.dashboard.mullvadSignedIn = false;
+        reply.dashboard.mullvadLoginSaved = false;
+    }
     if (action === 'saveService') {
         reply.dashboard.services = [{id:'list1', name:data.name, profile:data.profile, domains:data.domains.split(/[,\s]+/)}];
     }
-    if (action === 'settings') {
+    if (action === 'settings' || action === 'tailscaleSettings') {
         Object.assign(reply.dashboard.settings, data);
     }
+    if (action === 'setSubscriptionAuto') reply.proxyCatalog.feeds[0].auto = data.auto;
     return structuredClone(reply[action] || {ok:true});
 };
 
@@ -47,9 +64,9 @@ const assert = (value, message) => { if (!value) throw Error(message); };
 document.addEventListener('DOMContentLoaded', async () => {
   try {
     await wait();
-    assert(bv('device-list').textContent.includes('<b>Device</b>'), 'device name should remain literal text');
+    assert(bv('device-list').textContent.includes('<b>Device rule</b>'), 'device name should remain literal text');
     assert(!bv('device-list').querySelector('b'), 'device name injected HTML');
-    assert(bv('device-list').textContent.includes('10.0.0.21'), 'additional IPv4 omitted');
+    assert(!bv('device-list').textContent.includes('10.0.0.21'), 'automatically observed device leaked into the rules table');
     bv('appearance').value = 'night';
     bv('appearance').dispatchEvent(new Event('change'));
     assert(getComputedStyle(document.getElementById('blankvpn')).colorScheme === 'dark', 'night theme did not apply');
@@ -59,10 +76,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(!bv('tunnels').hidden && !bv('login-form').hidden && bv('register-form').hidden, 'login is not the starting page');
     assert(!requests.some(x => x.action === 'relays'), 'server list loaded before sign-in');
     assert(getComputedStyle(bv('appearance')).backgroundImage === 'none', 'host select decoration was not suppressed');
-    document.querySelector('[data-bv-section="devices"]').click();
+    document.querySelector('[data-bv-section="network"]').click();
+    const ports = bv('managed').querySelectorAll('input');
+    assert(ports.length === 3 && ports[0].value === 'lan' && ports[0].parentElement.textContent.includes('igc0') &&
+        bv('managed').textContent.includes('vlan02'), 'Ethernet ports and VLANs should be listed with the main port first');
     bv('device-list').querySelector('button').click();
-    assert(bv('ip').value === '10.0.0.20', 'assignment address not populated');
-    assert(bv('identity').textContent.includes('reservation was observed'), 'reservation not shown');
+    assert(bv('ip').value === '10.0.0.20' && bv('interface').value === 'lan', 'saved rule did not populate');
+    bv('mode').value = 'full';
     bv('profile').value = 'vpn1';
     bv('profile').dispatchEvent(new Event('change'));
     bv('assign-form').requestSubmit(bv('assign-form').querySelector('button[type=submit]'));
@@ -83,14 +103,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelector('[data-bv-section="vpns"]').click();
     assert(!bv('tunnels').hidden && bv('register-form').hidden, 'VPN login did not open');
     bv('account').value = '1234567890123456';
+    bv('save-login').checked = true;
     bv('inspect-account').click();
     await wait();
     assert(bv('account-status').textContent.includes('1 of 5') && bv('login-form').hidden &&
         !bv('register-form').hidden, 'successful sign-in did not switch to server selection');
+    assert(requests.some(x => x.action === 'account' && x.data.saveLogin === true) &&
+        bv('account-status').textContent.includes('Login saved'), 'saved login did not round-trip');
+    reply.dashboard.mullvadSignedIn = false;
+    bv('refresh').click();
+    await wait();
+    assert(requests.some(x => x.action === 'restoreMullvad' && !Object.hasOwn(x.data, 'account')) &&
+        !bv('register-form').hidden, 'saved login did not restore the server picker');
     assert(bv('relay').options.length === 3 && bv('relay').options[2].disabled, 'server availability not enforced');
     bv('relay').value = 'ca-test-wg-001';
     bv('relay').dispatchEvent(new Event('change'));
     assert(bv('relay-choice').textContent.includes('Canada') && !bv('register').disabled, 'relay selection did not update');
+    bv('test-relay').click();
+    await wait();
+    assert(bv('relay-test').textContent.includes('12.345 ms') &&
+        requests.some(x => x.action === 'testRelay' && x.data.relay === 'ca-test-wg-001'), 'per-relay ping missing');
+    bv('profile-list').querySelector('button').click();
+    await wait();
+    assert(bv('vpn-test').textContent.includes('45.2 ms'), 'exit HTTPS test missing');
     bv('register-form').requestSubmit(bv('register-form').querySelector('button[type=submit]'));
     await wait();
     assert(requests.some(x => x.action === 'register' && x.data.relay === 'ca-test-wg-001' && !Object.hasOwn(x.data, 'account')), 'registration payload failed');
@@ -143,7 +178,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'saveService' && x.data.id === 'list1' && x.data.profile === 'vpn1' &&
         x.data.domains.includes('nflxvideo.net')), 'saved list could not be bound to an exit');
     bv('use-lan').click();
-    assert(bv('smart-interfaces').value === 'lan' && bv('managed').value === 'lan', 'LAN setup did not prefill');
+    assert(bv('interface-rules').querySelector('[data-interface="lan"] select').value === 'smart' &&
+        bv('managed').querySelector('[value="lan"]').checked, 'main Ethernet Multi-Path shortcut did not prefill');
     document.querySelector('[data-bv-section="proxies"]').click();
     await wait();
     bv('core-manager').open = true;
@@ -156,6 +192,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('proxy-list').textContent.includes('Example proxy'), 'proxy catalog not displayed');
     assert(bv('subscription-list').textContent.includes('Test feed'), 'proxy subscription not displayed');
     assert(bv('subscription-list').textContent.includes('2.0 KiB used / 1.0 MiB'), 'subscription quota not displayed');
+    assert(bv('subscription-auto').checked, 'auto-refresh should default on for new subscriptions');
+    bv('subscription-list').querySelectorAll('button')[1].click();
+    await wait();
+    assert(requests.some(x => x.action === 'setSubscriptionAuto' && x.data.id === 'feed-1' && x.data.auto === false),
+        'existing subscription refresh schedule did not update');
     bv('manual-name').value = 'Manual example';
     bv('manual-host').value = '192.0.2.8';
     bv('manual-port').value = '1080';
@@ -169,15 +210,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('proxy-import').requestSubmit(bv('proxy-import').querySelector('button'));
     await wait();
     assert(requests.some(x => x.action === 'importProxies') && bv('proxy-body').value === '', 'proxy import was not submitted and cleared');
-    document.querySelector('[data-bv-section="devices"]').click();
-    bv('advanced').open = true;
+    document.querySelector('[data-bv-section="tailscale"]').click();
+    assert(!bv('tailscale-page').hidden && bv('tailscale-status').textContent.includes('Exit node advertised') &&
+        !bv('native-tailscale').hidden, 'Tailscale page or native status missing');
+    assert(bv('dashboard-link').href === 'https://opnsense.home.arpa/ui/blankvpn/index',
+        'standalone dashboard address missing');
     bv('dashboard-bind').value = 'tailnet';
-    bv('dashboard-bind').dispatchEvent(new Event('change'));
+    bv('dashboard-bind').dispatchEvent(new Event('input', {bubbles:true}));
     assert(bv('bind-address').textContent.includes('100.101.102.103'), 'Tailscale dashboard address not displayed');
+    bv('tailscale-form').requestSubmit(bv('tailscale-form').querySelector('button[type=submit]'));
+    await wait();
+    assert(requests.some(x => x.action === 'tailscaleSettings' && x.data.dashboardBind === 'tailnet' &&
+        x.data.tailscaleInterfaces.includes('opt2') && !Object.hasOwn(x.data, 'interfaces')), 'Tailscale save was not scoped');
+    bv('add-tailnet-device').click();
+    assert(!bv('assignment').hidden && bv('device-kind').value === 'tailnet' &&
+        bv('interface').value === 'opt2', 'Tailscale device rule did not use the selected link');
+    bv('close-assignment').click();
     bv('settings-form').requestSubmit(bv('settings-form').querySelector('button[type=submit]'));
     await wait();
-    assert(requests.some(x => x.action === 'settings' && x.data.interfaces[0] === 'lan' &&
-      x.data.smartInterfaces[0] === 'lan' && x.data.dashboardBind === 'tailnet'), 'routing settings did not serialize');
+    assert(requests.some(x => x.action === 'settings' && x.data.interfaces.includes('lan') &&
+      x.data.smartInterfaces.includes('lan') && !Object.hasOwn(x.data, 'dashboardBind')), 'network save was not scoped');
     bv('coverage').value = 'network';
     bv('network-mode').value = 'full';
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
@@ -196,7 +248,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('relay').options[1].value === 'ca-test-wg-003', 'cached relay lost after refresh error');
     assert(bv('relay-status').textContent.includes('Provider unavailable'), 'stale catalog warning omitted');
     assert(document.documentElement.scrollWidth <= window.innerWidth, 'document has horizontal overflow');
-    document.querySelector('[data-bv-section="devices"]').click();
+    document.querySelector('[data-bv-section="network"]').click();
     const expected = window.innerWidth < 768 ? 'block' : 'table';
     assert(getComputedStyle(bv('device-list').closest('table')).display === expected, 'incorrect device layout for viewport');
     reply.dashboard.canManage = false;

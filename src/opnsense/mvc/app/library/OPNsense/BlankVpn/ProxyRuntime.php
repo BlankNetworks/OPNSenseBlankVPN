@@ -238,7 +238,9 @@ final class ProxyRuntime
             CURLOPT_CONNECTTIMEOUT => 3, CURLOPT_TIMEOUT => 4,
             CURLOPT_WRITEFUNCTION => static fn ($handle, string $body) => strlen($body)
         ]);
-        return ['reachable' => curl_exec($curl) !== false && curl_getinfo($curl, CURLINFO_RESPONSE_CODE) === 200];
+        $reachable = curl_exec($curl) !== false && curl_getinfo($curl, CURLINFO_RESPONSE_CODE) === 200;
+        return ['reachable' => $reachable,
+            'milliseconds' => $reachable ? round(curl_getinfo($curl, CURLINFO_TOTAL_TIME) * 1000, 1) : null];
     }
 
     private static function start(array $route, array $node): void

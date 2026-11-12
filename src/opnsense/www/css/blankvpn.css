@@ -366,3 +366,69 @@
         font-weight: 600;
     }
 }
+
+.blankvpn .bv-coverage-choice {
+    max-width: 26rem;
+    margin: 1rem 0;
+}
+
+.blankvpn .bv-interface-group {
+    margin: .9rem 0;
+    min-width: 0;
+}
+
+.blankvpn .bv-interface-group legend {
+    margin: 0 0 .4rem;
+    padding: 0;
+    border: 0;
+    color: var(--bv-ink);
+    font: inherit;
+    font-weight: 630;
+}
+
+.blankvpn .bv-interface-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+    gap: .45rem;
+}
+
+.blankvpn .bv-interface-list label {
+    display: flex;
+    align-items: center;
+    gap: .55rem;
+    margin: 0;
+    padding: .55rem .65rem;
+    border: 1px solid var(--bv-line);
+    border-radius: .45rem;
+    background: var(--bv-surface);
+}
+
+.blankvpn .bv-interface-list label:has(:checked) {
+    background: var(--bv-alert);
+    border-color: var(--bv-accent);
+}
+
+.blankvpn .bv-interface-list input {
+    margin: 0;
+    accent-color: var(--bv-accent);
+}
+
+.blankvpn .bv-interface-list small {
+    display: block;
+    color: var(--bv-muted);
+}
+
+.blankvpn .bv-interface-rules {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+    gap: .65rem;
+    margin: .85rem 0;
+}
+
+.blankvpn .bv-save-login {
+    margin-top: .65rem;
+}
+
+.blankvpn #bv-dashboard-link {
+    overflow-wrap: anywhere;
+}

@@ -85,6 +85,56 @@ class Mullvad
         return $auth + ['account' => $details];
     }
 
+    public function hasSavedAccount(string $user): bool
+    {
+        return is_file($this->savedLoginPath($user));
+    }
+
+    public function savedAccount(string $user): ?string
+    {
+        $path = $this->savedLoginPath($user);
+        if (!file_exists($path) && !is_link($path)) {
+            return null;
+        }
+        $mode = @fileperms($path);
+        $dirMode = @fileperms($this->dataDirectory);
+        if (!is_file($path) || is_link($path) || is_link($this->dataDirectory) || $mode === false || $dirMode === false ||
+            ($mode & 0077) !== 0 || ($dirMode & 0077) !== 0) {
+            throw new RuntimeException('The saved Mullvad login has unsafe permissions.');
+        }
+        $account = $this->readJson($path)['account'] ?? null;
+        if (!is_string($account) || !preg_match('/^[0-9]{16}$/D', $account)) {
+            throw new RuntimeException('The saved Mullvad login could not be read. Sign in again.');
+        }
+        return $account;
+    }
+
+    public function saveAccount(string $user, ?string $account): void
+    {
+        $path = $this->savedLoginPath($user);
+        if ($account === null) {
+            if ((file_exists($path) || is_link($path)) && !@unlink($path)) {
+                throw new RuntimeException('The saved Mullvad login could not be removed.');
+            }
+            return;
+        }
+        $account = self::accountNumber($account);
+        $lock = $this->lock('mullvad-saved-login');
+        try {
+            if (!flock($lock, LOCK_EX | LOCK_NB)) {
+                throw new RuntimeException('Another Mullvad login is being saved. Try again.');
+            }
+            $this->writeJson($path, ['account' => $account]);
+        } finally {
+            fclose($lock);
+        }
+    }
+
+    private function savedLoginPath(string $user): string
+    {
+        return $this->dataDirectory . '/mullvad-login-' . hash('sha256', $user) . '.json';
+    }
+
     public function verifyBinding(string $account, string $binding): void
     {
         $this->verifyBindingWithToken($this->token($account), $binding);
@@ -298,12 +348,18 @@ class Mullvad
         return $this->authorization($account)['token'];
     }
 
-    private function authorization(string $account): array
+    private static function accountNumber(string $account): string
     {
         $account = preg_replace('/[ \t\r\n-]+/', '', $account);
         if (!preg_match('/^[0-9]{16}$/D', $account)) {
             throw new InvalidArgumentException('Enter the 16-digit Mullvad account number.');
         }
+        return $account;
+    }
+
+    private function authorization(string $account): array
+    {
+        $account = self::accountNumber($account);
         $response = $this->request(self::TOKEN, null, ['account_number' => $account]);
         $token = $response['access_token'] ?? null;
         if (!is_string($token) || !preg_match('/^[A-Za-z0-9._~+\/=\-]{10,2048}$/D', $token)) {

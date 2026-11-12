@@ -17,8 +17,9 @@
     <nav class="bv-navigation" aria-label="Blank VPN pages">
         <button type="button" data-bv-section="vpns" aria-controls="bv-tunnels" aria-pressed="true">VPN Login</button>
         <button type="button" data-bv-section="proxies" aria-controls="bv-proxies" aria-pressed="false" data-manage-only>Proxies</button>
-        <button type="button" data-bv-section="devices" aria-controls="bv-device-page" aria-pressed="false">Devices</button>
+        <button type="button" data-bv-section="network" aria-controls="bv-network-page" aria-pressed="false">Network</button>
         <button type="button" data-bv-section="smart" aria-controls="bv-smart-page" aria-pressed="false">Multi-Path Settings</button>
+        <button type="button" data-bv-section="tailscale" aria-controls="bv-tailscale-page" aria-pressed="false">Tailscale</button>
     </nav>
 
     <div id="bv-message" class="alert" role="status" aria-live="polite" hidden></div>
@@ -28,7 +29,10 @@
         <section class="bv-panel" data-manage-only>
             <div class="bv-heading">
                 <h2 id="bv-vpn-title">Mullvad VPN</h2>
-                <button id="bv-sign-out" type="button" class="btn btn-default" hidden>Sign out</button>
+                <div class="bv-actions">
+                    <button id="bv-restore-login" type="button" class="btn btn-default" hidden>Use saved login</button>
+                    <button id="bv-sign-out" type="button" class="btn btn-default" hidden>Sign out</button>
+                </div>
             </div>
             <p id="bv-login-http" class="bv-callout" hidden>
                 Mullvad sign-in requires an HTTPS connection to OPNsense.
@@ -42,6 +46,7 @@
                         maxlength="23" placeholder="16-digit account number" required>
                     <button id="bv-inspect-account" type="submit" class="btn btn-primary">Sign in</button>
                 </div>
+                <label class="bv-check bv-save-login"><input id="bv-save-login" type="checkbox"> Save login on this router</label>
             </form>
             <div id="bv-account-status" class="bv-account-status" role="status" aria-live="polite"></div>
 
@@ -56,7 +61,11 @@
                     <label>City <select id="bv-city" class="form-control"><option value="">All cities</option></select></label>
                     <label>Server <select id="bv-relay" class="form-control" required><option value="">Select a server</option></select></label>
                 </div>
-                <p id="bv-relay-choice" class="text-muted" aria-live="polite"></p>
+                <div class="bv-actions">
+                    <p id="bv-relay-choice" class="text-muted" aria-live="polite"></p>
+                    <button id="bv-test-relay" type="button" class="btn btn-default" disabled>Ping server</button>
+                </div>
+                <p id="bv-relay-test" class="text-muted" role="status"></p>
                 <div class="bv-fields">
                     <label>Exit name <input id="bv-register-name" type="text" class="form-control" maxlength="64"
                         placeholder="Defaults to server name"></label>
@@ -72,6 +81,7 @@
         </section>
         <section class="bv-panel" aria-label="Saved VPN exits">
             <h2>VPN exits</h2>
+            <p id="bv-vpn-test" class="text-muted" role="status"></p>
                 <div class="bv-scroll">
                 <table class="table bv-table bv-profiles">
                     <thead>
@@ -130,7 +140,7 @@
                 <label>HTTPS subscription URL
                     <input id="bv-subscription-url" class="form-control" type="password" maxlength="2048" autocomplete="off" required>
                 </label>
-                <label class="bv-check"><input type="checkbox" id="bv-subscription-auto"> Refresh every six hours</label>
+                <label class="bv-check"><input type="checkbox" id="bv-subscription-auto" checked> Refresh automatically every six hours</label>
                 <button type="submit" class="btn btn-primary">Add subscription</button>
             </form>
         </div>
@@ -182,32 +192,31 @@
                 <tbody id="bv-proxy-list"></tbody>
             </table>
         </div>
-        <p class="text-muted">Enable an individual server as an exit. It then appears in the device and Smart Routing selectors.</p>
+        <p id="bv-proxy-test" class="text-muted" role="status"></p>
+        <p class="text-muted">Enable a server as an exit to test its connection or select it in a routing rule.</p>
     </section>
 
-    <div id="bv-device-page" data-bv-panel="devices" hidden>
+    <div id="bv-network-page" data-bv-panel="network" hidden>
         <section class="bv-panel" aria-labelledby="bv-settings-title" data-manage-only>
             <h2 id="bv-settings-title">Routing coverage</h2>
             <form id="bv-settings-form">
-                <div class="bv-fields">
-                    <label>Coverage
-                        <select id="bv-coverage" class="form-control">
-                            <option value="device">Device-specific routing</option>
-                            <option value="network">Whole-network coverage</option>
-                        </select>
-                    </label>
-                    <label>Managed LAN / VLAN interfaces
-                        <input id="bv-managed" type="text" class="form-control" list="bv-interface-list"
-                            placeholder="lan, opt1" autocomplete="off">
-                    </label>
-                </div>
+                <label class="bv-coverage-choice">Who should use these routing rules?
+                    <select id="bv-coverage" class="form-control">
+                        <option value="device">Only devices I choose</option>
+                        <option value="network">Everyone on the selected interfaces</option>
+                    </select>
+                </label>
+                <fieldset class="bv-interface-group">
+                    <legend>Interface</legend>
+                    <div id="bv-managed" class="bv-interface-list"></div>
+                </fieldset>
                 <div id="bv-network-fields" class="bv-fields" hidden>
-                    <label>Network routing mode
+                    <label>How should their internet traffic be routed?
                         <select id="bv-network-mode" class="form-control">
-                            <option value="full">Full Tunneling</option>
-                            <option value="multi">Multi-Path</option>
-                            <option value="blocked">Blocked</option>
-                            <option value="disabled">Off</option>
+                            <option value="full">Use one VPN or proxy</option>
+                            <option value="multi">Use domain lists (Multi-Path)</option>
+                            <option value="blocked">Block internet</option>
+                            <option value="disabled">Use regular internet</option>
                         </select>
                     </label>
                     <label id="bv-network-profile-field" hidden>Exit
@@ -218,37 +227,18 @@
                 <label class="bv-check"><input type="checkbox" id="bv-enabled"> Enable Blank VPN routing</label>
 
                 <details class="bv-advanced" id="bv-advanced">
-                    <summary>Advanced routing settings</summary>
-                    <div class="bv-fields">
-                        <label>Multi-Path interfaces
-                            <input id="bv-smart-interfaces" type="text" class="form-control" placeholder="lan" autocomplete="off">
-                        </label>
-                        <label>Strict VPN interfaces
-                            <input id="bv-strict" type="text" class="form-control" placeholder="opt1" autocomplete="off">
-                        </label>
-                        <label>Tailscale transit interfaces
-                            <input id="bv-tailnet-interfaces" type="text" class="form-control" placeholder="opt2" autocomplete="off">
-                        </label>
-                        <label>Approved local networks
-                            <input id="bv-local" type="text" class="form-control" placeholder="IPv4 or IPv6 CIDR ranges" autocomplete="off">
-                        </label>
-                        <label>Dashboard hostname
-                            <input id="bv-hostname" type="text" class="form-control" placeholder="blankvpn.home.arpa"
-                                autocomplete="off" spellcheck="false" maxlength="120">
-                        </label>
-                        <label>Dashboard IPv4 address
-                            <select id="bv-dashboard-bind" class="form-control">
-                                <option value="lan">Router LAN IPv4</option>
-                                <option value="tailnet">Router Tailscale IPv4</option>
-                            </select>
+                    <summary>More routing options</summary>
+                    <div id="bv-device-options">
+                        <div id="bv-interface-rules" class="bv-interface-rules"></div>
+                        <label class="bv-check">
+                            <input id="bv-smart-assigned" type="checkbox">
+                            Use domain lists only for devices set to Multi-Path
                         </label>
                     </div>
-                    <label class="bv-check">
-                        <input id="bv-smart-assigned" type="checkbox">
-                        Apply Multi-Path only to assigned devices
+                    <label>Additional networks that should stay local
+                        <input id="bv-local" type="text" class="form-control" placeholder="Example: 192.168.3.0/24"
+                            autocomplete="off">
                     </label>
-                    <p id="bv-bind-address" class="text-muted" aria-live="polite"></p>
-                    <p class="text-muted">Use comma-separated interface IDs. Strict VPN interfaces block unassigned devices in device-specific mode.</p>
                 </details>
                 <button type="submit" class="btn btn-primary">Save routing settings</button>
             </form>
@@ -256,12 +246,12 @@
         <section class="bv-panel" aria-labelledby="bv-devices-title">
             <div class="bv-heading">
                 <div>
-                    <h2 id="bv-devices-title">Observed devices</h2>
-                    <p id="bv-observed" class="text-muted">Loading observations…</p>
+                    <h2 id="bv-devices-title">Device rules</h2>
+                    <p id="bv-observed" class="text-muted">Loading saved rules…</p>
                 </div>
                 <div class="bv-actions">
-                    <button id="bv-refresh" type="button" class="btn btn-default">Refresh devices</button>
-                    <button id="bv-add-device" data-manage-only type="button" class="btn btn-primary">Assign an IP address</button>
+                    <button id="bv-refresh" type="button" class="btn btn-default">Refresh</button>
+                    <button id="bv-add-device" data-manage-only type="button" class="btn btn-primary">Add device rule</button>
                 </div>
             </div>
             <div class="bv-scroll">
@@ -270,9 +260,9 @@
                         <tr role="row">
                             <th scope="col" role="columnheader">Device</th>
                             <th scope="col" role="columnheader">Addresses</th>
-                            <th scope="col" role="columnheader">Network</th>
+                            <th scope="col" role="columnheader">Interface</th>
                             <th scope="col" role="columnheader">Assignment</th>
-                            <th scope="col" role="columnheader">Observed status</th>
+                            <th scope="col" role="columnheader">Status</th>
                             <th scope="col" role="columnheader"><span class="sr-only">Actions</span></th>
                         </tr>
                     </thead>
@@ -297,8 +287,7 @@
                     </label>
                     <label>IPv4 address <input id="bv-ip" type="text" class="form-control" autocomplete="off" spellcheck="false" required></label>
                     <label>Interface
-                        <input id="bv-interface" type="text" class="form-control" list="bv-interface-list" autocomplete="off" required>
-                        <datalist id="bv-interface-list"></datalist>
+                        <select id="bv-interface" class="form-control" required></select>
                     </label>
                     <label id="bv-mac-field">MAC address <input id="bv-mac" type="text" class="form-control" autocomplete="off" spellcheck="false" required></label>
                     <label>IPv6 address <input id="bv-ipv6" type="text" class="form-control" autocomplete="off" spellcheck="false"></label>
@@ -371,7 +360,7 @@
                 <h2 id="bv-smart-title">Multi-Path Settings</h2>
                 <p id="bv-smart-status" class="text-muted"></p>
             </div>
-            <button id="bv-use-lan" data-manage-only type="button" class="btn btn-default">Set up routing on LAN</button>
+            <button id="bv-use-lan" data-manage-only type="button" class="btn btn-default">Set up Multi-Path on the main Ethernet port</button>
         </div>
         <form id="bv-service-form" class="bv-list-editor" data-manage-only>
             <div class="bv-fields">
@@ -417,4 +406,49 @@
             </table>
         </div>
     </section>
+    <div id="bv-tailscale-page" data-bv-panel="tailscale" hidden>
+        <section class="bv-panel" aria-labelledby="bv-tailscale-title">
+            <h2 id="bv-tailscale-title">Tailscale</h2>
+            <p id="bv-tailscale-status" class="text-muted" role="status"></p>
+            <div class="bv-actions">
+                <a id="bv-native-tailscale" class="btn btn-default" href="/ui/tailscale/settings" hidden>Open OPNsense Tailscale settings</a>
+                <a href="https://tailscale.com/docs/install/opnsense" target="_blank" rel="noopener noreferrer">Tailscale setup guide</a>
+            </div>
+            <p>To reach your home network while away, advertise the home subnets in OPNsense Tailscale settings and approve the routes in Tailscale. Enable and approve the exit node there to send internet traffic through home.</p>
+        </section>
+        <section class="bv-panel" aria-labelledby="bv-dashboard-title">
+            <h2 id="bv-dashboard-title">Dashboard address</h2>
+            <p><a id="bv-dashboard-link" href="https://blankvpn.home.arpa/ui/blankvpn/index">https://blankvpn.home.arpa/ui/blankvpn/index</a></p>
+            <p id="bv-address-row" hidden>Direct IP address <a id="bv-address-link"></a></p>
+            <p class="text-muted">Point this name at OPNsense in your DNS and use a WebGUI certificate that covers it.</p>
+            <form id="bv-tailscale-form" data-manage-only>
+                <div class="bv-fields">
+                    <label>Dashboard name
+                        <input id="bv-hostname" type="text" class="form-control" placeholder="blankvpn.home.arpa" autocomplete="off"
+                            spellcheck="false" maxlength="120" required>
+                    </label>
+                    <label>Use this address for the dashboard name
+                        <select id="bv-dashboard-bind" class="form-control">
+                            <option value="lan">Home Ethernet address</option>
+                            <option value="tailnet">Tailscale address</option>
+                        </select>
+                    </label>
+                </div>
+                <p id="bv-bind-address" class="text-muted" aria-live="polite"></p>
+                <details class="bv-advanced" id="bv-tailnet-routing">
+                    <summary>Route Tailscale devices through Blank VPN</summary>
+                    <p>A Linux Tailscale gateway on a dedicated Ethernet or VLAN link can forward device IPs to OPNsense. Enable that link on Network, select it below, then add a device rule using the peer’s Tailscale IPs.</p>
+                    <p class="text-muted">The built-in OPNsense exit node uses the router’s own address for forwarded traffic. Blank VPN needs the original device addresses to apply these rules.</p>
+                    <fieldset class="bv-interface-group">
+                        <legend>Interfaces carrying Tailscale device traffic</legend>
+                        <div id="bv-tailnet-interfaces" class="bv-interface-list"></div>
+                    </fieldset>
+                </details>
+                <div class="bv-actions">
+                    <button type="submit" class="btn btn-primary">Save Tailscale settings</button>
+                    <button type="button" id="bv-add-tailnet-device" class="btn btn-default" hidden>Add Tailscale device rule</button>
+                </div>
+            </form>
+        </section>
+    </div>
 </div>

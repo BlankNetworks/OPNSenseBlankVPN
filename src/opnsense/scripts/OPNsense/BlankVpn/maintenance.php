@@ -97,11 +97,7 @@ try {
                     } elseif (($profile['kind'] ?? '') === 'native') {
                         $source = $profile['address'];
                         $changed = $changed || ($old[$id]['source'] ?? '') !== $source;
-                        $pass = $loaded[$marker] ?? [];
-                        $guard = $loaded[$marker . '_block'] ?? [];
-                        $verified = $verifiedRule && ($pass['action'] ?? '') === 'pass' &&
-                            ($pass['source'] ?? '') === $source && ($guard['action'] ?? '') === 'block' &&
-                            ($guard['source'] ?? '') === $source;
+                        $verified = Firewall::probePathInstalled($profile, $loaded ?? []);
                         $probe = WireGuard::probeSource($verified ? $source : '');
                     } else {
                         $probe = WireGuard::probe($profile, $verifiedRule);
