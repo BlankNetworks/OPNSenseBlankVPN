@@ -18,15 +18,26 @@ final class Firewall
 
         $localFile = Policy::writeState('local-networks', implode("\n", Policy::localNetworks($settings)) . "\n");
         $firewall->registerTable(Policy::LOCAL_TABLE, true, $localFile);
-        $profiles = Policy::profiles($model);
+        $profiles = Policy::routes($model);
         $health = self::health();
         $diagnostics = new Diagnostics();
         $interfaces = iterator_to_array($firewall->getInterfaceMapping());
 
+        $proxyGateways = [];
         foreach ($profiles as &$profile) {
+            if (($profile['kind'] ?? '') === 'proxy') {
+                $profile['owned'] = ProxyRuntime::ready($profile);
+                if ($profile['owned']) {
+                    $proxyGateways[$profile['gateway']] = [[
+                        'ipprotocol' => 'inet', 'int' => $profile['interface'], 'gwip' => $profile['peer'], 'weight' => 1
+                    ]];
+                }
+                continue;
+            }
             $profile['owned'] = WireGuard::check($profile)['ok'];
             self::registerProfile($firewall, $profile);
         }
+        $firewall->setGatewayGroups($proxyGateways);
         unset($profile);
 
         self::registerAssignments($firewall, $settings, $interfaces, Policy::assignments($model), $profiles, $health, $diagnostics);
@@ -99,7 +110,7 @@ final class Firewall
             if ($selected !== null) {
                 $firewall->registerFilterRule(Policy::PRIORITY + 10, [
                     'gateway' => $selected['gateway'], 'skip_rules_gw_down' => true
-                ] + $pass);
+                ] + self::stateOptions($selected) + $pass);
                 self::registerClientNat($firewall, $selected, $ip, 'any', 60);
                 self::redirectDns($firewall, $interface, $ip, (int)$selected['dnsPort'], $id, 58);
             } elseif ($reserved && $row['failure'] === 'wan' && $primary !== []) {
@@ -167,7 +178,7 @@ final class Firewall
                         'type' => 'pass', 'ipprotocol' => 'inet', 'gateway' => $profile['gateway'],
                         'skip_rules_gw_down' => true, 'statetype' => 'keep',
                         'label' => Policy::marker('service', $id)
-                    ] + $base);
+                    ] + self::stateOptions($profile) + $base);
                     self::registerClientNat($firewall, $profile, $interface, $table, 61);
                 }
                 // A learned destination never takes the native route when its selected tunnel is unavailable.
@@ -180,6 +191,11 @@ final class Firewall
         }
     }
 
+    private static function stateOptions(array $profile): array
+    {
+        return ($profile['kind'] ?? '') === 'proxy' ? ['state-policy' => 'floating'] : [];
+    }
+
     private static function registerClientNat(
         Plugin $firewall,
         array $profile,
@@ -187,6 +203,9 @@ final class Firewall
         string $destination,
         int $priority
     ): void {
+        if (($profile['kind'] ?? '') === 'proxy') {
+            return;
+        }
         $firewall->registerSourceNatRule($priority, [
             'interface' => $profile['logicalInterface'], 'ipprotocol' => 'inet',
             'from' => $source, 'to' => $destination, 'target' => explode('/', $profile['address'])[0],
@@ -227,7 +246,8 @@ final class Firewall
         bool $default = false,
         string $family = 'inet'
     ): void {
-        if (!self::dnsRedirectionAvailable() || $port < Resolver::LOCAL_PORT || $port > SmartRouting::PORT) {
+        if (!self::dnsRedirectionAvailable() || $port < Resolver::LOCAL_PORT ||
+            $port >= ProxyRuntime::FIRST_DNS_PORT + ProxyRuntime::SLOTS) {
             return;
         }
         $tag = Policy::marker('dns', $id . ':' . $family);
@@ -252,6 +272,14 @@ final class Firewall
 
     private static function gatewayAvailable(Plugin $firewall, array $profile): bool
     {
+        if (($profile['kind'] ?? '') === 'proxy') {
+            if (empty($profile['owned']) || !preg_match('/^tun20[0-7]$/D', $profile['interface'] ?? '')) {
+                return false;
+            }
+            $gateway = @$firewall->getGateway($profile['gateway']) ?? [];
+            return ($gateway['proto'] ?? null) === 'inet' && ($gateway['type'] ?? null) === 'group' &&
+                str_contains($gateway['logic'] ?? '', $profile['interface'] . ' ' . $profile['peer']);
+        }
         if (
             empty($profile['owned']) || empty($profile['gateway']) || !preg_match('/^wg[0-9]+$/D', $profile['interface'] ?? '') ||
             !Policy::interfaceId($profile['logicalInterface'] ?? '')

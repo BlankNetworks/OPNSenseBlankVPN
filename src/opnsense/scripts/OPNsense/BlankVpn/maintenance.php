@@ -7,6 +7,8 @@ use OPNsense\BlankVpn\Firewall;
 use OPNsense\BlankVpn\Mullvad;
 use OPNsense\BlankVpn\Operations;
 use OPNsense\BlankVpn\Policy;
+use OPNsense\BlankVpn\ProxyCatalog;
+use OPNsense\BlankVpn\ProxyRuntime;
 use OPNsense\BlankVpn\Resolver;
 use OPNsense\BlankVpn\SmartRouting;
 use OPNsense\BlankVpn\WireGuard;
@@ -18,12 +20,16 @@ try {
             $output = Resolver::command(['/sbin/pfctl', '-sr']);
             foreach (explode("\n", $output) as $line) {
                 if (preg_match('/\blabel "(blankvpn_[a-z0-9_]+)"/', $line, $match)) {
-                    preg_match('/\broute-to\s+\(?\s*(wg[0-9]+)\b/', $line, $gateway);
+                    preg_match('/\broute-to\s+[({\s]*(wg[0-9]+|tun20[0-7])\b/', $line, $gateway);
                     preg_match('/^(?:@\d+\s+)?(pass|block|match)\b/', ltrim($line), $action);
                     $rules[$match[1]] = ['gateway' => $gateway[1] ?? null, 'action' => $action[1] ?? null];
                 }
             }
             echo json_encode((object)$rules, JSON_THROW_ON_ERROR), "\n";
+            break;
+        case 'proxies':
+            ProxyRuntime::reconcile(new BlankVpn());
+            echo "ok\n";
             break;
         case 'resolver':
             Resolver::reconcile(new BlankVpn());
@@ -51,6 +57,10 @@ try {
             Operations::exclusive(function () {
                 $model = new BlankVpn();
                 $settings = Policy::settings($model);
+                $proxyRoutes = ProxyRuntime::routes($model);
+                ProxyCatalog::refreshDue(array_column($proxyRoutes, 'node'));
+                $previousProxies = ProxyRuntime::lastStatus()['active'];
+                $runningProxies = ProxyRuntime::reconcile($model)['active'];
                 if (!$settings['enabled']) {
                     return;
                 }
@@ -68,12 +78,20 @@ try {
                 }
                 $loaded = Firewall::loadedRules();
                 $old = Firewall::health();
-                $health = [];
-                $changed = false;
-                foreach (Policy::profiles($model) as $id => $profile) {
+                $routes = Policy::routes($model);
+                $health = array_intersect_key($old, $routes);
+                $changed = $runningProxies !== $previousProxies;
+                foreach ($routes as $id => $profile) {
                     $marker = Policy::marker('probe', $id . Policy::PROBE_IP);
                     $verifiedRule = ($loaded[$marker]['gateway'] ?? null) === ($profile['interface'] ?? '');
-                    $probe = WireGuard::probe($profile, $verifiedRule);
+                    if (($profile['kind'] ?? '') === 'proxy') {
+                        if ($profile['slot'] % 4 !== (int)gmdate('i') % 4 && in_array($id, $runningProxies, true)) {
+                            continue;
+                        }
+                        $probe = ProxyRuntime::probe($profile);
+                    } else {
+                        $probe = WireGuard::probe($profile, $verifiedRule);
+                    }
                     $previous = $old[$id] ?? [];
                     $success = !empty($probe['reachable']);
                     $failures = $success ? 0 : min(2, ($previous['failures'] ?? 0) + 1);

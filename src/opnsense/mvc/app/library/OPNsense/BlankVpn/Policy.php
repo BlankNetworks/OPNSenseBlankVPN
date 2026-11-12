@@ -41,6 +41,11 @@ final class Policy
         return $profiles;
     }
 
+    public static function routes(BlankVpn $model): array
+    {
+        return self::profiles($model) + ProxyRuntime::routes($model);
+    }
+
     public static function assignments(BlankVpn $model): array
     {
         $assignments = [];

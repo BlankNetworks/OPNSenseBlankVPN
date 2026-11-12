@@ -14,7 +14,7 @@ fi
     $nodes = $config->xpath("/opnsense/OPNsense/BlankVpn");
     foreach ($nodes ?: [] as $vpn) {
         if ((string) $vpn->settings->enabled === "1" ||
-            count($vpn->xpath("profiles/profile | assignments/assignment | services/service") ?: []) !== 0) {
+            count($vpn->xpath("profiles/profile | assignments/assignment | services/service | proxyRoutes/route") ?: []) !== 0) {
             fwrite(STDERR, "Disable Blank VPN and remove its service rules, assignments, and profiles before removing the package.\n");
             exit(1);
         }

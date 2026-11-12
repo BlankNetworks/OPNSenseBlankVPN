@@ -111,9 +111,12 @@ final class Operations
 
     private static function sync(BlankVpn $model): void
     {
+        $backend = new Backend();
+        if (trim($backend->configdRun('blankvpn proxies', false, 45)) !== 'ok') {
+            throw new \RuntimeException('The Blank VPN proxy exits could not be reconciled.');
+        }
         // Load DNS destination tables before a resolver can begin filling them.
         Firewall::reload($model);
-        $backend = new Backend();
         if (trim($backend->configdRun('blankvpn resolver', false, 45)) !== 'ok') {
             throw new \RuntimeException('The Blank VPN DNS listeners could not be reconciled.');
         }

@@ -11,6 +11,9 @@ use OPNsense\BlankVpn\Firewall;
 use OPNsense\BlankVpn\Mullvad;
 use OPNsense\BlankVpn\Operations;
 use OPNsense\BlankVpn\Policy;
+use OPNsense\BlankVpn\ProxyCatalog;
+use OPNsense\BlankVpn\ProxyImport;
+use OPNsense\BlankVpn\ProxyRuntime;
 use OPNsense\BlankVpn\Resolver;
 use OPNsense\BlankVpn\SmartRouting;
 use OPNsense\BlankVpn\WireGuard;
@@ -24,6 +27,7 @@ class ServiceController extends ApiControllerBase
             $settings = Policy::settings($model);
             $settings['availableInterfaces'] = array_values(Policy::availableInterfaces());
             $profiles = Policy::profiles($model);
+            $proxyRoutes = ProxyRuntime::routes($model);
             $assignments = Policy::assignments($model);
             $services = SmartRouting::services($model);
             $diagnostics = new Diagnostics();
@@ -50,6 +54,16 @@ class ServiceController extends ApiControllerBase
                     'reachability' => time() - ($checked['checkedAt'] ?? 0) > 180 ? 'unverified or stale'
                         : (($checked['probeSucceeded'] ?? false) ? 'router probe succeeded' : 'router probe failed'),
                     'checkedAt' => $checked['checkedAt'] ?? null
+                ];
+            }
+            $proxyStatus = ProxyRuntime::lastStatus();
+            foreach ($proxyRoutes as $id => $route) {
+                $checked = $health[$id] ?? [];
+                $running = in_array($id, $proxyStatus['active'], true);
+                $profiles[$id] = array_intersect_key($route, array_flip(['id', 'name', 'node', 'kind', 'core', 'protocol', 'interface'])) + [
+                    'status' => $proxyStatus['errors'][$id] ?? ($running ? 'Local tunnel ready' : 'Proxy tunnel stopped'),
+                    'reachability' => time() - ($checked['checkedAt'] ?? 0) > 300 ? 'unverified or stale'
+                        : (($checked['probeSucceeded'] ?? false) ? 'proxy probe succeeded' : 'proxy probe failed')
                 ];
             }
             foreach ($assignments as $id => $row) {
@@ -84,6 +98,7 @@ class ServiceController extends ApiControllerBase
             $username = $this->getUserName();
             return $discovery + [
                 'profiles' => array_values($profiles),
+                'proxyCores' => ProxyRuntime::capabilities(),
                 'assignments' => array_values($assignments),
                 'settings' => $settings,
                 'services' => array_values($services),
@@ -235,7 +250,7 @@ class ServiceController extends ApiControllerBase
         return $this->respond(fn () => Operations::exclusive(function () {
             $id = $this->input('id', 64);
             Operations::change(function (BlankVpn $model) use ($id) {
-                $profile = Policy::profiles($model)[$id] ?? null;
+                $profile = Policy::routes($model)[$id] ?? null;
                 if ($profile === null) {
                     throw new \DomainException('This VPN profile no longer exists.');
                 }
@@ -245,6 +260,10 @@ class ServiceController extends ApiControllerBase
                     }
                 }
                 $this->requireUnusedByService($model, $id);
+                if (($profile['kind'] ?? '') === 'proxy') {
+                    $model->proxyRoutes->route->del($id);
+                    return ['reload' => Policy::settings($model)['enabled']];
+                }
                 WireGuard::remove($profile);
                 $model->profiles->profile->del($id);
                 return ['removed' => $profile, 'reload' => Policy::settings($model)['enabled']];
@@ -343,12 +362,12 @@ class ServiceController extends ApiControllerBase
                 if (!in_array($interface, $settings['interfaces'], true)) {
                     throw new \DomainException('Add this device’s LAN or VLAN under Routing settings before saving the policy.');
                 }
-                $profiles = Policy::profiles($model);
-                if ($profile !== '' && (!isset($profiles[$profile]) || !WireGuard::check($profiles[$profile])['ok'])) {
-                    throw new \DomainException('The selected native WireGuard profile is missing or has changed.');
+                $profiles = Policy::routes($model);
+                if ($profile !== '' && (!isset($profiles[$profile]) || !self::routeConfigured($profiles[$profile]))) {
+                    throw new \DomainException('The selected exit is missing or its configuration has changed.');
                 }
-                if ($failure === 'backup' && ($backup === $profile || !isset($profiles[$backup]) || !WireGuard::check($profiles[$backup])['ok'])) {
-                    throw new \DomainException('Choose a different, valid backup VPN profile.');
+                if ($failure === 'backup' && ($backup === $profile || !isset($profiles[$backup]) || !self::routeConfigured($profiles[$backup]))) {
+                    throw new \DomainException('Choose a different, configured backup exit.');
                 }
                 $node = null;
                 $prior = [];
@@ -432,9 +451,9 @@ class ServiceController extends ApiControllerBase
                     throw new \DomainException('Remove an existing service before adding another.');
                 }
                 SmartRouting::checkOverlap($services, $id, $domains);
-                $profile = Policy::profiles($model)[$profileId] ?? [];
-                if ($profile === [] || SmartRouting::profileDns($profile) === [] || !WireGuard::check($profile)['ok']) {
-                    throw new \DomainException('Select a working WireGuard exit with an IPv4 DNS server.');
+                $profile = Policy::routes($model)[$profileId] ?? [];
+                if ($profile === [] || !SmartRouting::canResolve($profile) || !self::routeConfigured($profile)) {
+                    throw new \DomainException('Select a configured VPN or proxy exit with DNS support.');
                 }
                 $node = $id === '' ? $model->services->service->add() : $model->services->service->getChild($id);
                 $node->name = $name;
@@ -465,6 +484,91 @@ class ServiceController extends ApiControllerBase
                 throw new \DomainException('Move Smart Routing services off this exit first.');
             }
         }
+    }
+
+    public function proxyCatalogAction()
+    {
+        return $this->respond(fn () => ProxyCatalog::publicView(), false, true);
+    }
+
+    public function importProxiesAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(
+            fn () => ProxyCatalog::import($this->input('body', ProxyImport::MAX_BYTES))
+        ), true, true, true);
+    }
+
+    public function addSubscriptionAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(fn () => ProxyCatalog::addFeed(
+            $this->input('name', 96),
+            $this->input('url', 2048),
+            $this->flag('auto'),
+            array_column(ProxyRuntime::routes(new BlankVpn()), 'node')
+        )), true, true, true);
+    }
+
+    public function refreshSubscriptionAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(fn () => ProxyCatalog::refreshFeed(
+            $this->input('id', 64),
+            array_column(ProxyRuntime::routes(new BlankVpn()), 'node')
+        )), true, true);
+    }
+
+    public function removeSubscriptionAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            ProxyCatalog::removeFeed($this->input('id', 64), array_column(ProxyRuntime::routes(new BlankVpn()), 'node'));
+            return [];
+        }), true, true);
+    }
+
+    public function removeProxyNodeAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            ProxyCatalog::removeNode($this->input('id', 64), array_column(ProxyRuntime::routes(new BlankVpn()), 'node'));
+            return [];
+        }), true, true);
+    }
+
+    public function enableProxyExitAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $id = $this->input('id', 64);
+            $node = ProxyCatalog::read()['nodes'][$id] ?? null;
+            if (!is_array($node)) {
+                throw new \DomainException('Import the proxy node before enabling its exit.');
+            }
+            ProxyRuntime::preflight($node['core']);
+            return Operations::change(function (BlankVpn $model) use ($id, $node) {
+                $routes = ProxyRuntime::routes($model);
+                $occupied = array_column($routes, 'slot');
+                foreach ($routes as $route) {
+                    if ($route['node'] === $id) {
+                        throw new \DomainException('This server already has its own exit.');
+                    }
+                }
+                $free = array_diff(range(0, ProxyRuntime::SLOTS - 1), $occupied);
+                if ($free === []) {
+                    throw new \DomainException('Remove an existing proxy exit to free a runtime slot.');
+                }
+                $route = $model->proxyRoutes->route->add();
+                $route->name = $node['name'];
+                $route->node = $id;
+                $route->core = $node['core'];
+                $route->protocol = $node['protocol'];
+                $route->slot = (string)reset($free);
+                return ['reload' => Policy::settings($model)['enabled']];
+            });
+        }), true, true);
+    }
+
+    private static function routeConfigured(array $profile): bool
+    {
+        return ($profile['kind'] ?? '') === 'proxy'
+            ? isset(ProxyCatalog::read()['nodes'][$profile['node']])
+            : WireGuard::check($profile)['ok'];
     }
 
     public function connectionsAction($ip = '')
@@ -532,7 +636,7 @@ class ServiceController extends ApiControllerBase
         }
         try {
             if ($requireHttps && !$this->request->isSecure()) {
-                throw new \DomainException('Open the OPNsense WebGUI over HTTPS before sending Mullvad credentials or WireGuard keys.');
+                throw new \DomainException('Open the OPNsense WebGUI over HTTPS before sending VPN credentials, proxy nodes, or subscription URLs.');
             }
             if ($post && !self::nativeWritesAvailable()) {
                 throw new \DomainException('This build requires standard OPNsense WebGUI mode for management actions.');

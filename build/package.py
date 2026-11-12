@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "os-blank-vpn"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 SERIES = "26.7"
 ABI = "FreeBSD:15:amd64"
 LEGACY_ABI = "freebsd:15:x86:64"
@@ -88,7 +88,7 @@ def build_metadata(files, dependencies):
         "name": NAME,
         "version": VERSION,
         "origin": f"opnsense/{NAME}",
-        "comment": "Smart Routing and per-IP Mullvad WireGuard routing",
+        "comment": "Smart Routing and per-IP WireGuard and proxy exits",
         "desc": (ROOT / "pkg-descr").read_text(encoding="utf-8").strip(),
         "maintainer": version["product_email"],
         "www": version["product_website"],

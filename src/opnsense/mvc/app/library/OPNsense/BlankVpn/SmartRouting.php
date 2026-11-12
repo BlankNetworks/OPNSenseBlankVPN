@@ -94,6 +94,11 @@ final class SmartRouting
         ));
     }
 
+    public static function canResolve(array $profile): bool
+    {
+        return isset($profile['proxyDns']) || self::profileDns($profile) !== [];
+    }
+
     public static function dnsDirectives(array $services, array $profiles): array
     {
         $lines = [];
@@ -104,6 +109,10 @@ final class SmartRouting
             $table = self::table($service);
             foreach ($service['domains'] as $domain) {
                 $lines[] = "ipset=/{$domain}/{$table}";
+                if (isset($profile['proxyDns'])) {
+                    $lines[] = "server=/{$domain}/127.0.0.1#{$profile['proxyDns']}";
+                    continue;
+                }
                 if (!filter_var($source, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || $servers === []) {
                     $lines[] = "local=/{$domain}/";
                     continue;

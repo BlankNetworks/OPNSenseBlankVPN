@@ -5,7 +5,7 @@
     <header class="bv-heading">
         <div>
             <h1>Blank VPN</h1>
-            <p class="text-muted">Route selected services or IPv4 devices through Mullvad.</p>
+            <p class="text-muted">Route selected services or IPv4 devices through a VPN or proxy exit.</p>
         </div>
         <button id="bv-refresh" type="button" class="btn btn-default">Refresh devices</button>
     </header>
@@ -42,7 +42,7 @@
                 <label>Service name
                     <input id="bv-service-name" class="form-control" type="text" maxlength="64" required>
                 </label>
-                <label>VPN exit
+                <label>Exit
                     <select id="bv-service-profile" class="form-control" required></select>
                 </label>
             </div>
@@ -211,6 +211,47 @@
                 </form>
             </section>
         </div>
+    </details>
+
+    <details class="bv-panel" id="bv-proxies" data-manage-only>
+        <summary>Proxy servers and subscriptions</summary>
+        <p id="bv-proxy-cores" class="text-muted"></p>
+        <div class="bv-grid">
+            <form id="bv-proxy-import">
+                <label>Proxy links or configuration
+                    <textarea id="bv-proxy-body" class="form-control bv-config-text" rows="4"
+                        placeholder="Proxy links, Clash YAML, Xray JSON or sing-box JSON" autocomplete="off" spellcheck="false" required></textarea>
+                </label>
+                <button type="submit" class="btn btn-primary">Import servers</button>
+            </form>
+            <form id="bv-subscription-form">
+                <label>Subscription name
+                    <input id="bv-subscription-name" class="form-control" type="text" maxlength="96" required>
+                </label>
+                <label>HTTPS subscription URL
+                    <input id="bv-subscription-url" class="form-control" type="password" maxlength="2048" autocomplete="off" required>
+                </label>
+                <label class="bv-check"><input type="checkbox" id="bv-subscription-auto"> Refresh every six hours</label>
+                <button type="submit" class="btn btn-primary">Add subscription</button>
+            </form>
+        </div>
+        <div class="bv-scroll">
+            <table class="table bv-table">
+                <thead><tr><th scope="col">Subscription</th><th scope="col">Servers</th><th scope="col">Last refresh</th><th scope="col">Actions</th></tr></thead>
+                <tbody id="bv-subscription-list"></tbody>
+            </table>
+        </div>
+        <div class="bv-heading">
+            <label>Find a server <input id="bv-proxy-search" class="form-control" type="search" autocomplete="off"></label>
+            <p id="bv-proxy-count" class="text-muted"></p>
+        </div>
+        <div class="bv-scroll">
+            <table class="table bv-table">
+                <thead><tr><th scope="col">Server</th><th scope="col">Protocol</th><th scope="col">Core</th><th scope="col">Actions</th></tr></thead>
+                <tbody id="bv-proxy-list"></tbody>
+            </table>
+        </div>
+        <p class="text-muted">Enable an individual server as an exit. It then appears in the device and Smart Routing selectors.</p>
     </details>
 
     <details class="bv-panel" id="bv-settings" data-manage-only>

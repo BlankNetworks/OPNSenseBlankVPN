@@ -5,6 +5,7 @@ const reply = {
         profiles: [{id:'vpn1', name:'Canada', relay:'ca-test-wg-001', interface:'wg1', dns:['10.64.0.1'], latestHandshake:1794490200, status:'Recent handshake', receivedBytes:4096, sentBytes:2048}],
         assignments: [],
         services: [],
+        proxyCores: {mihomo:true,tun2socks:true,xray:true,"sing-box":true},
         servicePresets: {Netflix:['netflix.com','nflxvideo.net']},
         settings: {enabled:true, interfaces:['lan'], availableInterfaces:[{id:'lan', name:'LAN'}], strictInterfaces:[], localNetworks:[], hostname:'opnsense.home.arpa'},
         warnings: []
@@ -12,6 +13,9 @@ const reply = {
     relays: {relays:[{id:'ca-test-wg-001',country:'Canada',city:'Test',hostname:'ca-test-wg-001',active:true},{id:'ca-test-wg-002',country:'Canada',city:'Test',hostname:'ca-test-wg-002',active:false}], stale:false, fetchedAt:1794490200},
     connections: {connections:[{protocol:'tcp', source:'10.0.0.20', sourcePort:1234, destination:'2001:db8::25', destinationPort:443, age:'00:00:10', bytes:[1024,1024]}]},
     account: {ok:true, devices:[{name:'Test router'}], maxDevices:5, expiresAt:'2027-01-01'},
+    proxyCatalog: {nodes:[{id:'proxy-1', name:'Example proxy', host:'192.0.2.9', port:1080, core:'mihomo',
+        protocol:'socks5', legacy:true, sources:['feed-1']}], feeds:[{id:'feed-1', name:'Test feed', count:1, auto:true}]},
+    importProxies: {ok:true, imported:1, skipped:0},
     refreshRelays: {ok:true, relays:[{id:'ca-test-wg-003',country:'Canada',city:'Test',hostname:'ca-test-wg-003',active:true}], stale:true, error:'Provider unavailable'}
 };
 window.jQuery = (ready) => document.addEventListener('DOMContentLoaded', ready);
@@ -71,6 +75,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         x.data.domains.includes('nflxvideo.net')), 'service rule payload failed');
     bv('use-lan').click();
     assert(bv('smart-interfaces').value === 'lan' && bv('managed').value === 'lan', 'LAN setup did not prefill');
+    bv('proxies').open = true;
+    await wait();
+    assert(bv('proxy-list').textContent.includes('Example proxy'), 'proxy catalog not displayed');
+    assert(bv('subscription-list').textContent.includes('Test feed'), 'proxy subscription not displayed');
+    bv('proxy-list').querySelector('button').click();
+    await wait();
+    assert(requests.some(x => x.action === 'enableProxyExit' && x.data.id === 'proxy-1'), 'proxy was not selected individually');
+    bv('proxy-body').value = 'socks5://192.0.2.9:1080';
+    bv('proxy-import').requestSubmit(bv('proxy-import').querySelector('button'));
+    await wait();
+    assert(requests.some(x => x.action === 'importProxies') && bv('proxy-body').value === '', 'proxy import was not submitted and cleared');
     bv('settings').open = true;
     bv('settings-form').requestSubmit(bv('settings-form').querySelector('button[type=submit]'));
     await wait();

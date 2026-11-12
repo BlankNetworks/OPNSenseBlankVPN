@@ -18,6 +18,8 @@ jobs:
           for test in tests/*.php; do php "$test"; done
           node --check src/opnsense/www/js/blankvpn.js
           node --check tests/ui-fixture.js
+      - name: Validate generated configurations with the upstream proxy cores
+        run: sh tests/check-proxy-cores.sh
       - name: Build and verify package archive
         run: |
           python3 build/package.py --cross

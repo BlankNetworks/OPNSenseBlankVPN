@@ -13,6 +13,9 @@
             profiles: [],
             assignments: [],
             services: [],
+            proxyNodes: [],
+            proxyFeeds: [],
+            proxyCores: {},
             presets: {},
             editingService: null,
             relays: [],
@@ -246,7 +249,8 @@
                     const services = state.services.filter((service) => service.profile === profile.id).length;
                     cell(row, profile.name || profile.relay, '', used + ' device assignment' + (used === 1 ? '' : 's')
                         + ' · ' + services + ' service' + (services === 1 ? '' : 's'));
-                    cell(row, profile.relay);
+                    cell(row, profile.kind === 'proxy' ? profile.protocol : profile.relay, '',
+                        profile.kind === 'proxy' ? profile.core : '');
                     cell(row, profile.interface, '', profile.ipv6 ? 'IPv6 configured' : '');
                     cell(row, date(profile.handshake ?? profile.latestHandshake));
                     const received = formatBytes(profile.receivedBytes ?? profile.received);
@@ -335,7 +339,7 @@
             }
 
             const select = byId('service-profile');
-            const choices = state.profiles.filter((profile) => list(profile.dns).some((ip) => !ip.includes(':')))
+            const choices = state.profiles.filter((profile) => profile.kind === 'proxy' || list(profile.dns).some((ip) => !ip.includes(':')))
                 .map((profile) => ({value: profile.id, label: profileName(profile.id)}));
             options(select, choices, 'Choose an exit');
             byId('save-service').disabled = !choices.length;
@@ -353,6 +357,76 @@
             byId('cancel-service').hidden = !service;
             if (service) {
                 byId('service-name').focus();
+            }
+        }
+
+        async function refreshProxyCatalog() {
+            try {
+                const catalog = await api('proxyCatalog');
+                state.proxyNodes = array(catalog.nodes);
+                state.proxyFeeds = array(catalog.feeds);
+                renderProxyCatalog();
+            } catch (error) {
+                notice(errorMessage(error, 'Proxy catalog unavailable.'), 'danger');
+            }
+        }
+
+        function renderProxyCatalog() {
+            const missing = ['mihomo', 'tun2socks'].filter((core) => state.proxyCores[core] !== true);
+            byId('proxy-cores').textContent = missing.length
+                ? 'Install ' + missing.join(' and ') + ' to enable proxy exits. You can import and inspect servers now.'
+                : 'Proxy transport ready. Xray and sing-box exits require their corresponding core.';
+            const subscriptions = byId('subscription-list');
+            subscriptions.replaceChildren();
+            if (!state.proxyFeeds.length) {
+                empty(subscriptions, 'No proxy subscriptions.', 4);
+            }
+            for (const feed of state.proxyFeeds) {
+                const row = subscriptions.insertRow();
+                cell(row, feed.name, '', feed.auto ? 'Automatic refresh' : 'Manual refresh');
+                cell(row, feed.count ?? 0, '', feed.skipped ? feed.skipped + ' entries skipped' : '');
+                cell(row, date(feed.updated), '', feed.error || '');
+                const actions = row.insertCell();
+                actions.append(button('Refresh', (event) => void mutate(event.currentTarget,
+                    () => api('refreshSubscription', {id: feed.id}), 'Subscription refreshed.', () => void refreshProxyCatalog())));
+                actions.append(button('Remove', (event) => {
+                    if (window.confirm('Remove this proxy subscription? Any enabled exit keeps its current server.')) {
+                        void mutate(event.currentTarget, () => api('removeSubscription', {id: feed.id}),
+                            'Subscription removed.', () => void refreshProxyCatalog());
+                    }
+                }));
+            }
+
+            const query = byId('proxy-search').value.trim().toLowerCase();
+            const filtered = state.proxyNodes.filter((node) => [node.name, node.host, node.protocol, node.core]
+                .some((value) => typeof value === 'string' && value.toLowerCase().includes(query)));
+            const results = filtered.slice(0, 40);
+            byId('proxy-count').textContent = filtered.length > results.length
+                ? 'Showing 40 of ' + filtered.length + ' servers. Refine your search to find more.'
+                : filtered.length + (filtered.length === 1 ? ' server' : ' servers');
+            const servers = byId('proxy-list');
+            servers.replaceChildren();
+            if (!results.length) {
+                empty(servers, query ? 'No matching servers.' : 'Import a server or subscription to get started.', 4);
+            }
+            for (const node of results) {
+                const row = servers.insertRow();
+                cell(row, node.name, '', endpoint(node.host, node.port));
+                cell(row, node.protocol, '', node.legacy ? 'Legacy or unencrypted transport' : '');
+                cell(row, node.core, '', list(node.sources).length === 0 ? 'Retained for an enabled exit' : '');
+                const actions = row.insertCell();
+                const exit = state.profiles.find((profile) => profile.node === node.id);
+                const enable = button(exit ? 'Exit enabled' : 'Enable exit', (event) =>
+                    void mutate(event.currentTarget, () => api('enableProxyExit', {id: node.id}), 'Proxy exit enabled.'));
+                enable.disabled = Boolean(exit) || missing.length > 0 || state.proxyCores[node.core] !== true;
+                if (!exit && enable.disabled) {
+                    enable.title = 'Install the required proxy cores first.';
+                }
+                actions.append(enable);
+                const remove = button('Remove', (event) => void mutate(event.currentTarget,
+                    () => api('removeProxyNode', {id: node.id}), 'Server removed.', () => void refreshProxyCatalog()));
+                remove.disabled = Boolean(exit);
+                actions.append(remove);
             }
         }
 
@@ -387,6 +461,7 @@
                 state.profiles = array(data.profiles);
                 state.assignments = array(data.assignments);
                 state.services = array(data.services);
+                state.proxyCores = data.proxyCores || {};
                 state.presets = data.servicePresets || {};
                 state.settings = data.settings;
                 state.canManage = data.canManage !== false;
@@ -403,6 +478,7 @@
                 renderDevices();
                 renderProfiles();
                 renderServices();
+                renderProxyCatalog();
                 renderSettings();
                 renderWarnings(array(data.warnings));
                 const count = state.devices.length;
@@ -835,6 +911,32 @@
             };
             void mutate(event.submitter, () => api('saveService', payload), 'Smart Routing service saved.', () => editService());
         });
+        byId('proxies').addEventListener('toggle', () => {
+            if (byId('proxies').open && state.canManage) {
+                void refreshProxyCatalog();
+            }
+        });
+        byId('proxy-search').addEventListener('input', renderProxyCatalog);
+        byId('proxy-import').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const body = byId('proxy-body').value.trim();
+            void mutate(event.submitter, () => api('importProxies', {body}), 'Proxy servers imported.', (result) => {
+                event.target.reset();
+                notice(result.imported + ' servers imported' + (result.skipped ? ' · ' + result.skipped + ' skipped' : ''), 'success');
+                void refreshProxyCatalog();
+            });
+        });
+        byId('subscription-form').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const payload = {
+                name: byId('subscription-name').value.trim(), url: byId('subscription-url').value.trim(),
+                auto: byId('subscription-auto').checked
+            };
+            void mutate(event.submitter, () => api('addSubscription', payload), 'Proxy subscription added.', () => {
+                event.target.reset();
+                void refreshProxyCatalog();
+            });
+        });
         byId('settings-form').addEventListener('input', () => {
             state.settingsDirty = true;
         });
@@ -861,6 +963,8 @@
         window.addEventListener('pagehide', () => {
             byId('account').value = '';
             byId('import-config').value = '';
+            byId('proxy-body').value = '';
+            byId('subscription-url').value = '';
         });
 
         void refreshDashboard();

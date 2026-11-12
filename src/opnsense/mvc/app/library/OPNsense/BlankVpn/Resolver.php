@@ -31,10 +31,15 @@ final class Resolver
             if (!self::validHostname($hostname) || !filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
                 throw new \DomainException('Set a local dashboard hostname and a static IPv4 address on LAN.');
             }
-            $profiles = Policy::profiles($model);
+            $profiles = Policy::routes($model);
             $wanted[self::LOCAL_PORT] = self::configuration(self::LOCAL_PORT, $hostname, $host, []);
             foreach ($profiles as $profile) {
                 $port = (int)($profile['dnsPort'] ?? 0);
+                if (($profile['kind'] ?? '') === 'proxy') {
+                    $upstreams = ['server=127.0.0.1#' . $profile['proxyDns']];
+                    $wanted[$port] = self::configuration($port, $hostname, $host, $upstreams);
+                    continue;
+                }
                 $source = explode('/', $profile['address'] ?? '')[0];
                 if ($port <= self::LOCAL_PORT || $port > self::LOCAL_PORT + 5 ||
                     !filter_var($source, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
@@ -49,7 +54,7 @@ final class Resolver
             }
         }
 
-        for ($port = self::LOCAL_PORT; $port <= SmartRouting::PORT; $port++) {
+        for ($port = self::LOCAL_PORT; $port < ProxyRuntime::FIRST_DNS_PORT + ProxyRuntime::SLOTS; $port++) {
             $name = "dns-{$port}.conf";
             $config = Policy::STATE_DIR . '/' . $name;
             $pid = self::running($port);
