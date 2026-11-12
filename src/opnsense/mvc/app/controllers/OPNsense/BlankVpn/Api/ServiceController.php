@@ -90,10 +90,11 @@ class ServiceController extends ApiControllerBase
                 $guard = ($loaded[Policy::marker('kill', $id)]['action'] ?? '') === 'block';
                 $applied = $rule['gateway'] ?? ($guard ? 'IPv4 internet blocked' : 'Normal network policy');
                 $row['mode'] = Policy::mode($row);
+                $row['killSwitch'] = Policy::killSwitch($row);
                 $assignments[$id] = $row + [
                     'device' => $row['interface'] . '/' . (($row['kind'] ?? '') === 'tailnet' ? $row['ip'] : $row['mac']),
                     'verified' => false,
-                    'killSwitchActive' => $guard && $row['failure'] === 'block',
+                    'killSwitchActive' => $guard && $rule === null && $row['killSwitch'],
                     'appliedRoute' => $applied
                 ];
             }
@@ -471,6 +472,8 @@ class ServiceController extends ApiControllerBase
             $coverage = $this->input('coverage', 12, $current['coverage']);
             $networkMode = $this->input('networkMode', 12, $current['networkMode']);
             $networkProfile = $this->input('networkProfile', 64, $current['networkProfile']);
+            $networkKillSwitch = $this->request->hasPost('networkKillSwitch')
+                ? ($this->flag('networkKillSwitch') ? '1' : '0') : null;
             if (!in_array($coverage, ['network', 'device'], true) ||
                 !in_array($networkMode, ['full', 'multi', 'blocked', 'disabled'], true)) {
                 throw new \DomainException('Choose a coverage scope and routing mode.');
@@ -506,7 +509,7 @@ class ServiceController extends ApiControllerBase
             }
             Operations::change(function (BlankVpn $model) use (
                 $enabled, $interfaces, $strict, $smart, $tailscale, $assignedOnly, $networks,
-                $hostname, $bind, $coverage, $networkMode, $networkProfile
+                $hostname, $bind, $coverage, $networkMode, $networkProfile, $networkKillSwitch
             ) {
                 $before = Policy::settings($model);
                 if ($coverage === 'network') {
@@ -538,7 +541,7 @@ class ServiceController extends ApiControllerBase
                     }
                     if ($enabled && $coverage === 'device' && (!$before['enabled'] || $before['coverage'] !== 'device') &&
                         ($mode === 'blocked' ||
-                        ($mode === 'full' && $row['failure'] !== 'wan'))) {
+                        ($mode === 'full' && $row['failure'] !== 'wan') || Policy::killSwitch($row))) {
                         $reset[] = $row['ip'];
                         if (!empty($row['ipv6'])) {
                             $reset[] = $row['ipv6'];
@@ -550,6 +553,9 @@ class ServiceController extends ApiControllerBase
                 $model->settings->coverage = $coverage;
                 $model->settings->networkMode = $networkMode;
                 $model->settings->networkProfile = $networkProfile;
+                if ($networkKillSwitch !== null) {
+                    $model->settings->networkKillSwitch = $networkKillSwitch;
+                }
                 $model->settings->strictInterfaces = implode(',', $strict);
                 $model->settings->smartInterfaces = implode(',', $smart);
                 $model->settings->smartAssignedOnly = $assignedOnly ? '1' : '0';
@@ -568,7 +574,8 @@ class ServiceController extends ApiControllerBase
                 $newNetwork = $enabled && $coverage === 'network' && $networkMode !== 'disabled'
                     ? $newRouting['interfaces'] : [];
                 $networkChanged = $oldNetwork !== $newNetwork || ($newNetwork !== [] &&
-                    ($networkMode !== $before['networkMode'] || $networkProfile !== $before['networkProfile']));
+                    ($networkMode !== $before['networkMode'] || $networkProfile !== $before['networkProfile'] ||
+                        $after['networkKillSwitch'] !== $before['networkKillSwitch']));
                 return [
                     'reload' => $before['enabled'] || $enabled,
                     'resetSegments' => array_values(array_unique(array_merge(
@@ -577,6 +584,18 @@ class ServiceController extends ApiControllerBase
                     'killSwitchReset' => array_values(array_unique($reset)),
                     'settings' => $after
                 ];
+            });
+            return [];
+        }), true, true);
+    }
+
+    public function disableAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            Operations::change(function (BlankVpn $model) {
+                $settings = Policy::settings($model);
+                $model->settings->enabled = '0';
+                return ['reload' => $settings['enabled']];
             });
             return [];
         }), true, true);
@@ -652,7 +671,14 @@ class ServiceController extends ApiControllerBase
                 throw new \DomainException('Choose a valid routing mode. Select an exit if you use one VPN or proxy.');
             }
             $profile = $mode === 'full' ? $profile : '';
-            $failure = $profile === '' ? 'block' : $this->input('failure', 12, 'block');
+            $killSwitch = $this->request->hasPost('killSwitch')
+                ? ($this->flag('killSwitch') ? '1' : '0') : null;
+            $failure = $profile === '' ? 'block' : $this->input('failure', 12, $killSwitch === '0' ? 'wan' : 'block');
+            if ($mode === 'full' && $killSwitch === '1') {
+                $failure = 'block';
+            } elseif ($mode === 'full' && $killSwitch === '0' && $failure === 'block') {
+                $failure = 'wan';
+            }
             if (
                 !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ||
                 ($kind === 'lan' && !Policy::validMac($mac)) || !Policy::interfaceId($interface) || !Policy::failure($failure) ||
@@ -666,7 +692,9 @@ class ServiceController extends ApiControllerBase
             if ($kind === 'lan' && !(new Diagnostics())->hasReservation($interface, $ip, $mac)) {
                 throw new \DomainException('Create a unique IPv4 DHCP reservation for this MAC and interface first.');
             }
-            $result = Operations::change(function (BlankVpn $model) use ($ip, $ipv6, $mac, $kind, $mode, $interface, $label, $profile, $backup, $failure) {
+            $result = Operations::change(function (BlankVpn $model) use (
+                $ip, $ipv6, $mac, $kind, $mode, $interface, $label, $profile, $backup, $failure, $killSwitch
+            ) {
                 $settings = Policy::settings($model);
                 if (!in_array($interface, $settings['interfaces'], true)) {
                     throw new \DomainException('Add this device’s LAN or VLAN under Routing settings before saving the policy.');
@@ -713,10 +741,13 @@ class ServiceController extends ApiControllerBase
                 $node->profile = $profile;
                 $node->backup = $failure === 'backup' ? $backup : '';
                 $node->failure = $failure;
+                // Older clients express the one-exit policy through failure instead of a checkbox.
+                $node->killSwitch = $killSwitch ?? ($mode === 'multi' ? ($prior['killSwitch'] ?? '') : '');
                 $changed = ($prior['ip'] ?? '') !== $ip || ($prior['ipv6'] ?? '') !== $ipv6 ||
                     Policy::mode($prior) !== $mode || ($prior['profile'] ?? '') !== $profile ||
                     ($prior['backup'] ?? '') !== ($failure === 'backup' ? $backup : '') ||
-                    ($prior['failure'] ?? '') !== $failure;
+                    ($prior['failure'] ?? '') !== $failure ||
+                    Policy::killSwitch($prior) !== Policy::killSwitch(Policy::fields($node));
                 return [
                     'settings' => $settings, 'reload' => $settings['enabled'],
                     'killSwitchReset' => $settings['enabled'] && $changed ?

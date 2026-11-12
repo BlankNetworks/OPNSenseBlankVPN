@@ -44,10 +44,11 @@ try {
             break;
         case 'reset_ip':
             $ip = $argv[2] ?? '';
-            if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+            $network = str_contains($ip, '/') ? Policy::cidr($ip) : null;
+            if (!filter_var($ip, FILTER_VALIDATE_IP) && $network === null) {
                 exit(64);
             }
-            Resolver::command(['/sbin/pfctl', '-k', $ip]);
+            Resolver::command(['/sbin/pfctl', '-k', $network ?? $ip]);
             echo "ok\n";
             break;
         case 'reload':
@@ -82,6 +83,8 @@ try {
                     }
                 }
                 $loaded = Firewall::loadedRules();
+                $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model) : [];
+                $watchOutages = Operations::watchMultiPathOutages($settings, $assignments);
                 $old = Firewall::health();
                 $routes = Policy::routes($model);
                 $health = array_intersect_key($old, $routes);
@@ -113,14 +116,21 @@ try {
                     if (($profile['kind'] ?? '') === 'native') {
                         $health[$id]['source'] = $source;
                     }
-                    $changed = $changed || ($previous['reachable'] ?? true) !== $reachable;
+                    $changed = $changed || ($previous['reachable'] ?? true) !== $reachable ||
+                        ($watchOutages && (($previous['probeSucceeded'] ?? false) !== $success ||
+                            ($success && time() - ($previous['checkedAt'] ?? 0) >
+                                (($profile['kind'] ?? '') === 'proxy' ? 300 : 180))));
                 }
                 Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
                 $pending = Policy::STATE_DIR . '/health-reload';
-                if ($changed || is_file($pending)) {
+                $retry = is_file($pending);
+                if ($changed || $retry) {
                     Policy::writeState('health-reload', '1');
                     Firewall::reload($model);
                     $after = Firewall::loadedRules();
+                    if ($watchOutages) {
+                        Operations::resetOutageStates($settings, $assignments, $retry ? [] : ($loaded ?? []), $after);
+                    }
                     $segments = [];
                     if ($settings['coverage'] === 'network' && $settings['networkMode'] === 'full') {
                         foreach ($settings['interfaces'] as $interface) {
@@ -137,7 +147,6 @@ try {
                             syslog(LOG_WARNING, 'Blank VPN could not reset old sessions under Whole-Network coverage.');
                         }
                     }
-                    $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model) : [];
                     foreach ($assignments as $id => $row) {
                         if ($row['profile'] === '') {
                             continue;
@@ -145,8 +154,10 @@ try {
                         $marker = Policy::marker('device', $id);
                         if (($loaded[$marker] ?? null) !== ($after[$marker] ?? null)) {
                             try {
-                                if ($row['failure'] === 'block') {
-                                    Operations::resetKillSwitch($row['ip']);
+                                if (Policy::killSwitch($row)) {
+                                    foreach (array_filter([$row['ip'], $row['ipv6'] ?? '']) as $ip) {
+                                        Operations::resetKillSwitch($ip);
+                                    }
                                 } else {
                                     Operations::switchDevice($row['ip'], $settings);
                                 }

@@ -115,18 +115,73 @@ final class Operations
         if (trim($backend->configdRun('blankvpn proxies', false, 45)) !== 'ok') {
             throw new \RuntimeException('The Blank VPN proxy exits could not be reconciled.');
         }
+        $settings = Policy::routingSettings(Policy::settings($model));
+        $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model) : [];
+        $watchOutages = self::watchMultiPathOutages($settings, $assignments);
+        $before = $watchOutages ? Firewall::loadedRules() : null;
         // Load DNS destination tables before a resolver can begin filling them.
         Firewall::reload($model);
+        if ($watchOutages) {
+            self::resetOutageStates($settings, $assignments, $before ?? [], Firewall::loadedRules());
+        }
         if (trim($backend->configdRun('blankvpn resolver', false, 45)) !== 'ok') {
             throw new \RuntimeException('The Blank VPN DNS listeners could not be reconciled.');
         }
     }
 
-    public static function resetKillSwitch(string $ip): void
+    public static function watchMultiPathOutages(array $settings, array $assignments): bool
     {
-        if (!filter_var($ip, FILTER_VALIDATE_IP) ||
-            trim((new Backend())->configdpRun('blankvpn reset_ip', [$ip], false, 10)) !== 'ok') {
-            throw new \RuntimeException('The firewall could not reset previous connections for this address.');
+        if (!$settings['enabled']) {
+            return false;
+        }
+        if ($settings['coverage'] === 'network') {
+            return $settings['networkMode'] === 'multi' && $settings['networkKillSwitch'];
+        }
+        foreach ($assignments as $row) {
+            if (Policy::mode($row) === 'multi' && Policy::killSwitch($row)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static function resetOutageStates(array $settings, array $assignments, array $before, ?array $after): void
+    {
+        if ($after === null) {
+            throw new \RuntimeException('The active firewall rules could not be read after updating the kill switch.');
+        }
+        if ($settings['coverage'] === 'network') {
+            $segments = [];
+            foreach ($settings['interfaces'] as $interface) {
+                $marker = Policy::marker('kill', 'network:' . $interface);
+                if (($before[$marker]['action'] ?? '') !== 'block' && ($after[$marker]['action'] ?? '') === 'block') {
+                    $segments[] = $interface;
+                }
+            }
+            foreach (Policy::segmentNetworks($segments) as $network) {
+                self::resetKillSwitch($network);
+            }
+            return;
+        }
+        foreach ($assignments as $id => $row) {
+            if (Policy::mode($row) !== 'multi' || !Policy::killSwitch($row)) {
+                continue;
+            }
+            $marker = Policy::marker('kill', $id);
+            if (($before[$marker]['action'] ?? '') !== 'block' && ($after[$marker]['action'] ?? '') === 'block') {
+                foreach (array_filter([$row['ip'], $row['ipv6'] ?? '']) as $ip) {
+                    self::resetKillSwitch($ip);
+                }
+            }
+        }
+    }
+
+    public static function resetKillSwitch(string $source): void
+    {
+        $network = str_contains($source, '/') ? Policy::cidr($source) : null;
+        if ((!filter_var($source, FILTER_VALIDATE_IP) && $network === null) ||
+            trim((new Backend())->configdpRun('blankvpn reset_ip', [$network ?? $source], false, 10)) !== 'ok') {
+            throw new \RuntimeException('The firewall could not reset previous connections for this address or network.');
         }
     }
 

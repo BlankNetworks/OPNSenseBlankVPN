@@ -218,6 +218,16 @@
     color: var(--bv-on-accent);
 }
 
+.blankvpn #bv-save-routing.bv-enabled {
+    background: #187449;
+    border-color: #187449;
+    color: #fff;
+}
+
+.blankvpn #bv-routing-enabled {
+    font-weight: 600;
+}
+
 .blankvpn .btn:hover:not(:disabled) {
     filter: brightness(.95);
 }

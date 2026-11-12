@@ -8,7 +8,7 @@
             return;
         }
 
-        const modes = {full: 'Use one VPN or proxy', multi: 'Multi-Path', disabled: 'Off', blocked: 'Blocked'};
+        const modes = {full: 'All traffic through one exit', multi: 'Multi-Path', disabled: 'Off', blocked: 'Blocked'};
         const insecureWebGui = window.location.protocol === 'http:';
         const maxDomainBytes = 131072;
         const state = {
@@ -246,7 +246,9 @@
                 const status = wholeNetwork ? 'Paused by Whole-Network coverage'
                     : !state.settings?.enabled ? 'Routing off'
                         : assignment.appliedRoute || 'Rule saved';
-                cell(row, status, 'Status', !wholeNetwork && assignment.killSwitchActive ? 'Kill switch active' : '');
+                const protection = assignment.killSwitchActive ? 'Kill Switch blocking internet'
+                    : assignment.killSwitch ? 'Kill Switch on' : '';
+                cell(row, status, 'Status', wholeNetwork ? '' : protection);
                 const actions = row.insertCell();
                 actions.setAttribute('role', 'cell');
                 if (state.canManage) {
@@ -380,10 +382,16 @@
             }
             options(select, choices, 'Choose an exit', savedExit);
             const settings = state.settings;
+            const enabled = settings?.enabled === true;
+            const save = byId('save-routing');
+            save.classList.toggle('bv-enabled', enabled);
+            save.textContent = enabled ? 'Save changes' : 'Save and Enable VPN';
+            byId('routing-enabled').hidden = !enabled;
+            byId('disable-routing').hidden = !enabled;
             if (settings && !state.settingsDirty) {
                 byId('coverage').value = settings.coverage || 'device';
                 byId('network-mode').value = settings.networkMode || 'disabled';
-                byId('enabled').checked = settings.enabled === true || settings.enabled === '1';
+                byId('network-kill').checked = settings.networkKillSwitch ?? settings.networkMode !== 'multi';
                 const ports = availablePorts();
                 renderInterfaceChoices('managed', ports, list(settings.interfaces), 'No assigned home Ethernet or VLAN interfaces.');
                 renderInterfaceRules(ports, settings);
@@ -408,13 +416,19 @@
                 label.hidden = !selected.includes(label.dataset.interface);
             }
             byId('network-fields').hidden = !network;
+            byId('network-kill-field').hidden = !network;
+            byId('network-kill').disabled = !network || !['full', 'multi'].includes(mode);
+            const killSwitch = byId('network-kill').checked;
             byId('network-profile-field').hidden = !network || mode !== 'full';
             exit.required = network && mode === 'full';
             const summary = {
                 full: exit.value
-                    ? 'All selected LANs and VLANs use ' + profileName(exit.value) + '. Internet is blocked if the exit is unavailable.'
+                    ? 'All selected interfaces use ' + profileName(exit.value) + '.'
+                        + (killSwitch ? ' Internet is blocked if the exit goes offline.' : '')
                     : 'Add a VPN or proxy exit, then select it here.',
-                multi: 'All selected LANs and VLANs use your domain lists. Other traffic uses normal internet.',
+                multi: 'The selected interfaces use your domain lists. '
+                    + (killSwitch ? 'All internet is blocked if a list’s exit goes offline or no list has an exit.'
+                        : 'Other traffic uses regular internet.'),
                 blocked: 'Internet is blocked on the selected LANs and VLANs.',
                 disabled: 'Devices use your normal OPNsense routing.'
             };
@@ -462,9 +476,15 @@
                 direct.href = 'https://' + address + suffix;
                 direct.textContent = direct.href;
             }
-            byId('bind-address').textContent = address
-                ? 'Point the dashboard name at ' + address + ' in your DNS.'
-                : 'The selected interface has no IPv4 address yet.';
+            const localName = byId('hostname').value.trim().toLowerCase() === 'blankvpn.local';
+            const home = byId('dashboard-bind').value === 'lan';
+            byId('bind-address').textContent = !address ? 'The selected interface has no IPv4 address yet.'
+                : localName ? (home ? 'Publish this name with Bonjour on your home network.'
+                    : 'Bonjour is limited to the local network. Use the direct Tailscale IP link for remote access.')
+                    : 'Point the dashboard name at ' + address + ' in the DNS your devices use.';
+            byId('bonjour').hidden = !localName || !home || !address;
+            byId('bonjour-command').textContent = byId('bonjour').hidden ? ''
+                : 'dns-sd -P "Blank VPN" _https._tcp local ' + port + ' blankvpn.local ' + address;
         }
 
         function renderServices() {
@@ -786,8 +806,13 @@
             byId('ipv6').required = tailnet;
             byId('profile-field').hidden = !full;
             byId('profile').required = full;
-            byId('failure-field').hidden = !primary;
-            const showBackup = primary && failover.value === 'backup';
+            const kill = byId('device-kill');
+            const supportsKillSwitch = full || mode === 'multi';
+            byId('device-kill-field').hidden = !supportsKillSwitch;
+            kill.disabled = !supportsKillSwitch;
+            const killSwitch = supportsKillSwitch && kill.checked;
+            byId('failure-field').hidden = !primary || killSwitch;
+            const showBackup = primary && !killSwitch && failover.value === 'backup';
             byId('backup-field').hidden = !showBackup;
             byId('backup').required = Boolean(showBackup);
             options(byId('backup'), state.profiles.filter((profile) => profile.id !== primary).map(exitChoice), 'Choose a backup exit');
@@ -806,7 +831,11 @@
             if (mode === 'blocked') {
                 notes.push('Internet is blocked for the assigned addresses. Approved local access follows your firewall rules.');
             }
-            if (mode === 'full' || mode === 'blocked') {
+            if (killSwitch) {
+                notes.push(full ? 'Internet is blocked if this exit goes offline.'
+                    : 'All internet is blocked if a list’s exit goes offline or no list has an exit.');
+            }
+            if (mode === 'full' || mode === 'blocked' || killSwitch) {
                 const strict = list(state.settings?.strictInterfaces).includes(interfaceId);
                 if (!strict && !byId('ipv6').value.trim()) {
                     notes.push('Enter a stable IPv6 address to cover it too.');
@@ -850,7 +879,9 @@
                 choices.push({value: selected, label: 'Unavailable VPN profile'});
             }
             options(byId('profile'), choices, 'Choose an exit', selected);
-            byId('failure').value = assignment?.failure || 'block';
+            byId('failure').value = assignment?.failure === 'backup' ? 'backup' : 'wan';
+            byId('device-kill').checked = ['full', 'multi'].includes(assignment?.mode)
+                ? (assignment.killSwitch ?? assignment.failure === 'block') : true;
             byId('switch-now').checked = false;
             updateFailure();
             byId('backup').value = assignment?.backup || '';
@@ -1203,6 +1234,7 @@
         byId('ipv6').addEventListener('input', updateFailure);
         byId('profile').addEventListener('change', updateFailure);
         byId('failure').addEventListener('change', updateFailure);
+        byId('device-kill').addEventListener('change', updateFailure);
         byId('interface').addEventListener('change', updateFailure);
         byId('assign-form').addEventListener('submit', (event) => {
             event.preventDefault();
@@ -1216,7 +1248,8 @@
                 label: byId('device-label').value.trim(),
                 profile: byId('profile').value,
                 backup: byId('backup').required ? byId('backup').value : '',
-                failure: byId('profile').value ? byId('failure').value : 'block',
+                killSwitch: !byId('device-kill').disabled && byId('device-kill').checked,
+                failure: byId('device-kill').checked || byId('mode').value !== 'full' ? 'block' : byId('failure').value,
                 switchNow: byId('switch-now').checked
             };
             void mutate(event.submitter, () => api('assign', payload), 'Device assignment saved.', () => {
@@ -1294,7 +1327,6 @@
             if (!port) {
                 return;
             }
-            byId('enabled').checked = true;
             port.checked = true;
             if (byId('coverage').value === 'network') {
                 byId('network-mode').value = 'multi';
@@ -1463,6 +1495,13 @@
                 void refreshProxyCatalog();
             });
         });
+        byId('use-local-name').addEventListener('click', () => {
+            byId('hostname').value = 'blankvpn.local';
+            byId('dashboard-bind').value = 'lan';
+            state.tailscaleDirty = true;
+            renderDashboardAddress();
+            byId('bonjour').open = true;
+        });
         byId('tailscale-form').addEventListener('input', () => {
             state.tailscaleDirty = true;
             renderDashboardAddress();
@@ -1482,6 +1521,13 @@
             showSection('network');
             openAssignment(null, 'tailnet');
         });
+        byId('disable-routing').addEventListener('click', (event) => {
+            if (window.confirm('Disable Blank VPN routing and its kill switches?')) {
+                void mutate(event.currentTarget, () => api('disable', {}), 'VPN routing disabled.', () => {
+                    state.settingsDirty = false;
+                });
+            }
+        });
         byId('settings-form').addEventListener('input', () => {
             state.settingsDirty = true;
             updateCoverage();
@@ -1493,7 +1539,8 @@
             const selected = (type) => rules.filter((label) => label.querySelector('select').value === type)
                 .map((label) => label.dataset.interface);
             const payload = {
-                enabled: byId('enabled').checked,
+                enabled: true,
+                networkKillSwitch: byId('network-kill').checked,
                 coverage: byId('coverage').value,
                 networkMode: byId('network-mode').value,
                 networkProfile: byId('network-profile').required ? byId('network-profile').value : '',
@@ -1513,11 +1560,12 @@
             const wideChange = payload.enabled && payload.coverage === 'network' && payload.networkMode !== 'disabled'
                 && (!current?.enabled || current.coverage !== 'network' || current.networkMode !== payload.networkMode
                     || current.networkProfile !== payload.networkProfile
+                    || current.networkKillSwitch !== payload.networkKillSwitch
                     || list(current.interfaces).join(',') !== payload.interfaces.join(','));
             if (wideChange && !window.confirm('Apply ' + modes[payload.networkMode] + ' to all devices on the selected networks? Existing internet connections may reconnect.')) {
                 return;
             }
-            void mutate(event.submitter, () => api('settings', payload), 'Routing settings saved.', () => {
+            void mutate(event.submitter, () => api('settings', payload), 'VPN routing enabled. Settings saved.', () => {
                 state.settingsDirty = false;
             });
         });

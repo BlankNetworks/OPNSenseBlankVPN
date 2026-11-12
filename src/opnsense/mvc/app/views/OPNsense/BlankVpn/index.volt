@@ -210,6 +210,9 @@
                     <legend>Interface</legend>
                     <div id="bv-managed" class="bv-interface-list"></div>
                 </fieldset>
+                <label class="bv-check" id="bv-network-kill-field" hidden>
+                    <input type="checkbox" id="bv-network-kill" checked> Kill Switch
+                </label>
                 <div id="bv-network-fields" class="bv-fields" hidden>
                     <label>How should their internet traffic be routed?
                         <select id="bv-network-mode" class="form-control">
@@ -224,7 +227,6 @@
                     </label>
                 </div>
                 <p id="bv-coverage-note" class="text-muted" aria-live="polite"></p>
-                <label class="bv-check"><input type="checkbox" id="bv-enabled"> Enable Blank VPN routing</label>
 
                 <details class="bv-advanced" id="bv-advanced">
                     <summary>More routing options</summary>
@@ -240,7 +242,11 @@
                             autocomplete="off">
                     </label>
                 </details>
-                <button type="submit" class="btn btn-primary">Save routing settings</button>
+                <div class="bv-actions">
+                    <button type="submit" id="bv-save-routing" class="btn btn-primary">Save and Enable VPN</button>
+                    <span id="bv-routing-enabled" role="status" hidden>VPN routing enabled</span>
+                    <button type="button" id="bv-disable-routing" class="btn btn-default" hidden>Disable VPN</button>
+                </div>
             </form>
         </section>
         <section class="bv-panel" aria-labelledby="bv-devices-title">
@@ -293,7 +299,7 @@
                     <label>IPv6 address <input id="bv-ipv6" type="text" class="form-control" autocomplete="off" spellcheck="false"></label>
                     <label>Routing mode
                         <select id="bv-mode" class="form-control">
-                            <option value="full">Use one VPN or proxy</option>
+                            <option value="full">All traffic through one exit</option>
                             <option value="multi">Multi-Path</option>
                             <option value="disabled">Off</option>
                             <option value="blocked">Blocked</option>
@@ -302,13 +308,15 @@
                     <label id="bv-profile-field">Exit <select id="bv-profile" class="form-control"></select></label>
                     <label id="bv-failure-field">If the exit fails
                         <select id="bv-failure" class="form-control">
-                            <option value="block">Block IPv4 internet (kill switch)</option>
                             <option value="backup">Use a backup exit</option>
                             <option value="wan">Use normal internet</option>
                         </select>
                     </label>
                     <label id="bv-backup-field" hidden>Backup exit <select id="bv-backup" class="form-control"></select></label>
                 </div>
+                <label class="bv-check" id="bv-device-kill-field">
+                    <input type="checkbox" id="bv-device-kill" checked> Kill Switch
+                </label>
                 <p id="bv-identity" class="text-muted"></p>
                 <p id="bv-route-note" class="text-muted"></p>
                 <label class="bv-check">
@@ -420,7 +428,7 @@
             <h2 id="bv-dashboard-title">Dashboard address</h2>
             <p><a id="bv-dashboard-link" href="https://blankvpn.home.arpa/ui/blankvpn/index">https://blankvpn.home.arpa/ui/blankvpn/index</a></p>
             <p id="bv-address-row" hidden>Direct IP address <a id="bv-address-link"></a></p>
-            <p class="text-muted">Point this name at OPNsense in your DNS and use a WebGUI certificate that covers it.</p>
+            <p class="text-muted">Add the dashboard name to Alternate Hostnames under OPNsense System → Settings → Administration and use a WebGUI certificate that covers it.</p>
             <form id="bv-tailscale-form" data-manage-only>
                 <div class="bv-fields">
                     <label>Dashboard name
@@ -434,7 +442,15 @@
                         </select>
                     </label>
                 </div>
+                <div class="bv-actions">
+                    <button type="button" id="bv-use-local-name" class="btn btn-default">Use blankvpn.local</button>
+                </div>
                 <p id="bv-bind-address" class="text-muted" aria-live="polite"></p>
+                <details id="bv-bonjour" class="bv-advanced" hidden>
+                    <summary>Publish blankvpn.local on your home network</summary>
+                    <p>Run this in Terminal on a Mac on the same home network. Keep it running to make the name available to Bonjour clients.</p>
+                    <p><code id="bv-bonjour-command"></code></p>
+                </details>
                 <details class="bv-advanced" id="bv-tailnet-routing">
                     <summary>Route Tailscale devices through Blank VPN</summary>
                     <p>A Linux Tailscale gateway on a dedicated Ethernet or VLAN link can forward device IPs to OPNsense. Enable that link on Network, select it below, then add a device rule using the peer’s Tailscale IPs.</p>

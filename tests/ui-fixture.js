@@ -10,7 +10,7 @@ const reply = {
         mullvadSignedIn: false,
         proxyCores: {mihomo:true,tun2socks:true,xray:true,"sing-box":true},
         servicePresets: {Netflix:['netflix.com','nflxvideo.net']},
-        settings: {dashboardBind:'lan',dashboardAddresses:{lan:'10.0.0.1',tailnet:'100.101.102.103'},enabled:true, interfaces:['lan','opt2'], availableInterfaces:[{id:'opt1', name:'VLAN 2', device:'vlan02'},
+        settings: {dashboardBind:'lan',dashboardAddresses:{lan:'10.0.0.1',tailnet:'100.101.102.103'},enabled:false, interfaces:['lan','opt2'], availableInterfaces:[{id:'opt1', name:'VLAN 2', device:'vlan02'},
             {id:'opt2', name:'LAN 6', device:'igc5'}, {id:'lan', name:'LAN 1', device:'igc0'}],
             tailscaleInterfaces:['opt2'], tailscaleInstalled:true, tailscaleExitAdvertised:true, strictInterfaces:[], localNetworks:[], hostname:'opnsense.home.arpa'},
         warnings: []
@@ -51,6 +51,9 @@ window.jQuery.ajax = async (request) => {
     if (action === 'saveService') {
         reply.dashboard.services = [{id:'list1', name:data.name, profile:data.profile, domains:data.domains.split(/[,\s]+/)}];
     }
+    if (action === 'disable') {
+        reply.dashboard.settings.enabled = false;
+    }
     if (action === 'settings' || action === 'tailscaleSettings') {
         Object.assign(reply.dashboard.settings, data);
     }
@@ -87,7 +90,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('profile').dispatchEvent(new Event('change'));
     bv('assign-form').requestSubmit(bv('assign-form').querySelector('button[type=submit]'));
     await wait();
-    assert(requests.some(x => x.action === 'assign' && x.method === 'POST' && x.data.profile === 'vpn1' && x.data.failure === 'block'), 'incorrect assignment payload');
+    assert(requests.some(x => x.action === 'assign' && x.method === 'POST' && x.data.profile === 'vpn1' && x.data.failure === 'block' && x.data.killSwitch === true), 'incorrect assignment payload');
     assert(bv('assignment').hidden, 'successful assignment did not close');
     bv('add-device').click();
     bv('device-kind').value = 'tailnet';
@@ -226,22 +229,46 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(!bv('assignment').hidden && bv('device-kind').value === 'tailnet' &&
         bv('interface').value === 'opt2', 'Tailscale device rule did not use the selected link');
     bv('close-assignment').click();
+    document.querySelector('[data-bv-section="tailscale"]').click();
+    bv('use-local-name').click();
+    assert(bv('hostname').value === 'blankvpn.local' && bv('dashboard-bind').value === 'lan' &&
+        bv('bonjour').open && bv('bonjour-command').textContent.endsWith('blankvpn.local 10.0.0.1'),
+        'Local name preset did not select the home address and show the Bonjour command.');
+    bv('tailscale-form').requestSubmit(bv('tailscale-form').querySelector('button[type=submit]'));
+    await wait();
+    assert(bv('dashboard-link').hostname === 'blankvpn.local' && bv('address-link').hostname === '10.0.0.1',
+        'Saved hostname and direct address did not update.');
+    document.querySelector('[data-bv-section="network"]').click();
+    assert(bv('save-routing').textContent === 'Save and Enable VPN' && bv('routing-enabled').hidden &&
+        bv('network-kill-field').hidden, 'Disabled routing did not show the enable action.');
     bv('settings-form').requestSubmit(bv('settings-form').querySelector('button[type=submit]'));
     await wait();
     assert(requests.some(x => x.action === 'settings' && x.data.interfaces.includes('lan') &&
-      x.data.smartInterfaces.includes('lan') && !Object.hasOwn(x.data, 'dashboardBind')), 'network save was not scoped');
+      x.data.smartInterfaces.includes('lan') && x.data.enabled === true &&
+      !Object.hasOwn(x.data, 'dashboardBind')), 'network save was not scoped');
+    assert(bv('save-routing').classList.contains('bv-enabled') && !bv('routing-enabled').hidden,
+        'Verified enabled state did not turn the button green.');
     bv('coverage').value = 'network';
     bv('network-mode').value = 'full';
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
     bv('network-profile').value = 'vpn1';
     bv('network-profile').dispatchEvent(new Event('input', {bubbles:true}));
+    assert(!bv('network-kill-field').hidden && bv('network-kill').checked &&
+        bv('network-kill-field').previousElementSibling.contains(bv('managed')),
+        'Whole-Network coverage did not show Kill Switch below Interface.');
     assert(!bv('network-profile-field').hidden && bv('coverage-note').textContent.includes('Canada'),
         'network exit selection had no visible effect');
     bv('settings-form').requestSubmit(bv('settings-form').querySelector('button[type=submit]'));
     await wait();
     assert(requests.some(x => x.action === 'settings' && x.data.coverage === 'network' &&
-        x.data.networkMode === 'full' && x.data.networkProfile === 'vpn1') && bv('add-device').hidden,
+        x.data.networkMode === 'full' && x.data.networkProfile === 'vpn1' && x.data.networkKillSwitch === true) &&
+        bv('add-device').hidden,
         'Whole-Network coverage settings did not apply');
+    bv('disable-routing').click();
+    await wait();
+    assert(requests.some(x => x.action === 'disable') && bv('routing-enabled').hidden &&
+        !bv('save-routing').classList.contains('bv-enabled') && bv('network-kill').checked,
+        'Disabling VPN did not preserve the saved kill switch and clear the green state.');
     document.querySelector('[data-bv-section="vpns"]').click();
     bv('refresh-relays').click();
     await wait();

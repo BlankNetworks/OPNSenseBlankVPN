@@ -44,15 +44,18 @@ final class Firewall
         $firewall->setGatewayGroups($proxyGateways);
         unset($profile);
 
+        $services = SmartRouting::boundServices(SmartRouting::services($model));
+        $multiOutage = self::multiPathOutage($firewall, $services, $profiles, $health);
         $assignments = [];
         if ($settings['coverage'] === 'network') {
-            self::registerNetworkPolicy($firewall, $settings, $interfaces, $profiles, $health);
+            self::registerNetworkPolicy($firewall, $settings, $interfaces, $profiles, $health, $multiOutage);
         } else {
             $assignments = Policy::assignments($model);
-            self::registerAssignments($firewall, $settings, $interfaces, $assignments, $profiles, $health, $diagnostics);
+            self::registerAssignments(
+                $firewall, $settings, $interfaces, $assignments, $profiles, $health, $diagnostics, $multiOutage
+            );
         }
 
-        $services = SmartRouting::boundServices(SmartRouting::services($model));
         if (SmartRouting::active($settings, $services)) {
             self::registerSmartRoutes($firewall, $settings, $interfaces, $services, $profiles, $health, $assignments, $diagnostics);
         }
@@ -82,12 +85,15 @@ final class Firewall
         array $settings,
         array $interfaces,
         array $profiles,
-        array $health
+        array $health,
+        bool $multiOutage = false
     ): void {
-        if (!in_array($settings['networkMode'], ['full', 'blocked'], true)) {
+        $mode = $settings['networkMode'];
+        $killSwitch = $settings['networkKillSwitch'] ?? $mode === 'full';
+        if ($mode === 'disabled' || ($mode === 'multi' && (!$killSwitch || !$multiOutage))) {
             return;
         }
-        $profile = $settings['networkMode'] === 'full'
+        $profile = $mode === 'full'
             ? self::selectProfile($firewall, $profiles[$settings['networkProfile']] ?? [], [], $health)
             : null;
         foreach ($settings['interfaces'] as $interface) {
@@ -105,8 +111,14 @@ final class Firewall
                 self::registerClientNat($firewall, $profile, $interface, 'any', 60);
                 self::redirectDns($firewall, $interface, 'any', (int)$profile['dnsPort'], $id, 58);
             }
-            self::registerGuard($firewall, $id, $interface, 'any', 'inet');
-            self::registerGuard($firewall, $id, $interface, 'any', 'inet6');
+            if ($mode === 'multi') {
+                self::registerOutageGuard($firewall, $id, $interface, 'any', 'any');
+            } elseif ($mode === 'blocked' || $killSwitch) {
+                self::registerGuard($firewall, $id, $interface, 'any', 'inet');
+                self::registerGuard($firewall, $id, $interface, 'any', 'inet6');
+            } elseif ($profile !== null) {
+                self::registerGuard($firewall, $id, $interface, 'any', 'inet6');
+            }
         }
     }
 
@@ -117,7 +129,8 @@ final class Firewall
         array $assignments,
         array $profiles,
         array $health,
-        Diagnostics $diagnostics
+        Diagnostics $diagnostics,
+        bool $multiOutage = false
     ): void {
         foreach ($assignments as $id => $row) {
             $interface = $row['interface'];
@@ -133,7 +146,12 @@ final class Firewall
             $mode = Policy::mode($row);
             $ipv6 = filter_var($row['ipv6'] ?? '', FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ?: '';
             $reserved = self::hasAssignmentIdentity($settings, $row, $diagnostics);
+            $killSwitch = Policy::killSwitch($row);
             if ($mode === 'multi') {
+                if ($killSwitch && ($multiOutage || !$reserved ||
+                    !in_array($interface, $settings['smartInterfaces'], true))) {
+                    self::registerOutageGuard($firewall, $id, $interface, $ip, $ipv6);
+                }
                 continue;
             }
             if ($mode === 'disabled' && in_array($interface, $settings['smartInterfaces'], true)) {
@@ -156,6 +174,10 @@ final class Firewall
                 if ($ipv6 !== '') {
                     self::registerGuard($firewall, $id, $interface, $ipv6, 'inet6');
                 }
+                continue;
+            }
+            if ($mode === 'full' && $row['profile'] === '' && $killSwitch) {
+                self::registerOutageGuard($firewall, $id, $interface, $ip, $ipv6);
                 continue;
             }
             if ($mode === 'disabled' || $row['profile'] === '') {
@@ -187,10 +209,16 @@ final class Firewall
                     }
                 }
                 continue;
+            } elseif ($killSwitch) {
+                self::registerOutageGuard($firewall, $id, $interface, $ip, $ipv6);
+                continue;
             } else {
                 self::redirectDns($firewall, $interface, $ip, Resolver::LOCAL_PORT, $id, 58);
             }
 
+            if ($row['failure'] === 'wan' && $reserved) {
+                continue;
+            }
             self::registerGuard($firewall, $id, $interface, $ip, 'inet');
             if ($ipv6 !== '' && $row['failure'] !== 'wan') {
                 self::registerGuard($firewall, $id, $interface, $ipv6, 'inet6');
@@ -206,6 +234,38 @@ final class Firewall
                 Policy::tailnetAddress($row['ip']) && Policy::tailnetAddress($row['ipv6'] ?? '', true);
         }
         return $diagnostics->hasReservation($row['interface'], $row['ip'], $row['mac']);
+    }
+
+    private static function registerOutageGuard(
+        Plugin $firewall,
+        string $id,
+        string $interface,
+        string $ip,
+        string $ipv6
+    ): void {
+        foreach (['inet' => $ip, 'inet6' => $ipv6] as $family => $source) {
+            if ($source !== '') {
+                self::bypassSmartDns($firewall, $interface, $source, $family);
+                self::registerGuard($firewall, $id, $interface, $source, $family);
+            }
+        }
+    }
+
+    private static function multiPathOutage(Plugin $firewall, array $services, array $profiles, array $health): bool
+    {
+        if ($services === []) {
+            return true;
+        }
+        foreach (array_unique(array_column($services, 'profile')) as $id) {
+            $profile = $profiles[$id] ?? [];
+            $checked = $health[$id] ?? [];
+            $maxAge = ($profile['kind'] ?? '') === 'proxy' ? 300 : 180;
+            if (empty($checked['probeSucceeded']) || time() - ($checked['checkedAt'] ?? 0) > $maxAge ||
+                self::selectProfile($firewall, $profile, [], $health) === null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static function registerGuard(Plugin $firewall, string $id, string $interface, string $ip, string $family): void

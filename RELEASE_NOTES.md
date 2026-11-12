@@ -1,4 +1,4 @@
-# Blank VPN 0.8.1
+# Blank VPN 0.8.2
 
 This lab prerelease targets OPNsense Community Edition 26.7 with the FreeBSD 15 package ABI.
 
@@ -8,10 +8,8 @@ This lab prerelease targets OPNsense Community Edition 26.7 with the FreeBSD 15 
 
 Use `pkg config ABI` on the router to choose the matching download.
 
-- **Network** shows assigned Ethernet ports and VLANs as checkboxes, with Whole-Network coverage and device-specific choices and a list of saved device rules.
-- Ping an individual Mullvad relay or test HTTPS through a configured VPN or enabled proxy exit.
-- Save Mullvad sign-in on the router and restore it in later WebGUI sessions. Proxy subscriptions can refresh automatically and keep their saved servers when the provider is unavailable.
-- The **Tailscale** tab shows the router connection, dashboard address and home exit-node advertisement. Configure peer routing through a source-preserving transit link.
-- Import, edit and export Multi-Path domain lists. Save a list and choose its exit later.
+- **Save and Enable VPN** enables the saved Network rules. The save button turns green once OPNsense reports routing enabled.
+- **Kill Switch** is available per device and below **Interface** for Whole-Network coverage. It blocks WAN fallback in one-exit mode. In Multi-Path it blocks internet for the selected scope and resets existing connections when an assigned exit is detected offline.
+- **Tailscale → Dashboard address → Use blankvpn.local** selects the LAN address and shows a Bonjour publishing command. The direct IP link remains available.
 
 Download the `.pkg` and SHA-256 file below. See the [installation instructions](https://github.com/BlankNetworks/OPNSenseBlankVPN#lab-installation) and [third-party source information](https://github.com/BlankNetworks/OPNSenseBlankVPN/blob/main/THIRD_PARTY.md). Live OPNsense forwarding, core rollback, and tunnel-drop behavior still need lab validation.

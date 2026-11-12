@@ -1,4 +1,4 @@
-# Blank VPN 0.8.1
+# Blank VPN 0.8.2
 
 Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Multi-Path keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
@@ -36,16 +36,16 @@ The package and SHA-256 file are written to `dist/`. To reproduce the bundled re
 
 ## Lab installation
 
-1. Use an matching OPNsense CE 26.7 VM or spare router with console access. Attach a WAN, a management network and a test client LAN or VLAN. Back up the lab configuration under **System → Configuration → Backups**.
+1. Use a matching OPNsense CE 26.7 VM or spare router with console access. Attach a WAN, a management network and a test client LAN or VLAN. Back up the lab configuration under **System → Configuration → Backups**.
 2. Confirm `opnsense-version -v` reports 26.7.x, `opnsense-version -n` reports `opnsense`, and `pkg config ABI` matches the chosen architecture.
 3. Transfer the package and checksum to the lab system. From their directory, verify and install as root.
 
    ```sh
    arch=$(pkg config ABI | cut -d: -f3)
-   package="os-blank-vpn-0.8.1-$arch.pkg"
+   package="os-blank-vpn-0.8.2-$arch.pkg"
    sha256 -c "$(awk '{print $1}' "$package.sha256")" "$package"
    pkg info -F "./$package"
-   pkg add "./$package"
+   pkg add -f "./$package"
    pkg info os-blank-vpn
    ```
 
@@ -58,7 +58,7 @@ From a client on your LAN, open your existing OPNsense HTTPS address and select 
 
 For ordinary LAN DNS, set up `blankvpn.home.arpa` as a host override pointing to the router’s LAN IP. In OPNsense Unbound, use **Services → Unbound DNS → Overrides**. Add the hostname under **System → Settings → Administration → Alternate Hostnames** and use a trusted HTTPS certificate covering it. To open Blank VPN immediately after login, set the OPNsense user’s preferred landing page to `ui/blankvpn/index`.
 
-For `BlankVPN.local` on the LAN, set the dashboard name to `blankvpn.local` and publish it from an mDNS responder on that link. The responder publishes the router’s LAN IPv4 address. Leave the OPNsense system domain on its existing DNS domain.
+For `blankvpn.local` on the home network, open **Tailscale → Dashboard address**, click **Use blankvpn.local**, then click **Save Tailscale settings**. Add `blankvpn.local` to OPNsense **Alternate Hostnames** and use a trusted WebGUI certificate covering the name. Open **Publish blankvpn.local on your home network** to copy a Bonjour command populated with the router’s LAN IP and WebGUI port. Run it in Terminal on a Mac connected to the same link and leave it running, or publish the same address from an existing mDNS responder. Then open `https://blankvpn.local/ui/blankvpn/index`, with the WebGUI port if it differs from 443. For remote Tailscale access, use the direct Tailscale IP or a name resolved through tailnet DNS.
 
 ### Open from Tailscale
 
@@ -98,18 +98,18 @@ Core updates, saved Mullvad logins, the private subscription catalog, and recove
 
 ## Choose routing coverage
 
-Open **Network**, check the Ethernet ports or VLANs under **Interface**, choose who should use the rules, then enable and save routing. The main home Ethernet port appears first. Devices need to use OPNsense as their gateway for the policy to apply.
+Open **Network**, check the Ethernet ports or VLANs under **Interface**, choose who should use the rules, then click **Save and Enable VPN**. The button turns green once routing is enabled. The main home Ethernet port appears first. Devices need to use OPNsense as their gateway for the policy to apply.
 
 - **Only devices I choose** applies saved policies to individual devices. Select **Add device rule** and enter a reserved IPv4 address.
-- **Whole-Network coverage** uses one mode for the selected LANs and VLANs. Existing device assignments are saved for when you switch back. **Use one VPN or proxy** selects an exit and blocks internet access if the exit is unavailable. It routes IPv4 through that exit and blocks internet-bound IPv6. Blocked mode denies internet access on both families. Off restores normal routing. Whole-Network coverage requires static IPv4 and static IPv6 or no IPv6 on the managed segments.
+- **Whole-Network coverage** uses one mode for the selected LANs and VLANs. Existing device assignments are saved for when you switch back. Check **Kill Switch** below **Interface** to block internet if the selected exit goes offline. One-exit mode routes IPv4 through that exit and blocks internet-bound IPv6 while the exit is in use. Blocked mode denies internet access on both families. Off restores normal routing. Whole-Network coverage requires static IPv4 and static IPv6 or no IPv6 on the managed segments.
 
 
 | Mode | Internet behavior |
 | --- | --- |
-| Use one VPN or proxy | Use one VPN or proxy exit, with a kill switch, backup exit, or normal-internet fallback. |
-| Multi-Path Tunneling | Use the assigned exits for matching services and ordinary internet for other destinations. |
-| Disabled (No VPN) | Follow the native network policy and bypass Blank VPN service routing for the assigned addresses. |
-| Blocked (No Internet) | Block internet traffic from the assigned addresses and keep approved local access subject to native firewall rules. |
+| All traffic through one exit | Use one VPN or proxy exit, with a Kill Switch, backup exit, or regular internet fallback. |
+| Multi-Path | Use the assigned exits for matching services and regular internet for other destinations. With Kill Switch checked, an unavailable exit blocks all internet in the selected scope. |
+| Off | Follow the native network policy and bypass Blank VPN service routing for the assigned addresses. |
+| Blocked | Block internet traffic from the assigned addresses and keep approved local access subject to native firewall rules. |
 
 Under **Network → More routing options**, select **Use Multi-Path domain lists** for the applicable interface and check **Use domain lists only for devices set to Multi-Path** for device-specific use. In **Network**, choose the mode for each reserved LAN IPv4 address. Add the device’s stable IPv6 address to cover that address as well. On shared LANs, other IPv6 addresses follow the native policy. Use a dedicated strict interface for network-wide internet IPv6 blocking.
 
@@ -129,14 +129,13 @@ To apply per-peer policy, use a Linux Tailscale exit gateway in kernel forwardin
 
 Multi-Path forwards matching DNS through the chosen tunnel and uses the regular resolver for other names. Learned IPv4 destinations use the VPN and learned IPv6 destinations are blocked. When the exit is unavailable, known destinations are blocked. Multi-Path classifies DNS-observed IPs. Shared IPs, existing connections, encrypted DNS, HTTPS record address hints, and endpoints obtained without an observed DNS lookup can affect which connections match. If two services learn the same destination IP, the first saved service rule has precedence. Learned entries are aged out after about a day and relearned from DNS. Mullvad exit IPs may be blocked by Netflix. [Mullvad Netflix guidance](https://mullvad.net/en/help/watching-netflix-with-split-tunneling)
 
-## Assign an IPv4 address and enable a kill switch
+## Enable and test the Kill Switch
 
-1. Add the test client’s LAN or VLAN under **Network → Interface**. Give the client a unique IPv4 DHCP reservation and use **Add device rule** to enter its address and MAC.
-2. Choose an exit and **Block IPv4 internet (kill switch)**. Applying a new kill switch resets connections originating from that address, including local sessions. Other clients continue to use their configured routes. The rules preserve configured local network exceptions for new connections.
-3. Verify normal traffic from an unassigned test client. Confirm the protected client’s egress goes through WireGuard, then disable the test tunnel and check that its IPv4 internet traffic stops and the unassigned client stays online.
-4. If you need to block internet-bound IPv6 for a whole device, use a dedicated interface set to **Block devices without a rule**. Strict mode blocks internet-bound IPv6 and internet traffic from unassigned devices. The per-IP rule on a shared LAN covers the reserved IPv4 address. Keep the IPv6 behavior of your existing firewall in mind.
+1. For **Only devices I choose**, give the client a unique IPv4 DHCP reservation. Add a device rule and check **Kill Switch** in **All traffic through one exit** or **Multi-Path** mode. Add its stable IPv6 address to protect that address too. For **Whole-Network coverage**, check **Kill Switch** below **Interface** to protect both address families on the selected networks.
+2. Click **Save and Enable VPN** on Network. From the protected client, confirm the expected internet exit. Start an internet connection, then take the test exit down. Verify the existing connection stops, new internet connections fail, and a client outside the scope can still use the internet. Check that approved local access remains available after reconnecting.
+3. Bring the exit back up and verify internet access recovers. In Multi-Path, every assigned exit needs a successful health check before regular internet resumes. A checked Multi-Path rule with no assigned exit blocks internet until an exit is assigned and verified.
 
-Per-IP rules take precedence over Multi-Path. A selected **Backup exit** can carry the address when the primary fails. **Normal internet** is an explicit fallback to the normal network policy. VPN health is observed with a router-side probe, while the client path must be checked from that client.
+Tunnel health is polled. Multi-Path blocks regular internet once the outage is detected and the firewall rules are applied. VPN exits are probed every minute and active proxy exits are checked on a four-minute rotation. A state reset can interrupt existing local sessions on the protected address or network. Shared-LAN device rules cover only the saved IPs, so additional IPv6 addresses require Whole-Network coverage or a dedicated strict interface.
 
 ## Upgrade, rollback and removal
 

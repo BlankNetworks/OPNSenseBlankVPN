@@ -175,6 +175,36 @@ namespace {
         isset($wholeDown->rules[Policy::marker('kill', 'network:lan')],
             $wholeDown->rules[Policy::marker('kill_v6', 'network:lan')]) && $wholeDown->nat === [],
         'A VPN outage under Whole-Network coverage blocks both address families without WAN fallback.');
+    $wholeFallback = new Plugin();
+    $network->invoke(null, $wholeFallback, $networkSettings + ['networkKillSwitch' => false],
+        $interfaces, $profiles, ['jp' => ['reachable' => false]]);
+    checkRouting($wholeFallback->rules === [] && $wholeFallback->nat === [],
+        'Disabling the network kill switch allows regular routing when the one exit is down.');
+
+    $outage = new ReflectionMethod(Firewall::class, 'multiPathOutage');
+    $liveHealth = ['jp' => ['probeSucceeded' => true, 'checkedAt' => time(), 'reachable' => true]];
+    checkRouting(!$outage->invoke(null, $good, $services, $profiles, $liveHealth) &&
+        $outage->invoke(null, $good, $services, $profiles, []) &&
+        $outage->invoke(null, $good, $services, $profiles, ['jp' => [
+            'probeSucceeded' => true, 'checkedAt' => time() - 181
+        ]]) && $outage->invoke(null, $good, $services, $profiles, ['jp' => [
+            'probeSucceeded' => false, 'checkedAt' => time(), 'reachable' => true
+        ]]) && $outage->invoke(null, $good, [], $profiles, $liveHealth),
+        'Require a recent successful probe for every exit and close when no list has an exit.');
+    $wholeMulti = array_replace($networkSettings, ['networkMode' => 'multi', 'networkKillSwitch' => true]);
+    $wholeMultiDown = new Plugin();
+    $network->invoke(null, $wholeMultiDown, $wholeMulti, $interfaces, $profiles, [], true);
+    $networkKill = $wholeMultiDown->rules[Policy::marker('kill', 'network:lan')];
+    checkRouting($networkKill['interface'] === 'lan' && $networkKill['from'] === 'any' && $networkKill['to_not'] &&
+        $networkKill['priority'] < $pass['priority'] &&
+        isset($wholeMultiDown->rules[Policy::marker('kill_v6', 'network:lan')]) &&
+        $wholeMultiDown->dns[0]['nordr'] && $wholeMultiDown->dns[0]['priority'] < $good->dns[0]['priority'],
+        'A checked network Multi-Path outage blocks both families ahead of service routing and DNS forwarding.');
+    $wholeMultiUp = new Plugin();
+    $network->invoke(null, $wholeMultiUp, $wholeMulti, $interfaces, $profiles, $liveHealth, false);
+    $network->invoke(null, $wholeMultiUp, array_replace($wholeMulti, ['networkKillSwitch' => false]),
+        $interfaces, $profiles, [], true);
+    checkRouting($wholeMultiUp->rules === [], 'Only a checked Multi-Path outage adds a network-wide guard.');
     $multiNetwork = Policy::routingSettings(array_replace($networkSettings, [
         'networkMode' => 'multi', 'interfaces' => ['lan', 'opt2'], 'tailscaleInterfaces' => ['opt2'],
         'strictInterfaces' => ['lan'], 'smartAssignedOnly' => true
@@ -196,6 +226,25 @@ namespace {
     $compileDevice->invoke(null, $down, $settings, $interfaces, ['device-a' => $assignment], $profiles, ['jp' => ['reachable' => false]], $diag);
     checkRouting(isset($down->rules[Policy::marker('kill', 'device-a')]) &&
         !isset($down->rules[Policy::marker('device', 'device-a')]), 'Down exit must remove the pass and preserve the IPv4 guard.');
+    $multiAssignment = array_replace($assignment, [
+        'mode' => 'multi', 'profile' => '', 'killSwitch' => '1', 'ipv6' => '2001:db8::23'
+    ]);
+    $deviceMulti = new Plugin();
+    $compileDevice->invoke(null, $deviceMulti, $settings, $interfaces, [
+        'protected' => $multiAssignment,
+        'unprotected' => array_replace($multiAssignment, ['ip' => '192.0.2.24', 'killSwitch' => '0', 'ipv6' => ''])
+    ], $profiles, [], $diag, true);
+    checkRouting($deviceMulti->rules[Policy::marker('kill', 'protected')]['from'] === '192.0.2.23' &&
+        $deviceMulti->rules[Policy::marker('kill_v6', 'protected')]['from'] === '2001:db8::23' &&
+        !isset($deviceMulti->rules[Policy::marker('kill', 'unprotected')]) &&
+        $deviceMulti->dns[0]['nordr'], 'A device Multi-Path outage closes only the opted-in addresses.');
+    $deviceMultiUp = new Plugin();
+    $compileDevice->invoke(null, $deviceMultiUp, $settings, $interfaces,
+        ['protected' => $multiAssignment], $profiles, $liveHealth, $diag, false);
+    checkRouting($deviceMultiUp->rules === [], 'Healthy Multi-Path does not block regular internet.');
+    checkRouting(Policy::killSwitch($assignment) && !Policy::killSwitch(array_replace($assignment, ['mode' => 'multi'])) &&
+        !Policy::killSwitch(array_replace($assignment, ['failure' => 'backup'])),
+        'Existing one-exit, backup and Multi-Path policies keep their settings during an upgrade.');
     $native = array_replace($profiles['jp'], [
         'kind' => 'native', 'interface' => 'ovpnc1', 'gateway' => 'NORD', 'address' => '198.51.100.20'
     ]);

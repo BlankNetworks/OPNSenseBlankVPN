@@ -29,6 +29,8 @@ final class Policy
         $result['networkMode'] = in_array($stored['networkMode'] ?? '', ['full', 'multi', 'blocked', 'disabled'], true)
             ? $stored['networkMode'] : 'disabled';
         $result['networkProfile'] = $stored['networkProfile'] ?? '';
+        $killSwitch = $stored['networkKillSwitch'] ?? '';
+        $result['networkKillSwitch'] = $killSwitch === '1' || ($killSwitch === '' && $result['networkMode'] !== 'multi');
         $result['dashboardBind'] = ($stored['dashboardBind'] ?? '') === 'tailnet' ? 'tailnet' : 'lan';
         $result['hostname'] = $stored['hostname'] ?? 'blankvpn.home.arpa';
         return $result;
@@ -75,6 +77,19 @@ final class Policy
     public static function mode(array $assignment): string
     {
         return ($assignment['mode'] ?? '') ?: (($assignment['profile'] ?? '') !== '' ? 'full' : 'default');
+    }
+
+    public static function killSwitch(array $assignment): bool
+    {
+        $mode = self::mode($assignment);
+        if (!in_array($mode, ['full', 'multi'], true)) {
+            return false;
+        }
+        return match ($assignment['killSwitch'] ?? '') {
+            '1' => true,
+            '0' => false,
+            default => $mode === 'full' && ($assignment['failure'] ?? 'block') === 'block'
+        };
     }
 
     public static function tailnetAddress(string $address, bool $ipv6 = false): bool
@@ -182,7 +197,7 @@ final class Policy
 
     public static function localNetworks(array $settings): array
     {
-        $networks = ['127.0.0.0/8', '::1/128', 'fe80::/10', 'ff02::/16', '255.255.255.255/32'];
+        $networks = ['127.0.0.0/8', '::1/128', 'fe80::/10', 'ff02::/16', '224.0.0.251/32', '255.255.255.255/32'];
         foreach ($settings['localNetworks'] as $network) {
             if (self::cidr($network) === $network) {
                 $networks[] = $network;
