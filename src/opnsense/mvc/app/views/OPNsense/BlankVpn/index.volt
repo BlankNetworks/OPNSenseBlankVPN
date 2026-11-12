@@ -57,6 +57,9 @@
                 </div>
                 <p id="bv-relay-status" class="text-muted" aria-live="polite"></p>
                 <div class="bv-fields">
+                    <label>Server list <select id="bv-relay-list" class="form-control"></select></label>
+                </div>
+                <div class="bv-fields">
                     <label>Country <select id="bv-country" class="form-control"><option value="">All countries</option></select></label>
                     <label>City <select id="bv-city" class="form-control"><option value="">All cities</option></select></label>
                     <label>Server <select id="bv-relay" class="form-control" required><option value="">Select a server</option></select></label>
@@ -78,6 +81,18 @@
                     <p class="text-muted">Each new exit uses one Mullvad device slot.</p>
                 </div>
             </form>
+            <details id="bv-mullvad-batches" class="bv-advanced" hidden>
+                <summary>Manage server batches</summary>
+                <p class="text-muted">Saved lists follow Mullvad’s catalog. Each new exit uses one device slot when you activate it.</p>
+                <label>Batch to add or remove
+                    <select id="bv-batch-scope" class="form-control" aria-describedby="bv-batch-status"></select>
+                </label>
+                <div class="bv-actions">
+                    <button id="bv-save-batch" type="button" class="btn btn-primary">Add batch</button>
+                    <button id="bv-remove-batch" type="button" class="btn btn-default" hidden>Remove batch</button>
+                    <p id="bv-batch-status" class="text-muted" role="status"></p>
+                </div>
+            </details>
         </section>
         <section class="bv-panel" aria-label="Saved VPN exits">
             <h2>VPN exits</h2>

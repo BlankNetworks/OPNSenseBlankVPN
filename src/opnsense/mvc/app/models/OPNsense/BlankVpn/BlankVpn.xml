@@ -1,6 +1,6 @@
 <model>
     <mount>//OPNsense/BlankVpn</mount>
-    <version>1.6.0</version>
+    <version>1.7.0</version>
     <description>Blank VPN configuration and native object ownership</description>
     <items>
         <settings>
@@ -18,6 +18,10 @@
             <dashboardBind type="TextField"><Default>lan</Default></dashboardBind>
             <hostname type="TextField"><Default>blankvpn.home.arpa</Default></hostname>
         </settings>
+        <mullvadCatalog>
+            <worldwide type="BooleanField"><Default>0</Default></worldwide>
+            <countries type="TextField"/>
+        </mullvadCatalog>
         <profiles>
             <profile type="ArrayField">
                 <name type="TextField"><Required>Y</Required></name>

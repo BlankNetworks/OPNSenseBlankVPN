@@ -1,4 +1,4 @@
-# Blank VPN 0.8.2
+# Blank VPN 0.8.3
 
 This lab prerelease targets OPNsense Community Edition 26.7 with the FreeBSD 15 package ABI.
 
@@ -8,8 +8,8 @@ This lab prerelease targets OPNsense Community Edition 26.7 with the FreeBSD 15 
 
 Use `pkg config ABI` on the router to choose the matching download.
 
-- **Save and Enable VPN** enables the saved Network rules. The save button turns green once OPNsense reports routing enabled.
-- **Kill Switch** is available per device and below **Interface** for Whole-Network coverage. It blocks WAN fallback in one-exit mode. In Multi-Path it blocks internet for the selected scope and resets existing connections when an assigned exit is detected offline.
-- **Tailscale → Dashboard address → Use blankvpn.local** selects the LAN address and shows a Bonjour publishing command. The direct IP link remains available.
+- **VPN Login → Manage server batches** saves whole countries or the worldwide Mullvad WireGuard catalog.
+- Browse saved batches under **Server list** and filter by country or city. Batch membership follows the latest catalog, including servers currently listed as unavailable.
+- Adding or removing a batch leaves WireGuard device slots and existing routing assignments intact. Activate an available server when you want to use it as an exit.
 
 Download the `.pkg` and SHA-256 file below. See the [installation instructions](https://github.com/BlankNetworks/OPNSenseBlankVPN#lab-installation) and [third-party source information](https://github.com/BlankNetworks/OPNSenseBlankVPN/blob/main/THIRD_PARTY.md). Live OPNsense forwarding, core rollback, and tunnel-drop behavior still need lab validation.

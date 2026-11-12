@@ -33,6 +33,7 @@ final class FixtureMullvad extends Mullvad
                     'pubkey' => base64_encode(str_repeat('r', 32)),
                     'active' => true,
                     'country_name' => 'Canada',
+                    'country_code' => 'ca',
                     'city_name' => 'Toronto',
                 ],
             ];
@@ -91,7 +92,7 @@ function expectFailure(callable $operation, string $message): void
 {
     try {
         $operation();
-    } catch (InvalidArgumentException | RuntimeException $error) {
+    } catch (DomainException | InvalidArgumentException | RuntimeException $error) {
         check(str_contains($error->getMessage(), $message), $error->getMessage());
         return;
     }
@@ -111,6 +112,24 @@ try {
     $offline = $provider->relays(true);
     check($offline['stale'] && $offline['error'] === 'Provider unreachable.' && $offline['relays'] === $catalog['relays'], 'The last good catalog should survive an outage.');
     check($provider->relays() === $offline && $provider->relayCalls === 2, 'An outage must limit background retries.');
+
+    $batches = Mullvad::savedBatches([]);
+    check($batches === ['worldwide' => false, 'countries' => []], 'Upgrades should start with no saved batches.');
+    $batches = $provider->updateBatch($batches, 'ca', true);
+    check($batches === ['worldwide' => false, 'countries' => ['ca']], 'A country batch did not save.');
+    $batches = $provider->updateBatch($batches, '', true);
+    check($provider->updateBatch($batches, 'ca', true) === $batches && $batches['worldwide'],
+        'Adding an existing batch is idempotent, and worldwide coexists with country batches.');
+    expectFailure(fn () => $provider->updateBatch($batches, 'zz', true), 'No Mullvad servers');
+    expectFailure(fn () => $provider->updateBatch($batches, 'Canada', true), 'valid Mullvad country');
+    check($provider->updateBatch($batches, '', false) === ['worldwide' => false, 'countries' => ['ca']],
+        'Removing worldwide must preserve saved country batches.');
+    check($provider->updateBatch($batches, 'ca', false) === ['worldwide' => true, 'countries' => []],
+        'Removing a country must preserve the worldwide batch.');
+    check($provider->creates === 0 && $provider->relayCalls === 2,
+        'Batch operations use cached server metadata and do not register devices.');
+    check(Mullvad::savedBatches(['worldwide' => '1', 'countries' => 'ca,ca,invalid,jp']) ===
+        ['worldwide' => true, 'countries' => ['ca', 'jp']], 'Saved batches should validate and deduplicate country codes.');
 
     $account = '0000 0000 0000 0000';
     expectFailure(fn () => $provider->account('invalid'), '16-digit');

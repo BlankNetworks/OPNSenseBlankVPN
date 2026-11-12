@@ -25,6 +25,7 @@
             editingService: null,
             domainRead: 0,
             relays: [],
+            mullvadBatches: {worldwide: false, countries: []},
             settings: null,
             availableInterfaces: [],
             canManage: true,
@@ -733,6 +734,9 @@
             try {
                 const data = await api('dashboard');
                 state.profiles = array(data.profiles);
+                if (data.mullvadBatches) {
+                    state.mullvadBatches = data.mullvadBatches;
+                }
                 state.assignments = array(data.assignments);
                 state.services = array(data.services);
                 state.proxyCores = data.proxyCores || {};
@@ -933,6 +937,65 @@
             return relay.country + ' / ' + relay.city;
         }
 
+        function renderMullvadBatches() {
+            const {worldwide, countries} = state.mullvadBatches;
+            const catalog = new Map(state.relays.filter((relay) => relay.countryCode)
+                .map((relay) => [relay.countryCode, relay.country || relay.countryCode.toUpperCase()]));
+            for (const code of countries) {
+                if (!catalog.has(code)) {
+                    catalog.set(code, code.toUpperCase());
+                }
+            }
+            const countryChoices = [...catalog].map(([value, label]) => ({value, label}))
+                .sort((left, right) => left.label.localeCompare(right.label));
+            const batches = [
+                ...(worldwide ? [{value: 'all', label: 'Worldwide'}] : []),
+                ...countryChoices.filter(({value}) => countries.includes(value))
+            ];
+            options(byId('relay-list'), batches.map((batch) => ({...batch, group: 'Saved batches'})), 'Mullvad catalog');
+            const scope = byId('batch-scope');
+            options(scope, [{value: 'all', label: 'Worldwide · all servers'}, ...countryChoices], 'Choose a batch');
+            renderBatchChoice();
+        }
+
+        function renderBatchChoice() {
+            const scope = byId('batch-scope').value;
+            const worldwide = scope === 'all';
+            const saved = worldwide ? state.mullvadBatches.worldwide : state.mullvadBatches.countries.includes(scope);
+            const count = scope ? state.relays.filter((relay) => worldwide || relay.countryCode === scope).length : 0;
+            const add = byId('save-batch');
+            const remove = byId('remove-batch');
+            add.hidden = saved;
+            add.disabled = !state.mullvadSignedIn || count === 0;
+            remove.hidden = !saved;
+            remove.disabled = !state.mullvadSignedIn;
+            byId('batch-status').textContent = scope ? count + ' server' + (count === 1 ? '' : 's')
+                + (saved ? ' · Saved' : '') : '';
+        }
+
+        async function saveMullvadBatch(control, action) {
+            const scope = byId('batch-scope');
+            const selected = scope.value;
+            if (!selected || !state.mullvadSignedIn) {
+                return;
+            }
+            const label = selected === 'all' ? 'Worldwide' : scope.selectedOptions[0].textContent;
+            const country = selected === 'all' ? '' : selected;
+            await mutate(control, () => api('saveMullvadBatch', {country, action}),
+                label + (action === 'add' ? ' server batch added.' : ' server batch removed.'), (result) => {
+                    state.mullvadBatches = result.batches;
+                    renderMullvadBatches();
+                    if (action === 'add') {
+                        byId('relay-list').value = selected;
+                        byId('country').value = '';
+                        byId('city').value = '';
+                        byId('relay').value = '';
+                    }
+                    renderRelays();
+                });
+            renderBatchChoice();
+        }
+
         function renderRelays() {
             const retarget = byId('retarget');
             const assigned = new Set([
@@ -943,10 +1006,13 @@
             const reusable = state.profiles.filter((profile) => profile.relay && !assigned.has(profile.id));
             byId('retarget-row').hidden = reusable.length === 0;
             options(retarget, reusable.map(exitChoice), 'Create a new exit');
-            const countries = [...new Set(state.relays.map((item) => item.country).filter(Boolean))].sort();
+            renderMullvadBatches();
+            const batch = byId('relay-list').value;
+            const relays = state.relays.filter((relay) => !batch || batch === 'all' || relay.countryCode === batch);
+            const countries = [...new Set(relays.map((item) => item.country).filter(Boolean))].sort();
             options(byId('country'), countries.map((value) => ({value, label: value})), 'All countries');
             const country = byId('country').value;
-            const fromCountry = state.relays.filter((item) => !country || item.country === country);
+            const fromCountry = relays.filter((item) => !country || item.country === country);
             const cities = new Map(fromCountry.filter((item) => item.city)
                 .map((item) => [relayCity(item), country ? item.city : item.city + ', ' + item.country]));
             const cityChoices = [...cities].map(([value, label]) => ({value, label}))
@@ -1021,11 +1087,13 @@
             state.mullvadSignedIn = signedIn;
             byId('login-form').hidden = signedIn || insecureWebGui;
             byId('register-form').hidden = !signedIn;
+            byId('mullvad-batches').hidden = !signedIn;
             byId('restore-login').hidden = insecureWebGui || signedIn || !state.mullvadLoginSaved;
             byId('sign-out').hidden = insecureWebGui || (!signedIn && !state.mullvadLoginSaved);
             byId('sign-out').textContent = state.mullvadLoginSaved
                 ? (signedIn ? 'Sign out and forget login' : 'Forget saved login') : 'Sign out';
             renderRelayChoice();
+            renderBatchChoice();
             if (signedIn && !state.catalogLoaded) {
                 void loadRelays();
             }
@@ -1285,6 +1353,15 @@
         }
         setMullvadSignedIn(false);
         byId('refresh-relays').addEventListener('click', () => void loadRelays(true));
+        byId('relay-list').addEventListener('change', () => {
+            byId('country').value = '';
+            byId('city').value = '';
+            byId('relay').value = '';
+            renderRelays();
+        });
+        byId('batch-scope').addEventListener('change', renderBatchChoice);
+        byId('save-batch').addEventListener('click', (event) => void saveMullvadBatch(event.currentTarget, 'add'));
+        byId('remove-batch').addEventListener('click', (event) => void saveMullvadBatch(event.currentTarget, 'remove'));
         byId('country').addEventListener('change', renderRelays);
         byId('city').addEventListener('change', renderRelays);
         byId('relay').addEventListener('change', renderRelayChoice);

@@ -8,6 +8,7 @@ const reply = {
         services: [],
         canManageCores: true,
         mullvadSignedIn: false,
+        mullvadBatches: {worldwide:false,countries:[]},
         proxyCores: {mihomo:true,tun2socks:true,xray:true,"sing-box":true},
         servicePresets: {Netflix:['netflix.com','nflxvideo.net']},
         settings: {dashboardBind:'lan',dashboardAddresses:{lan:'10.0.0.1',tailnet:'100.101.102.103'},enabled:false, interfaces:['lan','opt2'], availableInterfaces:[{id:'opt1', name:'VLAN 2', device:'vlan02'},
@@ -15,7 +16,8 @@ const reply = {
             tailscaleInterfaces:['opt2'], tailscaleInstalled:true, tailscaleExitAdvertised:true, strictInterfaces:[], localNetworks:[], hostname:'opnsense.home.arpa'},
         warnings: []
     },
-    relays: {relays:[{id:'ca-test-wg-001',country:'Canada',city:'Test',hostname:'ca-test-wg-001',active:true},{id:'ca-test-wg-002',country:'Canada',city:'Test',hostname:'ca-test-wg-002',active:false}], stale:false, fetchedAt:1794490200},
+    relays: {relays:[{id:'ca-test-wg-001',country:'Canada',countryCode:'ca',city:'Test',hostname:'ca-test-wg-001',active:true},{id:'ca-test-wg-002',country:'Canada',countryCode:'ca',city:'Test',hostname:'ca-test-wg-002',active:false},
+        {id:'jp-test-wg-001',country:'Japan',countryCode:'jp',city:'Test',hostname:'jp-test-wg-001',active:true}], stale:false, fetchedAt:1794490200},
     connections: {connections:[{protocol:'tcp', source:'10.0.0.20', sourcePort:1234, destination:'2001:db8::25', destinationPort:443, age:'00:00:10', bytes:[1024,1024]}]},
     status: {ok:true, cores:[{id:'mihomo',version:'1.19.34',installed:true,source:'Bundled',
         available:{version:'1.19.35',sha256:'a'.repeat(64)},update:true,rollback:false}],
@@ -27,7 +29,7 @@ const reply = {
     importProxies: {ok:true, imported:1, skipped:0},
     testRelay: {ok:true, replied:true, milliseconds:12.345},
     testExit: {ok:true, reachable:true, milliseconds:45.2},
-    refreshRelays: {ok:true, relays:[{id:'ca-test-wg-003',country:'Canada',city:'Test',hostname:'ca-test-wg-003',active:true}], stale:true, error:'Provider unavailable'}
+    refreshRelays: {ok:true, relays:[{id:'ca-test-wg-003',country:'Canada',countryCode:'ca',city:'Test',hostname:'ca-test-wg-003',active:true}], stale:true, error:'Provider unavailable'}
 };
 window.confirm = () => true;
 window.jQuery = (ready) => document.addEventListener('DOMContentLoaded', ready);
@@ -47,6 +49,18 @@ window.jQuery.ajax = async (request) => {
     if (action === 'logoutMullvad') {
         reply.dashboard.mullvadSignedIn = false;
         reply.dashboard.mullvadLoginSaved = false;
+    }
+    if (action === 'saveMullvadBatch') {
+        const batches = reply.dashboard.mullvadBatches;
+        const add = data.action === 'add';
+        if (data.country === '') {
+            batches.worldwide = add;
+        } else if (add && !batches.countries.includes(data.country)) {
+            batches.countries.push(data.country);
+        } else if (!add) {
+            batches.countries = batches.countries.filter((country) => country !== data.country);
+        }
+        return structuredClone({ok:true, batches});
     }
     if (action === 'saveService') {
         reply.dashboard.services = [{id:'list1', name:data.name, profile:data.profile, domains:data.domains.split(/[,\s]+/)}];
@@ -118,7 +132,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'restoreMullvad' && !Object.hasOwn(x.data, 'account')) &&
         !bv('register-form').hidden, 'saved login did not restore the server picker');
-    assert(bv('relay').options.length === 3 && bv('relay').options[2].disabled, 'server availability not enforced');
+    assert(bv('relay').options.length === 4 && bv('relay').options[2].disabled, 'server availability not enforced');
+    bv('mullvad-batches').open = true;
+    bv('batch-scope').value = 'ca';
+    bv('batch-scope').dispatchEvent(new Event('change'));
+    assert(bv('batch-status').textContent === '2 servers' && !bv('save-batch').disabled, 'country count was incorrect');
+    bv('save-batch').click();
+    await wait();
+    assert(requests.some(x => x.action === 'saveMullvadBatch' && x.data.country === 'ca' && x.data.action === 'add') &&
+        bv('relay-list').value === 'ca' && bv('relay').options.length === 3 && bv('relay').options[2].disabled,
+        'saved country batch should select all relays for that country, including unavailable ones');
+    bv('batch-scope').value = 'all';
+    bv('batch-scope').dispatchEvent(new Event('change'));
+    bv('save-batch').click();
+    await wait();
+    assert(requests.some(x => x.action === 'saveMullvadBatch' && x.data.country === '' && x.data.action === 'add') &&
+        bv('relay-list').value === 'all' && bv('relay').options.length === 4 &&
+        !requests.some(x => x.action === 'register'), 'adding the worldwide batch should save every relay without activating an exit');
+    bv('relay-list').value = 'ca';
+    bv('relay-list').dispatchEvent(new Event('change'));
+    bv('remove-batch').click();
+    await wait();
+    assert(requests.some(x => x.action === 'saveMullvadBatch' && x.data.country === '' && x.data.action === 'remove') &&
+        bv('relay-list').value === 'ca' && bv('relay-list').options.length === 2, 'removing worldwide should leave the country batch selected');
+    bv('refresh').click();
+    await wait();
+    assert(bv('relay-list').value === 'ca' && bv('relay').options.length === 3, 'saved batch was lost on dashboard refresh');
     bv('relay').value = 'ca-test-wg-001';
     bv('relay').dispatchEvent(new Event('change'));
     assert(bv('relay-choice').textContent.includes('Canada') && !bv('register').disabled, 'relay selection did not update');

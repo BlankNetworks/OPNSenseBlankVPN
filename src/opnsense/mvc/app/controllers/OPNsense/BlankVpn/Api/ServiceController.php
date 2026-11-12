@@ -128,6 +128,7 @@ class ServiceController extends ApiControllerBase
                     $acl->isPageAccessible($username, '/api/blankvpn/core/status'),
                 'mullvadSignedIn' => $this->mullvadToken() !== null,
                 'mullvadLoginSaved' => $mullvadUser !== null && (new Mullvad())->hasSavedAccount($mullvadUser),
+                'mullvadBatches' => Mullvad::savedBatches(Policy::fields($model->mullvadCatalog)),
                 'assignments' => array_values($assignments),
                 'settings' => $settings,
                 'activeSmartInterfaces' => $routing['smartInterfaces'],
@@ -146,6 +147,28 @@ class ServiceController extends ApiControllerBase
     public function refreshRelaysAction()
     {
         return $this->respond(fn () => (new Mullvad())->relays(true), true, true);
+    }
+
+    public function saveMullvadBatchAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $country = strtolower($this->input('country', 2));
+            $action = $this->input('action', 6);
+            if (!in_array($action, ['add', 'remove'], true)) {
+                throw new \DomainException('Choose whether to add or remove the Mullvad batch.');
+            }
+            $model = new BlankVpn();
+            $before = Mullvad::savedBatches(Policy::fields($model->mullvadCatalog));
+            $after = (new Mullvad())->updateBatch($before, $country, $action === 'add');
+            if ($after !== $before) {
+                Operations::change(function (BlankVpn $model) use ($after) {
+                    $model->mullvadCatalog->worldwide = $after['worldwide'] ? '1' : '0';
+                    $model->mullvadCatalog->countries = implode(',', $after['countries']);
+                    return [];
+                });
+            }
+            return ['batches' => $after];
+        }), true, true, true);
     }
 
     public function testRelayAction()

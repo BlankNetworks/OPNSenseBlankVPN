@@ -67,6 +67,41 @@ class Mullvad
         }
     }
 
+    public static function savedBatches(array $fields): array
+    {
+        $countries = preg_grep('/^[a-z]{2}$/D', explode(',', $fields['countries'] ?? ''));
+        return [
+            'worldwide' => ($fields['worldwide'] ?? '') === '1',
+            'countries' => array_values(array_unique($countries))
+        ];
+    }
+
+    public function updateBatch(array $batches, string $country, bool $add): array
+    {
+        // An empty country code selects the complete catalog.
+        if ($country !== '' && !preg_match('/^[a-z]{2}$/D', $country)) {
+            throw new \DomainException('Choose a valid Mullvad country.');
+        }
+        $saved = $country === '' ? $batches['worldwide'] : in_array($country, $batches['countries'], true);
+        if ($saved === $add) {
+            return $batches;
+        }
+        if ($add) {
+            $relays = $this->relays()['relays'];
+            if ($country === '' ? $relays === [] : !in_array($country, array_column($relays, 'countryCode'), true)) {
+                throw new \DomainException('No Mullvad servers are available in this catalog selection. Refresh the catalog and try again.');
+            }
+        }
+        if ($country === '') {
+            $batches['worldwide'] = $add;
+        } else {
+            $countries = $add ? [...$batches['countries'], $country] : array_diff($batches['countries'], [$country]);
+            sort($countries, SORT_STRING);
+            $batches['countries'] = $countries;
+        }
+        return $batches;
+    }
+
     public function account(string $account): array
     {
         return $this->authenticate($account)['account'];

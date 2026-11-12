@@ -1,4 +1,4 @@
-# Blank VPN 0.8.2
+# Blank VPN 0.8.3
 
 Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Multi-Path keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
@@ -38,14 +38,10 @@ The package and SHA-256 file are written to `dist/`. To reproduce the bundled re
 
 1. Use a matching OPNsense CE 26.7 VM or spare router with console access. Attach a WAN, a management network and a test client LAN or VLAN. Back up the lab configuration under **System → Configuration → Backups**.
 2. Confirm `opnsense-version -v` reports 26.7.x, `opnsense-version -n` reports `opnsense`, and `pkg config ABI` matches the chosen architecture.
-3. Transfer the package and checksum to the lab system. From their directory, verify and install as root.
+3. Transfer the matching package and its SHA-256 file to the router. Run these commands one line at a time as root from the same directory. For ARM64, replace `amd64` with `aarch64`.
 
    ```sh
-   arch=$(pkg config ABI | cut -d: -f3)
-   package="os-blank-vpn-0.8.2-$arch.pkg"
-   sha256 -c "$(awk '{print $1}' "$package.sha256")" "$package"
-   pkg info -F "./$package"
-   pkg add -f "./$package"
+   sha256sum -c os-blank-vpn-0.8.3-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.3-amd64.pkg
    pkg info os-blank-vpn
    ```
 
@@ -75,6 +71,12 @@ Choose **Tailscale address** to resolve the dashboard name to the detected Tails
 Each new Mullvad exit uses one Mullvad device slot. Multiple local devices can use the same exit. An interrupted registration retains a restricted recovery key. Retry with the same account and server to recover it without consuming a second device slot.
 
 VPN Login currently offers Mullvad. Existing exits saved with earlier releases remain available for routing. If the WebGUI opens over HTTP, enable HTTPS under **System → Settings → Administration**, then reopen the dashboard over HTTPS before signing in.
+
+### Add server batches
+
+In **VPN Login**, open **Manage server batches** after signing in. Pick a country or **Worldwide · all servers**, then click **Add batch**. Repeat for any other countries you want to keep handy. Select a saved batch under **Server list**, then narrow it by country, city, or server. **Refresh servers** updates every batch from the latest Mullvad catalog. Unavailable servers remain visible and cannot be activated.
+
+The router saves the selected batches in its OPNsense configuration. Adding or removing a batch leaves existing exits and routing rules intact. To route through a saved server, select it and click **Add Mullvad exit**, then assign the exit under **Network** or **Multi-Path Settings**. Mullvad allows five registered devices per account, and each newly activated exit uses one slot.
 
 ### Test servers and exits
 
