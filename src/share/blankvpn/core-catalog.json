@@ -21,6 +21,13 @@
       "tag": "v26.11.9",
       "asset": "Xray-freebsd-64.zip",
       "sha256": "d86d4b2c7498244b0aea8c936b59154b743401c6c0326c222ce367c229777ba6"
+    },
+    "sing-box": {
+      "version": "1.14.4",
+      "source": "blanknetworks",
+      "tag": "cores-sing-box-v1.14.4",
+      "asset": "sing-box-1.14.4-freebsd-amd64.gz",
+      "sha256": "3e05a3da3bcecf5cd36387c10debe80ee7b379379c958d2cd3f9658aeaf45f1d"
     }
   }
 }
