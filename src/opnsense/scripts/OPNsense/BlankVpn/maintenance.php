@@ -85,6 +85,10 @@ try {
                 $loaded = Firewall::loadedRules();
                 $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model) : [];
                 $watchOutages = Operations::watchMultiPathOutages($settings, $assignments);
+                $watchedExits = $watchOutages
+                    ? array_fill_keys(array_column(SmartRouting::boundServices(SmartRouting::services($model)), 'profile'), true)
+                    : [];
+                $observedOutage = false;
                 $old = Firewall::health();
                 $routes = Policy::routes($model);
                 $health = array_intersect_key($old, $routes);
@@ -116,10 +120,12 @@ try {
                     if (($profile['kind'] ?? '') === 'native') {
                         $health[$id]['source'] = $source;
                     }
+                    $probeChanged = ($previous['probeSucceeded'] ?? false) !== $success;
+                    $watchExit = isset($watchedExits[$id]);
+                    $observedOutage = $observedOutage || ($watchExit && $probeChanged && !$success);
                     $changed = $changed || ($previous['reachable'] ?? true) !== $reachable ||
-                        ($watchOutages && (($previous['probeSucceeded'] ?? false) !== $success ||
-                            ($success && time() - ($previous['checkedAt'] ?? 0) >
-                                (($profile['kind'] ?? '') === 'proxy' ? 300 : 180))));
+                        ($watchExit && ($probeChanged || ($success && time() - ($previous['checkedAt'] ?? 0) >
+                            (($profile['kind'] ?? '') === 'proxy' ? 300 : 180))));
                 }
                 Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
                 $pending = Policy::STATE_DIR . '/health-reload';
@@ -129,7 +135,9 @@ try {
                     Firewall::reload($model);
                     $after = Firewall::loadedRules();
                     if ($watchOutages) {
-                        Operations::resetOutageStates($settings, $assignments, $retry ? [] : ($loaded ?? []), $after);
+                        // A native reload can install the guard while older direct connections still exist.
+                        $beforeOutage = $retry || $observedOutage ? [] : ($loaded ?? []);
+                        Operations::resetOutageStates($settings, $assignments, $beforeOutage, $after);
                     }
                     $segments = [];
                     if ($settings['coverage'] === 'network' && $settings['networkMode'] === 'full') {
