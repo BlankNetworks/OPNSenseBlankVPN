@@ -209,7 +209,7 @@ class Mullvad
         }
     }
 
-    public function parseConfig(string $text): array
+    public function parseConfig(string $text, string $dnsOverride = ''): array
     {
         if (strlen($text) > 16384 || str_contains($text, "\0")) {
             throw new InvalidArgumentException('Invalid WireGuard configuration size or format.');
@@ -270,10 +270,12 @@ class Mullvad
         }
 
         [$host, $port] = $this->endpoint($peer['endpoint'] ?? '');
-        $dns = $this->commaList($interface['dns'] ?? '');
+        $dns = $this->commaList($dnsOverride !== '' ? $dnsOverride : ($interface['dns'] ?? ''));
         foreach ($dns as $server) {
-            if (filter_var($server, FILTER_VALIDATE_IP) === false) {
-                throw new InvalidArgumentException('WireGuard DNS entries must be IP addresses.');
+            if (filter_var($server, FILTER_VALIDATE_IP, $dnsOverride !== '' ? FILTER_FLAG_IPV4 : 0) === false) {
+                throw new InvalidArgumentException($dnsOverride !== ''
+                    ? 'Enter an IPv4 DNS resolver reachable through this tunnel.'
+                    : 'WireGuard DNS entries must be IP addresses.');
             }
         }
         return [

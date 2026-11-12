@@ -130,6 +130,18 @@ class ServiceController extends ApiControllerBase
         });
     }
 
+    public function providersAction()
+    {
+        return $this->respond(static function () {
+            $path = '/usr/local/share/blankvpn/providers.json';
+            $catalog = is_readable($path) ? file_get_contents($path) : false;
+            if ($catalog === false) {
+                throw new \RuntimeException('The installed VPN provider catalog could not be read.');
+            }
+            return ['providers' => json_decode($catalog, true, 32, JSON_THROW_ON_ERROR)];
+        }, false, true);
+    }
+
     public function relaysAction()
     {
         return $this->respond(fn () => (new Mullvad())->relays(), false, true);
@@ -274,7 +286,7 @@ class ServiceController extends ApiControllerBase
         return $this->respond(fn () => Operations::exclusive(function () {
             WireGuard::preflight();
             $mullvad = new Mullvad();
-            $config = $mullvad->parseConfig($this->input('config', 16384));
+            $config = $mullvad->parseConfig($this->input('config', 16384), trim($this->input('dns', 128)));
             $identity = $config;
             $identity['publicKey'] = $mullvad->derivePublicKey($config['privateKey']);
             $dnsPort = Resolver::freePort(Policy::routes(new BlankVpn()));

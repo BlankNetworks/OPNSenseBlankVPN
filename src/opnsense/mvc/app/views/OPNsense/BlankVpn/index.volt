@@ -199,6 +199,22 @@
             </table>
         </div>
 
+        <section class="bv-panel" aria-labelledby="bv-provider-title" data-manage-only>
+            <h3 id="bv-provider-title">VPN providers</h3>
+            <div class="bv-fields">
+                <label>Search providers
+                    <input id="bv-provider-search" class="form-control" type="search" autocomplete="off">
+                </label>
+                <label>Provider <select id="bv-provider" class="form-control" disabled></select></label>
+            </div>
+            <p id="bv-provider-status" class="text-muted" aria-live="polite"></p>
+            <button id="bv-provider-retry" type="button" class="btn btn-default" hidden>Retry</button>
+            <div id="bv-provider-details" hidden>
+                <p id="bv-provider-note" class="text-muted"></p>
+                <div id="bv-provider-methods"></div>
+            </div>
+        </section>
+
         <div class="bv-grid" data-manage-only>
             <section aria-labelledby="bv-register-title">
                 <h3 id="bv-register-title">Add a Mullvad exit</h3>
@@ -235,10 +251,16 @@
                 <h3 id="bv-import-title">Import a WireGuard exit</h3>
                 <form id="bv-import-form">
                     <label>Profile name <input id="bv-import-name" type="text" class="form-control" maxlength="80" required></label>
+                    <label>Load a WireGuard file
+                        <input id="bv-import-file" type="file" class="form-control" accept=".conf,text/plain">
+                    </label>
                     <label>WireGuard configuration
                         <textarea id="bv-import-config" class="form-control bv-config-text" rows="9" maxlength="16384" autocomplete="off" spellcheck="false" required></textarea>
                     </label>
-                    <p class="text-muted">Paste a WireGuard configuration from your provider. For manual Mullvad setup, download one from the <a href="https://mullvad.net/en/account/wireguard-config" target="_blank" rel="noopener noreferrer">Mullvad WireGuard generator</a>.</p>
+                    <label>IPv4 DNS override (optional)
+                        <input id="bv-import-dns" type="text" class="form-control" maxlength="128" autocomplete="off" spellcheck="false">
+                    </label>
+                    <p class="text-muted">Use a single-peer, full-tunnel WireGuard profile. If the profile lacks an IPv4 resolver, enter one that can be reached through the tunnel.</p>
                     <button type="submit" class="btn btn-primary">Import exit</button>
                 </form>
             </section>

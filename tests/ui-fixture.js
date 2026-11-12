@@ -13,6 +13,7 @@ const reply = {
         settings: {dashboardBind:'lan',dashboardAddresses:{lan:'10.0.0.1',tailnet:'100.101.102.103'},enabled:true, interfaces:['lan'], availableInterfaces:[{id:'lan', name:'LAN'}], strictInterfaces:[], localNetworks:[], hostname:'opnsense.home.arpa'},
         warnings: []
     },
+    providers: {ok:true, providers:JSON.parse(document.getElementById('provider-fixture').textContent)},
     relays: {relays:[{id:'ca-test-wg-001',country:'Canada',city:'Test',hostname:'ca-test-wg-001',active:true},{id:'ca-test-wg-002',country:'Canada',city:'Test',hostname:'ca-test-wg-002',active:false}], stale:false, fetchedAt:1794490200},
     connections: {connections:[{protocol:'tcp', source:'10.0.0.20', sourcePort:1234, destination:'2001:db8::25', destinationPort:443, age:'00:00:10', bytes:[1024,1024]}]},
     status: {ok:true, cores:[{id:'mihomo',version:'1.19.34',installed:true,source:'Bundled',
@@ -71,12 +72,46 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('connection-list').textContent.includes('2.0 KiB'), 'connection bytes not rendered');
     document.querySelector('[data-bv-section="vpns"]').click();
     assert(!bv('tunnels').hidden && bv('tunnels').open, 'VPN section did not open');
-    bv('native-name').value = 'NordVPN';
+    await wait();
+    assert(requests.some(x => x.action === 'providers' && x.method === 'GET'), 'provider catalog was not fetched');
+    const chooseProvider = (query) => {
+        bv('provider-search').value = query;
+        bv('provider-search').dispatchEvent(new Event('input'));
+    };
+    chooseProvider('nordlynx');
+    assert(bv('provider').value === 'nordvpn', 'search did not match provider alias');
+    assert(bv('provider-methods').querySelectorAll('a[target="_blank"]').length === 2,
+        'NordVPN setup paths lack provider guides');
+    bv('provider-methods').querySelectorAll('button')[1].click();
+    assert(bv('native-name').value === 'NordVPN' && document.activeElement === bv('native-name'),
+        'OpenVPN provider shortcut did not focus and name the gateway form');
     bv('native-gateway').value = 'gw1';
     bv('native-dns').value = '192.0.2.9';
     bv('native-form').requestSubmit(bv('native-add'));
     await wait();
     assert(requests.some(x => x.action === 'addNativeExit' && x.data.gateway === 'gw1'), 'native VPN gateway was not submitted');
+    chooseProvider('mysteriumvpn');
+    bv('provider-methods').querySelector('button').click();
+    const data = new DataTransfer();
+    data.items.add(new File(['[Interface]\nDNS = vpn.example'], 'provider.conf'));
+    bv('import-file').files = data.files;
+    bv('import-file').dispatchEvent(new Event('change'));
+    await wait();
+    bv('import-dns').value = '192.0.2.9';
+    bv('import-form').requestSubmit(bv('import-form').querySelector('button[type=submit]'));
+    await wait();
+    assert(requests.some(x => x.action === 'importProfile' && x.data.name === 'MysteriumVPN' &&
+        x.data.config.includes('DNS = vpn.example') && x.data.dns === '192.0.2.9'),
+        'WireGuard provider shortcut, file load or DNS override failed');
+    chooseProvider('nymvpn');
+    assert(bv('provider-note').textContent.includes('daemon') && !bv('provider-methods').querySelector('button'),
+        'client-managed service was offered an unsupported import');
+    chooseProvider('geph5');
+    bv('provider-methods').querySelector('button').click();
+    assert(!bv('proxies').hidden && bv('proxy-manual').closest('details').open &&
+        bv('manual-name').value === 'Geph' && bv('manual-protocol').value === 'socks5',
+        'companion SOCKS5 setup did not open the manual form');
+    document.querySelector('[data-bv-section="vpns"]').click();
     await wait();
     assert(bv('relay').options.length === 3 && bv('relay').options[2].disabled, 'server availability not enforced');
     bv('account').value = '1234567890123456';

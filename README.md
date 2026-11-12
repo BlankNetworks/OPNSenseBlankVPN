@@ -1,4 +1,4 @@
-# Blank VPN 0.5.1
+# Blank VPN 0.6.0
 
 Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Smart Routing keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
@@ -42,7 +42,7 @@ The package and SHA-256 file are written to `dist/`. To reproduce the bundled re
 
    ```sh
    arch=$(pkg config ABI | cut -d: -f3)
-   package="os-blank-vpn-0.5.1-$arch.pkg"
+   package="os-blank-vpn-0.6.0-$arch.pkg"
    sha256 -c "$(awk '{print $1}' "$package.sha256")" "$package"
    pkg info -F "./$package"
    pkg add "./$package"
@@ -76,19 +76,36 @@ The dashboard binding chooses the IP advertised by Blank VPN’s managed DNS. We
 
 Each new Mullvad exit uses one Mullvad device slot. Multiple local devices can use the same exit. An interrupted registration retains a restricted recovery key. Retry with the same account and server to recover it without consuming a second device slot. To set up the key on Mullvad’s website, use the [Mullvad configuration generator](https://mullvad.net/en/account/wireguard-config) and import the resulting file under **VPNs → Import a WireGuard exit**.
 
-## Add other VPN providers
+## Add VPN providers
+
+Open **VPNs → VPN providers** and search for a service. The [provider catalog](src/share/blankvpn/providers.json) covers 98 entries and offers setup for 64 through compatible profiles, native tunnels, or proxy endpoints. Each setup path links to the provider's documentation. Availability can vary by plan and server.
 
 | Provider | Setup path | Provider instructions |
 | --- | --- | --- |
-| NordVPN | Configure OpenVPN in OPNsense with its service credentials, or use a provider-issued manual WireGuard configuration if available for your account. | [Service credentials](https://support.nordvpn.com/hc/en-us/articles/19685514639633) · [Manual WireGuard](https://support.nordvpn.com/hc/en-us/articles/51264943286545) |
-| ExpressVPN | Configure the OpenVPN client in OPNsense with the provider’s manual credentials and server file. | [Manual configuration](https://www.expressvpn.com/support/manage-account/find-manual-configuration-credentials/) |
+| Mullvad | Sign in with your account number and choose an exact relay, or import a WireGuard profile. | [WireGuard generator](https://mullvad.net/en/account/wireguard-config) |
+| NordVPN | Import WireGuard from Nord Account or attach an OpenVPN client configured with NordVPN service credentials. | [Manual configurations](https://support.nordvpn.com/hc/en-us/articles/19617516982929-How-to-find-various-server-configuration-files-for-NordVPN) · [Service credentials](https://support.nordvpn.com/hc/en-us/articles/19685514639633-How-to-find-your-service-credentials-for-manual-NordVPN-setup) |
+| ExpressVPN | Attach an OpenVPN client configured with ExpressVPN's manual credentials and server file. | [Manual setup](https://www.expressvpn.com/support/vpn-setup/manual-config-for-asus-router-with-openvpn/) |
 | Surfshark | Download the server’s WireGuard configuration and import it in Blank VPN. You can also attach a native OpenVPN client. | [WireGuard configuration](https://support.surfshark.com/hc/en-us/articles/6585805595666) · [OPNsense OpenVPN](https://support.surfshark.com/hc/en-us/articles/12434921071890) |
-| Proton VPN | Download the server’s WireGuard configuration and import it in Blank VPN. | [WireGuard configuration](https://protonvpn.com/support/wireguard-configurations) |
-| Other providers | Use a compatible full-tunnel WireGuard configuration or a native OpenVPN client gateway. | [OPNsense WireGuard selective routing](https://docs.opnsense.org/manual/how-tos/wireguard-selective-routing.html) |
+| Proton VPN | Import WireGuard or attach a native OpenVPN client. | [WireGuard configuration](https://protonvpn.com/support/wireguard-configurations) · [OpenVPN profiles](https://protonvpn.com/support/vpn-config-download) |
+| VPNBaron and Xeovo | Import compatible WireGuard or attach OpenVPN. For supported proxy servers, add the HTTPS subscription from your account. | [VPNBaron](https://vpnbaron.com/docs/stealth/hiddify/) · [Xeovo](https://hub.xeovo.com/posts/182-how-to-setup-stealth-proxies-on-keenetic-xkeen) |
 
-For a direct import, open **VPNs → Import a WireGuard exit** and paste a one-peer configuration with full-tunnel IPv4 AllowedIPs. The endpoint must resolve over IPv4. The tunnel address is installed with a host prefix for policy routing. Each concurrent WireGuard exit needs a distinct local tunnel address and key pair. Providers that reuse a tunnel address across servers can require using one exit at a time.
+For a direct import, open **VPNs → Import a WireGuard exit**, choose a `.conf` file or paste its contents, and save the exit. Use a one-peer configuration with full-tunnel IPv4 AllowedIPs. The endpoint must resolve over IPv4. If the file lacks a usable IPv4 DNS resolver, provide a resolver reachable through the tunnel in **IPv4 DNS override**. The tunnel address is installed with a host prefix for policy routing. Each concurrent WireGuard exit needs a distinct local tunnel address and key pair. Providers that reuse a tunnel address across servers can require using one exit at a time.
 
 For a native tunnel, configure the provider client, assign its interface, and create a named IPv4 gateway in OPNsense. Keep the WAN as the system default, disable any provider-pushed default route or split default routes, and confirm the firewall’s own default traffic still leaves over WAN. Then choose **VPNs → Use an OPNsense VPN tunnel**, select the gateway, and enter the provider’s IPv4 DNS resolver reachable through the tunnel. Device and service assignments can then select the exit by name. OPNsense manages the VPN credentials, certificates, and connection. A selected gateway must remain attached to the same named interface and have a unique active IPv4 tunnel address.
+
+### Decentralized and companion services
+
+| Service | Blank VPN setup | Provider instructions |
+| --- | --- | --- |
+| MysteriumVPN retail | Import the WireGuard router profile generated in your retail account. Regenerating it can replace an existing profile. | [Router profile](https://help.mysteriumvpn.com/en/articles/16010679-how-to-generate-wireguard-configuration-file) |
+| Geph | Run Geph5 on a companion host and add its reachable SOCKS5 or HTTP endpoint under **Proxies**. | [Geph5 client](https://docs.rs/crate/geph5-client/latest) |
+| Sentinel dVPN | Use the official SDK to run a V2Ray or Xray session on a companion host, then add its reachable SOCKS5 endpoint. The companion handles credentials and session renewal. | [Sentinel SDK](https://github.com/sentinel-official/sentinel-js-sdk#vpn-protocols) |
+| Mysterium Network / MYST | Direct sessions require the Mysterium node client. Use the retail WireGuard option if you have a MysteriumVPN subscription. | [Mysterium node client](https://github.com/mysteriumnetwork/node) |
+| NymVPN | Fast and Anonymous modes require the Nym daemon and its rotating credentials. | [Nym router and configuration guidance](https://support.nym.com/hc/en-us/articles/32489677253137-Where-can-I-find-the-NymVPN-WireGuard-configuration-files) |
+| Deeper Network | The hardware uses AtomOS to select and apply DPN routing. The standalone DPN app also manages its own sessions. Both remain informational entries in the catalog. | [Deeper Connect](https://deeper-network-inc.gitbook.io/deeper-connect-knowledge-base/atom-os-functions/dpn/dpn-tunnel) · [Deeper DPN app](https://dpn.deeper.network/how-dpn-works) |
+| Orchid | Orchid marketplace access requires the Orchid client and its payment and session protocol. | [Orchid client documentation](https://docs.orchid.com/en/latest/using-orchid/) |
+
+For a companion proxy, restrict the listener to a private link and allow only the router to connect. In Blank VPN choose **Proxies → Add a proxy manually**, supply the companion's reachable address and port, and enable the exit. Choose **Block internet** on the device assignment to use the IPv4 kill switch. The companion must stop forwarding when its provider session ends. Blank VPN sees the proxy endpoint and its reachability, so verify the public exit IP and the failure behavior when stopping the companion's VPN session. Test UDP separately if the application needs it.
 
 ## Add proxy servers and subscriptions
 

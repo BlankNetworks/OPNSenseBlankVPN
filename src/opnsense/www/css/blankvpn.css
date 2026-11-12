@@ -46,6 +46,10 @@
     justify-content: flex-start;
 }
 
+.blankvpn .bv-provider-method + .bv-provider-method {
+    margin-top: .5rem;
+}
+
 .blankvpn .bv-heading p {
     margin: .35rem 0 0;
 }

@@ -152,6 +152,10 @@ try {
     $parsed = $provider->parseConfig(str_replace("\n", "\r\n", $config));
     check($parsed['host'] === '2001:db8::91' && $parsed['port'] === 51820 && $parsed['address6'] === 'fc00:bbbb:bbbb:bb01::9/128', 'Import lost tunnel address or endpoint information.');
     check($parsed['mtu'] === 1380 && $parsed['keepalive'] === 25 && count($parsed['dns']) === 2, 'Import lost tunnel settings.');
+    $namedDns = str_replace('DNS = 10.64.0.1, fc00:bbbb:bbbb:bb01::1', 'DNS = vpn.example', $config);
+    expectFailure(fn () => $provider->parseConfig($namedDns), 'DNS entries must be IP addresses');
+    check($provider->parseConfig($namedDns, '10.64.0.1')['dns'] === ['10.64.0.1'], 'The explicit IPv4 resolver should replace the profile DNS.');
+    expectFailure(fn () => $provider->parseConfig($config, '::1'), 'IPv4 DNS resolver');
     $withPsk = $provider->parseConfig(str_replace('[Peer]', "[Peer]\nPresharedKey = " . base64_encode(str_repeat('P', 32)), $config));
     if ($withPsk['presharedKey'] !== base64_encode(str_repeat('P', 32))) {
         throw new RuntimeException('Imported WireGuard configuration lost its preshared key.');

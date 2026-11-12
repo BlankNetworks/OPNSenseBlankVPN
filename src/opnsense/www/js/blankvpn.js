@@ -10,6 +10,14 @@
 
         const modes = {full: 'Full Tunneling', multi: 'Multi-Path Tunneling',
             disabled: 'Disabled (No VPN)', blocked: 'Blocked (No Internet)'};
+        const providerMethods = new Map([
+            ['mullvad', {label: 'Sign in to Mullvad', section: 'vpns', field: 'account'}],
+            ['wireguard', {label: 'Import WireGuard', section: 'vpns', name: 'import-name', field: 'import-name'}],
+            ['openvpn', {label: 'Attach OpenVPN gateway', section: 'vpns', name: 'native-name', field: 'native-name'}],
+            ['proxy-manual', {label: 'Add proxy server', section: 'proxies', name: 'manual-name', field: 'manual-host'}],
+            ['proxy-import', {label: 'Import proxy configuration', section: 'proxies', field: 'proxy-body'}],
+            ['subscription', {label: 'Add proxy subscription', section: 'proxies', name: 'subscription-name', field: 'subscription-url'}]
+        ]);
         const state = {
             devices: [],
             profiles: [],
@@ -32,7 +40,9 @@
             busy: false,
             dashboardRequest: null,
             settingsDirty: false,
-            catalogLoaded: false
+            catalogLoaded: false,
+            providers: null,
+            providerRequest: null
         };
 
         function array(value) {
@@ -176,6 +186,107 @@
         function exitChoice(profile) {
             return {value: profile.id, label: profileName(profile.id),
                 group: profile.kind === 'proxy' ? 'Proxy exits' : 'VPN exits'};
+        }
+
+        function providerGuide(url, label) {
+            if (typeof url !== 'string' || !url.startsWith('https://')) {
+                return null;
+            }
+            const link = document.createElement('a');
+            link.href = url;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = label;
+            return link;
+        }
+
+        function openProviderSetup(provider, method, setup) {
+            showSection(setup.section);
+            if (setup.name && !byId(setup.name).value.trim()) {
+                byId(setup.name).value = provider.name;
+            }
+            if (method.type === 'proxy-manual') {
+                byId('proxy-manual').closest('details').open = true;
+                if (method.protocol && !byId('manual-host').value.trim()) {
+                    byId('manual-protocol').value = method.protocol;
+                    manualFields();
+                }
+            }
+            byId(setup.field).focus();
+        }
+
+        function renderProvider() {
+            const provider = state.providers?.find((item) => item.id === byId('provider').value);
+            const methods = byId('provider-methods');
+            methods.replaceChildren();
+            byId('provider-details').hidden = !provider;
+            if (!provider) {
+                return;
+            }
+            byId('provider-note').hidden = !provider.note;
+            byId('provider-note').textContent = provider.note || '';
+            for (const method of array(provider.methods)) {
+                const setup = providerMethods.get(method.type);
+                if (!setup) {
+                    continue;
+                }
+                const row = document.createElement('div');
+                row.className = 'bv-actions bv-provider-method';
+                row.append(button(setup.label, () => openProviderSetup(provider, method, setup)));
+                const guide = providerGuide(method.docs, 'Provider guide');
+                if (guide) {
+                    guide.setAttribute('aria-label', provider.name + ' guide for ' + setup.label);
+                    row.append(guide);
+                }
+                methods.append(row);
+            }
+            const guide = providerGuide(provider.docs, 'Provider information');
+            if (guide) {
+                methods.append(guide);
+            }
+        }
+
+        function filterProviders() {
+            if (!state.providers) {
+                return;
+            }
+            const query = byId('provider-search').value.trim().toLowerCase();
+            const matches = state.providers.filter((provider) =>
+                (provider.name + ' ' + provider.id + ' ' + (provider.aliases || '')).toLowerCase().includes(query)
+            );
+            const choices = matches.map((provider) => ({
+                value: provider.id, label: provider.name,
+                group: provider.category === 'client' ? 'Decentralized and companion services'
+                    : provider.methods?.length ? 'Manual and account setup' : 'Other providers'
+            }));
+            const select = byId('provider');
+            options(select, choices, matches.length ? 'Choose a provider' : 'No matching providers',
+                matches.length === 1 ? matches[0].id : select.value);
+            select.disabled = !matches.length;
+            byId('provider-status').textContent = matches.length === 0 ? 'No providers match your search.' : '';
+            renderProvider();
+        }
+
+        async function loadProviders() {
+            if (state.providers || state.providerRequest) {
+                return;
+            }
+            byId('provider-retry').hidden = true;
+            byId('provider-status').textContent = 'Loading VPN providers…';
+            state.providerRequest = api('providers');
+            try {
+                const result = await state.providerRequest;
+                if (!Array.isArray(result.providers) || !result.providers.length) {
+                    throw new Error('The router returned an empty provider catalog.');
+                }
+                state.providers = result.providers;
+                filterProviders();
+            } catch (error) {
+                byId('provider-status').textContent = errorMessage(error, 'Could not load VPN providers.');
+                byId('provider-retry').hidden = false;
+            } finally {
+                state.providerRequest = null;
+            }
         }
 
         function showSection(section) {
@@ -1018,10 +1129,18 @@
         byId('refresh-connections').addEventListener('click', () => void loadConnections());
 
         byId('tunnels').addEventListener('toggle', () => {
-            if (byId('tunnels').open && !state.catalogLoaded) {
-                void loadRelays();
+            if (byId('tunnels').open && !byId('tunnels').hidden) {
+                if (!state.catalogLoaded) {
+                    void loadRelays();
+                }
+                if (state.canManage) {
+                    void loadProviders();
+                }
             }
         });
+        byId('provider-search').addEventListener('input', filterProviders);
+        byId('provider').addEventListener('change', renderProvider);
+        byId('provider-retry').addEventListener('click', () => void loadProviders());
         byId('refresh-relays').addEventListener('click', () => void loadRelays(true));
         byId('country').addEventListener('change', renderRelays);
         byId('city').addEventListener('change', renderRelays);
@@ -1060,9 +1179,32 @@
                 renderRelays();
             });
         });
+        byId('import-file').addEventListener('change', async (event) => {
+            const input = event.currentTarget;
+            const file = input.files[0];
+            if (!file) {
+                return;
+            }
+            if (file.size > 16384) {
+                notice('Choose a WireGuard configuration file up to 16 KiB.', 'danger');
+                input.value = '';
+                return;
+            }
+            try {
+                const config = await file.text();
+                if (input.files[0] === file) {
+                    byId('import-config').value = config;
+                    input.value = '';
+                    byId('import-config').focus();
+                }
+            } catch {
+                notice('Could not read the WireGuard file. Paste its contents to import it.', 'danger');
+            }
+        });
         byId('import-form').addEventListener('submit', (event) => {
             event.preventDefault();
-            const payload = {name: byId('import-name').value.trim(), config: byId('import-config').value};
+            const payload = {name: byId('import-name').value.trim(), config: byId('import-config').value,
+                dns: byId('import-dns').value.trim()};
             void mutate(event.submitter, () => api('importProfile', payload), 'WireGuard exit imported.', () => {
                 event.target.reset();
             });
@@ -1224,6 +1366,7 @@
         });
         window.addEventListener('pagehide', () => {
             byId('account').value = '';
+            byId('import-file').value = '';
             byId('import-config').value = '';
             byId('proxy-body').value = '';
             byId('subscription-url').value = '';

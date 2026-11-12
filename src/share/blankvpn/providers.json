@@ -1,0 +1,1043 @@
+[
+  {
+    "id": "12vpx",
+    "name": "12VPX",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://12vpx.com/en/setup/wireguard"
+      }
+    ]
+  },
+  {
+    "id": "acevpn",
+    "name": "AceVPN",
+    "note": "Current manual configuration availability is unverified."
+  },
+  {
+    "id": "adguard-vpn",
+    "name": "AdGuard VPN",
+    "note": "AdGuard documents manual IKEv2/IPsec EAP, which requires a separate client configuration.",
+    "docs": "https://adguard-vpn.com/kb/adguard-vpn-for-routers/installation/"
+  },
+  {
+    "id": "airvpn",
+    "name": "AirVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://airvpn.org/generator/"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://airvpn.org/generator/"
+      }
+    ]
+  },
+  {
+    "id": "amnezia-premium",
+    "name": "Amnezia Premium",
+    "note": "The service exports AmneziaWG 3.1 profiles, which need an AmneziaWG implementation.",
+    "docs": "https://docs.amnezia.org/documentation/instructions/personal_dashboard/"
+  },
+  {
+    "id": "anonine",
+    "name": "Anonine",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://help.anonine.com/support/solutions/articles/5000817206-anonine-wireguard-installation-guide-for-macos"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://help.anonine.com/support/solutions/articles/5000768454-anonine-openvpn-dd-wrt-manual-configuration"
+      }
+    ]
+  },
+  {
+    "id": "astrill",
+    "name": "Astrill",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://astrill.com/wiki/Astrill_Setup_Manual%3AHow_to_setup_WireGuard_on_Linux"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://www.astrill.com/wiki/Astrill_Setup_Manual%3AHow_to_configure_OpenVPN_with_OpenVPN_application_on_Windows"
+      }
+    ]
+  },
+  {
+    "id": "azirevpn",
+    "name": "AzireVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://www.azirevpn.com/support/guides/openwrt"
+      }
+    ]
+  },
+  {
+    "id": "bolehvpn",
+    "name": "BolehVPN",
+    "note": "Older OpenVPN guides exist. Current service availability is unverified."
+  },
+  {
+    "id": "bulletvpn",
+    "name": "BulletVPN",
+    "note": "The provider announced that its VPN service has ended.",
+    "docs": "https://www.bulletvpn.com/"
+  },
+  {
+    "id": "cactusvpn",
+    "name": "CactusVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://www.cactusvpn.com/tutorials/set-up-wireguard-openwrt-terminal/"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://www.cactusvpn.com/tutorials/how-to-set-up-openvpn-ubuntu-command-line/"
+      }
+    ]
+  },
+  {
+    "id": "calyxvpn",
+    "name": "CalyxVPN",
+    "note": "Current manual configuration availability is unverified."
+  },
+  {
+    "id": "casvpn",
+    "name": "CasVPN",
+    "note": "Current service availability and manual configuration are unverified."
+  },
+  {
+    "id": "celo-vpn",
+    "name": "Celo VPN",
+    "note": "Use provider-issued SOCKS5 details or a compatible VMess profile. Check current VMess settings with Celo.",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://support.celo.net/kb/linux-wireguard-setup/"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://celo.net/members/index.php/knowledgebase/53/OpenVPN-Community-Version-Setup.html"
+      },
+      {
+        "type": "proxy-manual",
+        "docs": "https://support.celo.net/kb/socks5-v2ray-vmess-server-details/",
+        "protocol": "socks5"
+      },
+      {
+        "type": "proxy-import",
+        "docs": "https://support.celo.net/kb/v2rayng/"
+      }
+    ]
+  },
+  {
+    "id": "chibatunnel",
+    "name": "ChibaTunnel",
+    "category": "client",
+    "note": "A Sentinel client that manages its own sessions. Setup requires the ChibaTunnel client.",
+    "docs": "https://chibatunnel.xyz/"
+  },
+  {
+    "id": "cryptostorm",
+    "name": "cryptostorm",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://cryptostorm.is/wireguard"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://cryptostorm.is/nix"
+      }
+    ]
+  },
+  {
+    "id": "cyberghost",
+    "name": "CyberGhost",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://support.cyberghostvpn.com/hc/en-us/articles/213811185-Read-Me-First-How-to-Use-CyberGhost-on-a-Router-Raspberry-Pi-Synology-NAS-Sat-Receiver"
+      }
+    ]
+  },
+  {
+    "id": "deeper-connect",
+    "name": "Deeper Connect",
+    "category": "client",
+    "note": "Deeper Connect routes traffic through its own appliance. Configure its DPN modes in AtomOS.",
+    "docs": "https://deeper-network-inc.gitbook.io/deeper-connect-knowledge-base/atom-os-functions/dpn/dpn-tunnel",
+    "aliases": "Deeper Network AtomOS"
+  },
+  {
+    "id": "deeper-dpn-app",
+    "name": "Deeper DPN app",
+    "category": "client",
+    "note": "The software DPN service uses the Deeper app. Its setup is separate from Deeper Connect hardware.",
+    "docs": "https://dpn.deeper.network/how-dpn-works"
+  },
+  {
+    "id": "expressvpn",
+    "name": "ExpressVPN",
+    "note": "Download OpenVPN files and use the manual setup credentials from your ExpressVPN account.",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://www.expressvpn.com/support/vpn-setup/manual-config-for-asus-router-with-openvpn/"
+      }
+    ]
+  },
+  {
+    "id": "fastestvpn",
+    "name": "FastestVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://support.fastestvpn.com/tutorials/windows/wireguard/"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://support.fastestvpn.com/tutorials/windows/openvpn-gui/"
+      }
+    ]
+  },
+  {
+    "id": "fastvpn-namecheap",
+    "name": "FastVPN / Namecheap",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://www.namecheap.com/support/knowledgebase/article.aspx/10398/2270/how-to-set-up-fastvpn-on-openwrt-router/"
+      }
+    ],
+    "aliases": "Namecheap"
+  },
+  {
+    "id": "frootvpn",
+    "name": "FrootVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://help.frootvpn.com/support/solutions/articles/5000857019-frootvpn-wireguard-installation-guide-for-android"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://help.frootvpn.com/support/solutions/articles/5000730302-frootvpn-openvpn-installation-guides"
+      }
+    ]
+  },
+  {
+    "id": "geph",
+    "name": "Geph",
+    "category": "client",
+    "note": "Run the Geph5 client on a companion host. Give Blank VPN access to its SOCKS5 or HTTP listener over a private interface.",
+    "methods": [
+      {
+        "type": "proxy-manual",
+        "docs": "https://docs.rs/crate/geph5-client/latest",
+        "protocol": "socks5"
+      }
+    ],
+    "aliases": "Geph5"
+  },
+  {
+    "id": "getflix-fullvpn",
+    "name": "Getflix FullVPN",
+    "note": "Requires Getflix FullVPN access.",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://support.getflix.com/article/744-openvpn-setup-instructions-for-getflix-fullvpn-service"
+      }
+    ]
+  },
+  {
+    "id": "goose-vpn",
+    "name": "GOOSE VPN",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://support.goosevpn.com/hc/en-us/articles/5080124583570-Install-GOOSE-VPN-with-OpenVPN-for-DD-WRT-Routers"
+      }
+    ]
+  },
+  {
+    "id": "hide-me",
+    "name": "hide.me",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://hide.me/en/help/how-to-connect-via-wireguard-configuration-file/"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://hide.me/en/help/where-can-i-download-openvpn-configuration-files/"
+      }
+    ]
+  },
+  {
+    "id": "hideipvpn",
+    "name": "HideIPVPN",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://www.hideipvpn.com/setup/how-to-download-openvpn-config-files/"
+      }
+    ]
+  },
+  {
+    "id": "hidemy-name-hide-mn",
+    "name": "hidemy.name / hide.mn",
+    "note": "Generate a standard WireGuard or OpenVPN profile. AmneziaWG profiles require a dedicated AmneziaWG client.",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://hide.mn/en/faq/vpn/vpn-installation-and-configuration/third-party-applications/"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://hide.mn/en/faq/vpn/vpn-installation-and-configuration/third-party-applications/openvpn-for-linux/"
+      }
+    ]
+  },
+  {
+    "id": "hma-hidemyass",
+    "name": "HMA / HideMyAss",
+    "note": "Current router profile availability is unverified.",
+    "docs": "https://www.hidemyass.com/en-ca/installation-files"
+  },
+  {
+    "id": "hotspot-shield",
+    "name": "Hotspot Shield",
+    "note": "Current manual VPN profile availability is unverified.",
+    "docs": "https://support.hotspotshield.com/en/manage-account-devices/add-or-remove-devices-on-your-account/how-many-devices-can-be-connected-to-hotspot-shield-vpn-simultaneously"
+  },
+  {
+    "id": "ibvpn",
+    "name": "ibVPN",
+    "note": "Current standalone service availability is unverified."
+  },
+  {
+    "id": "ipvanish",
+    "name": "IPVanish",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://www.ipvanish.com/blog/generate-wireguard-configurations/"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://www.ipvanish.com/software/configs/"
+      }
+    ]
+  },
+  {
+    "id": "ivpn",
+    "name": "IVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://www.ivpn.net/setup/router/openwrt-wireguard/"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://www.ivpn.net/en/openvpn-config/"
+      }
+    ]
+  },
+  {
+    "id": "keenow",
+    "name": "Keenow",
+    "note": "Current service availability and manual configuration are unverified."
+  },
+  {
+    "id": "lavabit-encrypted-proxy-vpn",
+    "name": "Lavabit Encrypted Proxy / VPN",
+    "note": "The provider publishes a historical OpenVPN generator. Current VPN service availability is unverified.",
+    "docs": "https://github.com/lavabit/pahoehoe"
+  },
+  {
+    "id": "le-vpn",
+    "name": "Le VPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://www.le-vpn.com/clients/index.php/knowledgebase/294/Wireguard"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://www.le-vpn.com/vpn-router/"
+      }
+    ]
+  },
+  {
+    "id": "limevpn",
+    "name": "LimeVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://limevpn.com/download/windows/"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://www.limevpn.com/setup/router/"
+      }
+    ]
+  },
+  {
+    "id": "liquidvpn",
+    "name": "LiquidVPN",
+    "note": "Current service availability and manual configuration are unverified."
+  },
+  {
+    "id": "meile",
+    "name": "Meile",
+    "category": "client",
+    "note": "The Sentinel client can share certain active connections by QR. Its session lifetime is managed by Meile.",
+    "docs": "https://github.com/MathNodes/meile-gui/releases/tag/v2.7.0"
+  },
+  {
+    "id": "mozilla-vpn",
+    "name": "Mozilla VPN",
+    "note": "Mozilla documents supported app platforms. Current standalone profile export is unverified.",
+    "docs": "https://support.mozilla.org/en-US/kb/mozilla-vpn-compatible-my-device"
+  },
+  {
+    "id": "mullvad",
+    "name": "Mullvad",
+    "note": "Sign in to register a WireGuard key on the router, or import a profile generated on the Mullvad website.",
+    "methods": [
+      {
+        "type": "mullvad",
+        "docs": "https://mullvad.net/en/help/running-wireguard-router"
+      },
+      {
+        "type": "wireguard",
+        "docs": "https://mullvad.net/en/account/wireguard-config"
+      }
+    ]
+  },
+  {
+    "id": "mysterium-network-myst",
+    "name": "Mysterium Network / MYST",
+    "category": "client",
+    "note": "Direct MYST sessions use the Mysterium node client and session APIs. Retail subscribers can use the separate MysteriumVPN WireGuard setup.",
+    "docs": "https://github.com/mysteriumnetwork/node"
+  },
+  {
+    "id": "mysteriumvpn",
+    "name": "MysteriumVPN",
+    "category": "client",
+    "note": "Generate the router profile from a retail MysteriumVPN subscription. Regenerating it may replace the previous profile.",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://help.mysteriumvpn.com/en/articles/16010679-how-to-generate-wireguard-configuration-file"
+      }
+    ],
+    "aliases": "Mysterium VPN retail"
+  },
+  {
+    "id": "njalla-vpn",
+    "name": "Njalla VPN",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://guides.njal.la/guide/openvpn-linux"
+      }
+    ]
+  },
+  {
+    "id": "nordvpn",
+    "name": "NordVPN",
+    "note": "Use a configuration from Nord Account. OpenVPN uses NordVPN service credentials.",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://support.nordvpn.com/hc/en-us/articles/19617516982929-How-to-find-various-server-configuration-files-for-NordVPN"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://support.nordvpn.com/hc/en-us/articles/19617516982929-How-to-find-various-server-configuration-files-for-NordVPN"
+      }
+    ],
+    "aliases": "NordLynx"
+  },
+  {
+    "id": "norse-labs-dvpn",
+    "name": "NORSE Labs DVPN",
+    "category": "client",
+    "note": "NORSE provides a Sentinel-based SDK. A supported standard profile export is still unverified.",
+    "docs": "https://norselabs.io/business/dvpn-sdk"
+  },
+  {
+    "id": "nvpn",
+    "name": "NVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://support.nvpn.net/Knowledgebase/Article/View/428/51/how-to-use-our-wireguard"
+      }
+    ]
+  },
+  {
+    "id": "nymvpn",
+    "name": "NymVPN",
+    "category": "client",
+    "note": "The NymVPN daemon manages credentials and both Fast and Anonymous modes. Nym does not publish standalone WireGuard profiles.",
+    "docs": "https://support.nym.com/hc/en-us/articles/32489677253137-Where-can-I-find-the-NymVPN-WireGuard-configuration-files",
+    "aliases": "Nym VPN"
+  },
+  {
+    "id": "obscura",
+    "name": "Obscura",
+    "note": "Use a WireGuard compatibility tunnel from the Obscura account portal. Native Obscura transport features require the app.",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://obscura.com/knowledge/using-obscura-via-wireguard/"
+      }
+    ]
+  },
+  {
+    "id": "octanevpn",
+    "name": "OctaneVPN",
+    "note": "The provider domain is parked."
+  },
+  {
+    "id": "orchid",
+    "name": "Orchid",
+    "category": "client",
+    "note": "Orchid network access uses the Orchid client and its payment and session protocol. The client can also import third-party VPN profiles.",
+    "docs": "https://docs.orchid.com/en/latest/using-orchid/"
+  },
+  {
+    "id": "ovpn",
+    "name": "OVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://www.ovpn.com/en/guides/wireguard/opnsense"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://www.ovpn.com/en/configurations"
+      }
+    ]
+  },
+  {
+    "id": "perfect-privacy",
+    "name": "Perfect Privacy",
+    "note": "Current service availability and manual configuration are unverified."
+  },
+  {
+    "id": "planet-vpn",
+    "name": "Planet VPN",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://freevpnplanet.com/openvpn/"
+      }
+    ]
+  },
+  {
+    "id": "privadovpn",
+    "name": "PrivadoVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://support.privadovpn.com/kb/article/1130-how-to-generate-a-wireguard-or-openvpn-configuration-file-for-manual-setups/"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://support.privadovpn.com/kb/article/1130-how-to-generate-a-wireguard-or-openvpn-configuration-file-for-manual-setups/"
+      }
+    ]
+  },
+  {
+    "id": "private-internet-access",
+    "name": "Private Internet Access",
+    "note": "Use the published OpenVPN files. PIA’s WireGuard manual workflow uses a separate API and session setup.",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://helpdesk.privateinternetaccess.com/hc/en-us/articles/46701665830811-Where-Can-I-Find-Your-OpenVPN-ovpn-Files"
+      }
+    ],
+    "aliases": "PIA"
+  },
+  {
+    "id": "privatevpn",
+    "name": "PrivateVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://help.privatevpn.com/en/articles/302391-wireguard-setup-guides"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://help.privatevpn.com/en/articles/302433-openvpn-configuration-files-udp-1194"
+      }
+    ]
+  },
+  {
+    "id": "proton-vpn",
+    "name": "Proton VPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://protonvpn.com/support/wireguard-configurations"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://protonvpn.com/support/vpn-config-download"
+      }
+    ]
+  },
+  {
+    "id": "purevpn",
+    "name": "PureVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://support.purevpn.com/en_US/linux/how-to-setup-wireguard-on-linux"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://support.purevpn.com/en_US/purevpn/openvpn-files"
+      }
+    ]
+  },
+  {
+    "id": "rapidvpn",
+    "name": "RapidVPN",
+    "note": "Current service availability and manual configuration are unverified."
+  },
+  {
+    "id": "riseupvpn",
+    "name": "RiseupVPN",
+    "category": "client",
+    "note": "The RiseupVPN client retrieves connection details using the LEAP service API. Current standalone profile export is unverified.",
+    "docs": "https://help.riseup.net/en/vpn"
+  },
+  {
+    "id": "securevpn-to",
+    "name": "SecureVPN.to",
+    "note": "The provider domain is parked."
+  },
+  {
+    "id": "seed4-me",
+    "name": "Seed4.Me",
+    "note": "Older setup documentation covers legacy L2TP/IPsec.",
+    "docs": "https://seed4.me/pages/faq"
+  },
+  {
+    "id": "sentinel-dvpn",
+    "name": "Sentinel dVPN",
+    "category": "client",
+    "note": "Run a V2Ray or Xray session on a companion host with the official Sentinel SDK. Blank VPN can use the private SOCKS5 listener while the session remains active.",
+    "methods": [
+      {
+        "type": "proxy-manual",
+        "docs": "https://github.com/sentinel-official/sentinel-js-sdk",
+        "protocol": "socks5"
+      }
+    ],
+    "aliases": "Sentinel DVPN"
+  },
+  {
+    "id": "slickvpn",
+    "name": "SlickVPN",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://www.slickvpn.com/guides/win-openvpn/"
+      }
+    ]
+  },
+  {
+    "id": "smart-dns-proxy",
+    "name": "Smart DNS Proxy",
+    "note": "Use the provider’s OpenVPN service and credentials.",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://support.smartdnsproxy.com/article/800-vpn-setup-for-windows-11-openvpn"
+      }
+    ]
+  },
+  {
+    "id": "snowhaze-vpn",
+    "name": "SnowHaze VPN",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://snowhaze.com/en/support-tutorials-vpn.html"
+      }
+    ]
+  },
+  {
+    "id": "spidervpn",
+    "name": "SpiderVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://spidervpn.org/guides/openwrt"
+      }
+    ]
+  },
+  {
+    "id": "starvpn",
+    "name": "StarVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://www.starvpn.com/wireguard-setup-windows-10"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://www.starvpn.com/windows-10-openvpn-configuration"
+      }
+    ]
+  },
+  {
+    "id": "streamvpn",
+    "name": "StreamVPN",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://www.streamvpn.com/guide/sabai-vpn-router-installation/"
+      }
+    ]
+  },
+  {
+    "id": "strongvpn",
+    "name": "StrongVPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://support.strongtech.org/hc/en-us/articles/360037444953-WireGuard-FAQ"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://tools.strongtech.org/share/strong-openvpn/openvpn.html"
+      }
+    ]
+  },
+  {
+    "id": "surfshark",
+    "name": "Surfshark",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://support.surfshark.com/hc/en-us/articles/6585805595666-How-to-set-up-a-manual-WireGuard-connection-on-a-router"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://support.surfshark.com/hc/en-us/articles/12434921071890-How-to-set-up-Surfshark-on-an-OPNsense-router"
+      }
+    ]
+  },
+  {
+    "id": "torguard",
+    "name": "TorGuard",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://torguard.net/indexori.php?rp=%2Fknowledgebase%2F251%2FHow-to-Setup-the-Official-WireGuard-App-on-Windows.html"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://torguard.net/tgconf.php?action=vpn-openvpnconfig"
+      }
+    ]
+  },
+  {
+    "id": "trust-zone",
+    "name": "Trust.Zone",
+    "note": "Availability depends on your plan and server. Choose standard WireGuard or a supported proxy format from the account portal.",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://trust.zone/setup/asusmerlin/wg_bulk/nl"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://trust.zone/manual"
+      },
+      {
+        "type": "proxy-import",
+        "docs": "https://trust.zone/manual"
+      },
+      {
+        "type": "proxy-manual",
+        "docs": "https://trust.zone/manual"
+      }
+    ]
+  },
+  {
+    "id": "tunnelbear",
+    "name": "TunnelBear",
+    "note": "TunnelBear's FAQ says it does not provide manual VPN configuration.",
+    "docs": "https://help.tunnelbear.com/hc/en-us/articles/360061194991-Does-TunnelBear-provide-manual-configuration-for-the-VPN-connection"
+  },
+  {
+    "id": "unlocator",
+    "name": "Unlocator",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://support.unlocator.com/article/344-how-to-set-up-unlocator-vpn-openvpn-manually-on-windows-10"
+      }
+    ]
+  },
+  {
+    "id": "veepn",
+    "name": "VeePN",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://help.veepn.com/hc/en-us/articles/19525903296914-VeePN-Router-Setup"
+      }
+    ]
+  },
+  {
+    "id": "vpn-gate",
+    "name": "VPN Gate",
+    "note": "Use a current OpenVPN relay profile from VPN Gate. Relay availability is controlled by volunteers.",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://www.vpngate.net/en/howto_openvpn.aspx"
+      }
+    ]
+  },
+  {
+    "id": "vpn-safe",
+    "name": "VPN Safe",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://vpnsafe.net/wireguard"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://vpnsafe.net/openvpn"
+      }
+    ]
+  },
+  {
+    "id": "vpn-unlimited-keepsolid",
+    "name": "VPN Unlimited / KeepSolid",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://www.vpnunlimited.com/help/manuals/wireguard-setup-on-glinet-router"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://www.vpnunlimited.com/help/manuals/how-to-manually-create-vpn-conf"
+      }
+    ],
+    "aliases": "KeepSolid"
+  },
+  {
+    "id": "vpn-ac",
+    "name": "VPN.ac",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://vpn.ac/knowledgebase/131/WireGuard-on-OpnSense.html"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://vpn.ac/tutorials"
+      }
+    ]
+  },
+  {
+    "id": "vpn-ht",
+    "name": "VPN.ht",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://billing.vpn.ht/knowledgebase/4/How-to-set-up-VPN-on-your-Tomato-router-with-OpenVPN-.html"
+      }
+    ]
+  },
+  {
+    "id": "vpnarea",
+    "name": "VPNArea",
+    "note": "Current service availability and manual configuration are unverified."
+  },
+  {
+    "id": "vpnbaron",
+    "name": "VPNBaron",
+    "note": "Use the HTTPS subscription URL from your account for VLESS/REALITY or Hysteria2 where offered.",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://vpnbaron.com/docs/manual-setup/windows/wireguard/"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://vpnbaron.com/docs/manual-setup/openvpn-cli/"
+      },
+      {
+        "type": "subscription",
+        "docs": "https://vpnbaron.com/docs/stealth/hiddify/"
+      }
+    ]
+  },
+  {
+    "id": "vpnbook",
+    "name": "VPNBook",
+    "note": "Get the current profile and any current OpenVPN credentials from VPNBook.",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://www.vpnbook.com/freevpn/wireguard-vpn"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://www.vpnbook.com/freevpn/openvpn"
+      }
+    ]
+  },
+  {
+    "id": "vpncity",
+    "name": "VPNCity",
+    "note": "Current service availability and manual configuration are unverified."
+  },
+  {
+    "id": "vpnsecure",
+    "name": "VPNSecure",
+    "note": "Confirm profile downloads and proxy availability in your account. Ordinary HTTP proxy connections are unencrypted between the router and proxy.",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://support.vpnsecure.me/articles/getting-started"
+      },
+      {
+        "type": "wireguard",
+        "docs": "https://www.vpnsecure.me/download"
+      },
+      {
+        "type": "proxy-manual",
+        "docs": "https://www.vpnsecure.me/features",
+        "protocol": "http"
+      }
+    ]
+  },
+  {
+    "id": "vpnshazam",
+    "name": "VPNShazam",
+    "note": "Current service availability and manual configuration are unverified."
+  },
+  {
+    "id": "vpntunnel",
+    "name": "VPNTunnel",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://help.vpntunnel.com/support/solutions/articles/5000656553-vpntunnel-openvpn-installation-guide-for-windows-10-using-openvpn-gui-"
+      }
+    ]
+  },
+  {
+    "id": "vyprvpn",
+    "name": "VyprVPN",
+    "note": "Use the current OpenVPN files. VyprVPN’s WireGuard Go client has a separate credential and session workflow.",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://support.vyprvpn.com/hc/en-us/articles/360038096131-Where-can-I-find-the-OpenVPN-files"
+      }
+    ]
+  },
+  {
+    "id": "windscribe",
+    "name": "Windscribe",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://windscribe.com/features/config-generators"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://windscribe.com/features/config-generators"
+      }
+    ]
+  },
+  {
+    "id": "witopia-personalvpn",
+    "name": "WiTopia / personalVPN",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://www.personalvpn.com/support/linux/openvpn"
+      }
+    ]
+  },
+  {
+    "id": "x-vpn",
+    "name": "X-VPN",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://xvpn.io/help-center/set-up-x-vpn-on-glinet-router-for-wireguard"
+      }
+    ]
+  },
+  {
+    "id": "xeovo",
+    "name": "Xeovo",
+    "note": "Use the Stealth Proxy subscription or a compatible server configuration. Standard WireGuard is available separately.",
+    "methods": [
+      {
+        "type": "wireguard",
+        "docs": "https://hub.xeovo.com/posts/172-how-to-setup-wireguard-on-openwrt"
+      },
+      {
+        "type": "openvpn",
+        "docs": "https://hub.xeovo.com/posts/174-how-to-setup-openvpn-on-openwrt"
+      },
+      {
+        "type": "subscription",
+        "docs": "https://hub.xeovo.com/posts/182-how-to-setup-stealth-proxies-on-keenetic-xkeen"
+      },
+      {
+        "type": "proxy-import",
+        "docs": "https://hub.xeovo.com/posts/182-how-to-setup-stealth-proxies-on-keenetic-xkeen"
+      }
+    ]
+  },
+  {
+    "id": "zenmate",
+    "name": "ZenMate",
+    "note": "ZenMate directed subscribers to CyberGhost after ending support for its apps.",
+    "docs": "https://zenmate.com/blog/zenmate-changes"
+  },
+  {
+    "id": "zoogvpn",
+    "name": "ZoogVPN",
+    "methods": [
+      {
+        "type": "openvpn",
+        "docs": "https://zoogvpn.com/help/cudy-router-vpn-setup/"
+      }
+    ]
+  },
+  {
+    "id": "zorrovpn",
+    "name": "ZorroVPN",
+    "note": "Current service availability and manual configuration are unverified."
+  }
+]
