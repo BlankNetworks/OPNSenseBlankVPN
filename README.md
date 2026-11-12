@@ -1,6 +1,6 @@
-# Blank VPN 0.8.0
+# Blank VPN 0.8.1
 
-Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Smart Routing keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
+Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Multi-Path keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
 ## Compatibility
 
@@ -42,7 +42,7 @@ The package and SHA-256 file are written to `dist/`. To reproduce the bundled re
 
    ```sh
    arch=$(pkg config ABI | cut -d: -f3)
-   package="os-blank-vpn-0.8.0-$arch.pkg"
+   package="os-blank-vpn-0.8.1-$arch.pkg"
    sha256 -c "$(awk '{print $1}' "$package.sha256")" "$package"
    pkg info -F "./$package"
    pkg add "./$package"
@@ -101,12 +101,12 @@ Core updates, saved Mullvad logins, the private subscription catalog, and recove
 Open **Network**, check the Ethernet ports or VLANs under **Interface**, choose who should use the rules, then enable and save routing. The main home Ethernet port appears first. Devices need to use OPNsense as their gateway for the policy to apply.
 
 - **Only devices I choose** applies saved policies to individual devices. Select **Add device rule** and enter a reserved IPv4 address.
-- **Everyone on the selected interfaces** uses one mode for the selected LANs and VLANs. Existing device assignments are saved for when you switch back. Full Tunneling uses one exit and blocks internet access if the exit is unavailable. It routes IPv4 through that exit and blocks internet-bound IPv6. Blocked mode denies internet access on both families. Off restores normal routing. Whole-network routing requires static IPv4 and static IPv6 or no IPv6 on the managed segments.
+- **Whole-Network coverage** uses one mode for the selected LANs and VLANs. Existing device assignments are saved for when you switch back. **Use one VPN or proxy** selects an exit and blocks internet access if the exit is unavailable. It routes IPv4 through that exit and blocks internet-bound IPv6. Blocked mode denies internet access on both families. Off restores normal routing. Whole-Network coverage requires static IPv4 and static IPv6 or no IPv6 on the managed segments.
 
 
 | Mode | Internet behavior |
 | --- | --- |
-| Full Tunneling | Use one VPN or proxy exit, with a kill switch, backup exit, or normal-internet fallback. |
+| Use one VPN or proxy | Use one VPN or proxy exit, with a kill switch, backup exit, or normal-internet fallback. |
 | Multi-Path Tunneling | Use the assigned exits for matching services and ordinary internet for other destinations. |
 | Disabled (No VPN) | Follow the native network policy and bypass Blank VPN service routing for the assigned addresses. |
 | Blocked (No Internet) | Block internet traffic from the assigned addresses and keep approved local access subject to native firewall rules. |
@@ -125,9 +125,9 @@ To apply per-peer policy, use a Linux Tailscale exit gateway in kernel forwardin
 
 1. Open **Multi-Path Settings**. Choose the Netflix preset, paste your own domains, or load a plain-text or comma-separated file. Each list accepts up to 1,000 unique domains and 128 KiB of input. Enter domains on separate lines or separated by commas. Lines may include `#` comments. Both `netflix.com` and `*.netflix.com` cover the apex and its subdomains.
 2. Save the list with an exit selected, or leave it unassigned and edit it later. An unassigned list adds no DNS or firewall rules. Edit any list to replace the domains from a file, change its exit, or download the editor contents as a text file.
-3. Choose whole-network **Multi-Path** under **Network**, or enable Multi-Path for selected interfaces under **More routing options** and assign the Multi-Path mode to devices. Use ordinary DNS on the managed interface. Restart the test application and refresh its DNS cache. Check the learned address count and confirm the expected path from the client.
+3. Choose **Multi-Path** under **Whole-Network coverage** on the **Network** page, or enable Multi-Path for selected interfaces under **More routing options** and assign the Multi-Path mode to devices. Use ordinary DNS on the managed interface. Restart the test application and refresh its DNS cache. Check the learned address count and confirm the expected path from the client.
 
-Smart Routing forwards matching DNS through the chosen tunnel and uses the regular resolver for other names. Learned IPv4 destinations use the VPN and learned IPv6 destinations are blocked. When the exit is unavailable, known destinations are blocked. Smart Routing classifies DNS-observed IPs. Shared IPs, existing connections, encrypted DNS, HTTPS record address hints, and endpoints obtained without an observed DNS lookup can affect which connections match. If two services learn the same destination IP, the first saved service rule has precedence. Learned entries are aged out after about a day and relearned from DNS. Mullvad exit IPs may be blocked by Netflix. [Mullvad Netflix guidance](https://mullvad.net/en/help/watching-netflix-with-split-tunneling)
+Multi-Path forwards matching DNS through the chosen tunnel and uses the regular resolver for other names. Learned IPv4 destinations use the VPN and learned IPv6 destinations are blocked. When the exit is unavailable, known destinations are blocked. Multi-Path classifies DNS-observed IPs. Shared IPs, existing connections, encrypted DNS, HTTPS record address hints, and endpoints obtained without an observed DNS lookup can affect which connections match. If two services learn the same destination IP, the first saved service rule has precedence. Learned entries are aged out after about a day and relearned from DNS. Mullvad exit IPs may be blocked by Netflix. [Mullvad Netflix guidance](https://mullvad.net/en/help/watching-netflix-with-split-tunneling)
 
 ## Assign an IPv4 address and enable a kill switch
 
@@ -136,7 +136,7 @@ Smart Routing forwards matching DNS through the chosen tunnel and uses the regul
 3. Verify normal traffic from an unassigned test client. Confirm the protected client’s egress goes through WireGuard, then disable the test tunnel and check that its IPv4 internet traffic stops and the unassigned client stays online.
 4. If you need to block internet-bound IPv6 for a whole device, use a dedicated interface set to **Block devices without a rule**. Strict mode blocks internet-bound IPv6 and internet traffic from unassigned devices. The per-IP rule on a shared LAN covers the reserved IPv4 address. Keep the IPv6 behavior of your existing firewall in mind.
 
-Per-IP rules take precedence over Smart Routing. A selected **Backup exit** can carry the address when the primary fails. **Normal internet** is an explicit fallback to the normal network policy. VPN health is observed with a router-side probe, while the client path must be checked from that client.
+Per-IP rules take precedence over Multi-Path. A selected **Backup exit** can carry the address when the primary fails. **Normal internet** is an explicit fallback to the normal network policy. VPN health is observed with a router-side probe, while the client path must be checked from that client.
 
 ## Upgrade, rollback and removal
 
@@ -152,9 +152,9 @@ Per-IP rules take precedence over Smart Routing. A selected **Backup exit** can 
 - Mullvad sign-in scoped to the WebGUI session.
 - Individually selectable proxy exits from pasted servers and HTTPS subscriptions.
 - Mihomo protocol adapter, native Xray and sing-box configurations, and a FreeBSD tun2socks bridge.
-- Existing Smart Routing, per-IPv4 policies, and fail-closed firewall rules apply to proxy exits.
+- Existing Multi-Path, per-IPv4 policies, and fail-closed firewall rules apply to proxy exits.
 
-- Smart Routing for domain suffixes, including a Netflix preset and custom services, with normal routing as the base.
+- Multi-Path for domain suffixes, including a Netflix preset and custom services, with normal routing as the base.
 - Per-IPv4 kill switches on shared LANs, independent of strict VPN segment mode.
 - HTTPS-only Mullvad onboarding, account binding, recoverable registration, and native key-pair verification.
 - Scoped DNS, routing, and rollback verification. Review [VALIDATION.md](VALIDATION.md) before using the package on the primary router.

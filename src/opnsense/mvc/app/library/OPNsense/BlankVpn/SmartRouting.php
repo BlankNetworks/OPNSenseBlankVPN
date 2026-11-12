@@ -42,7 +42,7 @@ final class SmartRouting
     public static function domains(string $input): array
     {
         if (strlen($input) > self::MAX_DOMAIN_BYTES) {
-            throw new DomainException('The Smart Routing domain list is too long.');
+            throw new DomainException('The Multi-Path domain list is too long.');
         }
         $input = preg_replace('/^\xEF\xBB\xBF/', '', $input);
         $input = preg_replace('/#[^\r\n]*/', '', $input);

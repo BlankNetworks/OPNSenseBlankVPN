@@ -203,7 +203,7 @@
                 <label class="bv-coverage-choice">Who should use these routing rules?
                     <select id="bv-coverage" class="form-control">
                         <option value="device">Only devices I choose</option>
-                        <option value="network">Everyone on the selected interfaces</option>
+                        <option value="network">Whole-Network coverage</option>
                     </select>
                 </label>
                 <fieldset class="bv-interface-group">
@@ -293,7 +293,7 @@
                     <label>IPv6 address <input id="bv-ipv6" type="text" class="form-control" autocomplete="off" spellcheck="false"></label>
                     <label>Routing mode
                         <select id="bv-mode" class="form-control">
-                            <option value="full">Full Tunneling</option>
+                            <option value="full">Use one VPN or proxy</option>
                             <option value="multi">Multi-Path</option>
                             <option value="disabled">Off</option>
                             <option value="blocked">Blocked</option>

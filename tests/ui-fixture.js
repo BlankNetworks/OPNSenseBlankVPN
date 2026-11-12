@@ -241,7 +241,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'settings' && x.data.coverage === 'network' &&
         x.data.networkMode === 'full' && x.data.networkProfile === 'vpn1') && bv('add-device').hidden,
-        'whole-network settings did not apply');
+        'Whole-Network coverage settings did not apply');
     document.querySelector('[data-bv-section="vpns"]').click();
     bv('refresh-relays').click();
     await wait();

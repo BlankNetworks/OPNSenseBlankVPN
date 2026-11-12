@@ -1,6 +1,6 @@
 # Blank VPN proxy support
 
-Blank VPN imports individual upstreams and can enable up to eight proxy exits. Each enabled node gets a FreeBSD tunnel, private loopback SOCKS and DNS listeners, and a distinct exit in Smart Routing and device policies. The router's existing local and default routing remain the base. Enabled proxy exits are scoped to matched IPv4 traffic. UDP forwarding depends on upstream protocol and transport. IPv6 follows the existing Blank VPN policy, including its strict-interface and learned-destination guards.
+Blank VPN imports individual upstreams and can enable up to eight proxy exits. Each enabled node gets a FreeBSD tunnel, private loopback SOCKS and DNS listeners, and a distinct exit in Multi-Path and device policies. The router's existing local and default routing remain the base. Enabled proxy exits are scoped to matched IPv4 traffic. UDP forwarding depends on upstream protocol and transport. IPv6 follows the existing Blank VPN policy, including its strict-interface and learned-destination guards.
 
 ## Cores and formats
 
@@ -24,7 +24,7 @@ The supplied source index was used to identify protocol families, official core 
 | 01–11 and 29 | Runtime families and compatibility references. Mihomo covers Clash-compatible nodes and several legacy variants. Xray and sing-box have native adapters. Proprietary or vendor-specific nodes require a compatible upstream implementation. |
 | 12–15, 19–20 and 28 | Linux router integrations, management panels, installer examples, and client UI references. Blank VPN uses native OPNsense rule and process management. |
 | 16–18 and 31 | Subscription parsing and provider format references. WannaFlix and SSRDOG are usable when the supplied feed returns a supported format. Subscription URLs and credentials stay on the router. |
-| 21–23 | DNS learning, ordinary proxy protocols, and TUN forwarding. Smart Routing uses PF destination tables and the FreeBSD TUN bridge. |
+| 21–23 | DNS learning, ordinary proxy protocols, and TUN forwarding. Multi-Path uses PF destination tables and the FreeBSD TUN bridge. |
 | 24–27 and 30 | Separate tunnel products, Tor transports, research projects, and Ombra or Obscura references. These need their own verified FreeBSD adapter or a compatible standard proxy endpoint. |
 
 Juicity, raw legacy V2Fly engine execution, separate Trojan forks, full provider-driven proxy groups, and product-specific protocols without a compatible adapter still need implementation. Linux eBPF paths, arbitrary router scripts, and server panel features are outside the client routing adapter.

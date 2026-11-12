@@ -481,11 +481,11 @@ class ServiceController extends ApiControllerBase
             $this->validateDashboardBinding($hostname, $bind);
             if (array_diff($interfaces, array_keys(Policy::availableInterfaces())) ||
                 array_diff($strict, $interfaces) || array_diff($smart, $interfaces)) {
-                throw new \DomainException('Choose assigned LAN or VLAN interfaces for Smart Routing and strict management.');
+                throw new \DomainException('Choose assigned LAN or VLAN interfaces for Multi-Path and device rules.');
             }
             $this->validateTransitInterfaces($tailscale, $interfaces, $strict);
             if (array_intersect($strict, $smart)) {
-                throw new \DomainException('Use Smart Routing on a managed interface with normal internet as its default.');
+                throw new \DomainException('Use Multi-Path on a selected interface with normal internet as its default.');
             }
             if ($enabled && $interfaces === []) {
                 throw new \DomainException('Choose a LAN or VLAN for Blank VPN to manage.');
@@ -513,14 +513,14 @@ class ServiceController extends ApiControllerBase
                     $segments = array_values(array_diff($interfaces, $tailscale));
                     if ($enabled && $networkMode !== 'disabled') {
                         if ($segments === []) {
-                            throw new \DomainException('Choose a LAN or VLAN for whole-network routing.');
+                            throw new \DomainException('Choose a LAN or VLAN for Whole-Network coverage.');
                         }
                         Policy::segmentNetworks($segments);
                     }
                     if ($enabled && $networkMode === 'full') {
                         $route = Policy::routes($model)[$networkProfile] ?? [];
                         if ($route === [] || !SmartRouting::canResolve($route) || !self::routeConfigured($route)) {
-                            throw new \DomainException('Choose a configured VPN or proxy exit with DNS for the whole network.');
+                            throw new \DomainException('Choose a configured VPN or proxy exit with DNS for Whole-Network coverage.');
                         }
                     }
                 }
@@ -606,7 +606,7 @@ class ServiceController extends ApiControllerBase
                     $old = Policy::routingSettings($before)['interfaces'];
                     $new = Policy::routingSettings($after)['interfaces'];
                     if ($new === []) {
-                        throw new \DomainException('Leave at least one interface for the active whole-network rule.');
+                        throw new \DomainException('Leave at least one interface for Whole-Network coverage.');
                     }
                     $reset = [...array_diff($old, $new), ...array_diff($new, $old)];
                     Policy::segmentNetworks($reset);
@@ -649,7 +649,7 @@ class ServiceController extends ApiControllerBase
             $mode = $this->input('mode', 12, $profile === '' ? 'default' : 'full');
             if (!in_array($mode, ['full', 'multi', 'disabled', 'blocked', 'default'], true) ||
                 !in_array($kind, ['lan', 'tailnet'], true) || ($mode === 'full' && $profile === '')) {
-                throw new \DomainException('Choose a valid routing mode and an exit for Full Tunneling.');
+                throw new \DomainException('Choose a valid routing mode. Select an exit if you use one VPN or proxy.');
             }
             $profile = $mode === 'full' ? $profile : '';
             $failure = $profile === '' ? 'block' : $this->input('failure', 12, 'block');
@@ -769,7 +769,7 @@ class ServiceController extends ApiControllerBase
             return Operations::change(function (BlankVpn $model) use ($id, $name, $domains, $profileId) {
                 $services = SmartRouting::services($model);
                 if ($id !== '' && !isset($services[$id])) {
-                    throw new \DomainException('This Smart Routing service no longer exists.');
+                    throw new \DomainException('This Multi-Path list no longer exists.');
                 }
                 if ($id === '' && count($services) >= SmartRouting::MAX_SERVICES) {
                     throw new \DomainException('Remove an existing service before adding another.');
@@ -798,7 +798,7 @@ class ServiceController extends ApiControllerBase
             return Operations::change(function (BlankVpn $model) use ($id) {
                 $service = SmartRouting::services($model)[$id] ?? null;
                 if ($service === null || !$model->services->service->del($id)) {
-                    throw new \DomainException('This Smart Routing service no longer exists.');
+                    throw new \DomainException('This Multi-Path list no longer exists.');
                 }
                 return ['reload' => Policy::settings($model)['enabled'] && $service['profile'] !== ''];
             });
@@ -808,11 +808,11 @@ class ServiceController extends ApiControllerBase
     private function requireUnusedByRouting(BlankVpn $model, string $profileId): void
     {
         if (Policy::settings($model)['networkProfile'] === $profileId) {
-            throw new \DomainException('Move the whole-network policy off this exit first.');
+            throw new \DomainException('Choose a different exit for Whole-Network coverage first.');
         }
         foreach (SmartRouting::services($model) as $service) {
             if ($service['profile'] === $profileId) {
-                throw new \DomainException('Move Smart Routing services off this exit first.');
+                throw new \DomainException('Move Multi-Path lists off this exit first.');
             }
         }
     }

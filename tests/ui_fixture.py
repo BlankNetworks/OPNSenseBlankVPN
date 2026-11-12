@@ -22,6 +22,12 @@ def main():
     css = (ROOT / "src/opnsense/www/css/blankvpn.css").read_text()
     app = (ROOT / "src/opnsense/www/js/blankvpn.js").read_text()
     fixture = (ROOT / "tests/ui-fixture.js").read_text()
+    legacy_terms = re.compile(r"\b(?:full|smart)[ -]+rout(?:e|ing)\b", re.IGNORECASE)
+    copy_sources = [*ROOT.glob("*.md"), *ROOT.glob("src/**/*.volt"),
+                    *ROOT.glob("src/**/*.js"), *ROOT.glob("src/**/*.php")]
+    for source in copy_sources:
+        if legacy_terms.search(source.read_text()):
+            raise SystemExit(f"Deprecated routing terminology in {source.relative_to(ROOT)}")
     document = (
         '<!doctype html><meta charset="utf-8"><meta name="viewport" '
         'content="width=device-width, initial-scale=1">'

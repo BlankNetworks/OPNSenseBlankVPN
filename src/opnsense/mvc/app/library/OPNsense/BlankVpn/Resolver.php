@@ -86,7 +86,7 @@ final class Resolver
             if ($port === SmartRouting::PORT) {
                 $version = self::command(['/usr/local/sbin/dnsmasq', '--version']);
                 if (!preg_match('/(?:^|\s)ipset(?:\s|$)/i', $version)) {
-                    throw new \RuntimeException('Smart Routing requires the OPNsense Dnsmasq build with PF ipset support.');
+                    throw new \RuntimeException('Multi-Path requires the OPNsense Dnsmasq build with PF ipset support.');
                 }
                 self::checkNativeDns($hostname);
             }
@@ -128,7 +128,7 @@ final class Resolver
     {
         $socket = @stream_socket_client('udp://127.0.0.1:53', $errno, $error, 1);
         if ($socket === false) {
-            throw new \RuntimeException('Smart Routing needs a working native DNS resolver on 127.0.0.1 port 53.');
+            throw new \RuntimeException('Multi-Path needs a working native DNS resolver on 127.0.0.1 port 53.');
         }
         try {
             stream_set_timeout($socket, 2);
@@ -141,7 +141,7 @@ final class Resolver
             $response = @fwrite($socket, $query) === strlen($query) ? @fread($socket, 512) : false;
             if (!is_string($response) || strlen($response) < 12 || substr($response, 0, 2) !== $id ||
                 !(ord($response[2]) & 0x80) || !in_array(ord($response[3]) & 0x0f, [0, 3], true)) {
-                throw new \RuntimeException('The native DNS resolver on 127.0.0.1 did not answer the Smart Routing readiness check.');
+                throw new \RuntimeException('The native DNS resolver on 127.0.0.1 did not answer the Multi-Path readiness check.');
             }
         } finally {
             fclose($socket);

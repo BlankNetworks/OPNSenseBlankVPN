@@ -151,7 +151,7 @@ namespace {
     checkRouting($pass['gateway'] === 'VPN' && $pass['skip_rules_gw_down'], 'Matched IPv4 must use a usable WireGuard gateway.');
     checkRouting($block['priority'] > $pass['priority'] && $block['ipprotocol'] === 'inet46', 'Install a destination block after the VPN-only pass.');
     checkRouting($good->rules['match']['quick'] === false && $good->rules['match']['to_not'], 'Local exceptions must not short-circuit the service rules.');
-    checkRouting($good->nat[0]['to'] === '<' . $table . '>' && $good->nat[0]['from'] === 'lan', 'Scope Smart Routing NAT by destination and source network.');
+    checkRouting($good->nat[0]['to'] === '<' . $table . '>' && $good->nat[0]['from'] === 'lan', 'Scope Multi-Path NAT by destination and source network.');
     checkRouting(count($good->dns) === 2, 'Capture regular DNS over IPv4 and IPv6 on the selected interface.');
     $down = new Plugin();
     $compileSmart->invoke(null, $down, $settings, $interfaces, $services, $profiles, ['jp' => ['reachable' => false]]);
@@ -168,19 +168,19 @@ namespace {
     $networkBlock = $whole->rules[Policy::marker('kill', 'network:lan')];
     checkRouting($networkPass['gateway'] === 'VPN' && $networkPass['priority'] < $networkBlock['priority'] &&
         $networkBlock['from'] === 'any' && $networkBlock['to_not'] && $whole->nat[0]['from'] === 'lan',
-        'Whole-network routing needs a gateway pass, LAN-scoped NAT and an internet guard.');
+        'Whole-Network coverage needs a gateway pass, LAN-scoped NAT and an internet guard.');
     $wholeDown = new Plugin();
     $network->invoke(null, $wholeDown, $networkSettings, $interfaces, $profiles, ['jp' => ['reachable' => false]]);
     checkRouting(!isset($wholeDown->rules[Policy::marker('device', 'network:lan')]) &&
         isset($wholeDown->rules[Policy::marker('kill', 'network:lan')],
             $wholeDown->rules[Policy::marker('kill_v6', 'network:lan')]) && $wholeDown->nat === [],
-        'A whole-network VPN outage blocks both address families without WAN fallback.');
+        'A VPN outage under Whole-Network coverage blocks both address families without WAN fallback.');
     $multiNetwork = Policy::routingSettings(array_replace($networkSettings, [
         'networkMode' => 'multi', 'interfaces' => ['lan', 'opt2'], 'tailscaleInterfaces' => ['opt2'],
         'strictInterfaces' => ['lan'], 'smartAssignedOnly' => true
     ]));
     checkRouting($multiNetwork['smartInterfaces'] === ['lan'] && $multiNetwork['strictInterfaces'] === [] &&
-        !$multiNetwork['smartAssignedOnly'], 'Whole-network Multi-Path covers selected LANs without per-IP assignment.');
+        !$multiNetwork['smartAssignedOnly'], 'Multi-Path under Whole-Network coverage uses selected LANs without per-IP assignment.');
 
     $assignment = ['interface' => 'lan', 'ip' => '192.0.2.23', 'mac' => '02:00:00:00:00:23',
         'profile' => 'jp', 'backup' => '', 'failure' => 'block'];
@@ -237,5 +237,5 @@ namespace {
     $compileDevice->invoke(null, $moved, $settings, $interfaces, ['device-a' => $assignment], $profiles, [], $diag);
     checkRouting(isset($moved->rules[Policy::marker('kill', 'device-a')]) &&
         !isset($moved->rules[Policy::marker('device', 'device-a')]), 'A missing reservation must not fall through to WAN.');
-    echo "Smart Routing and per-IP policy fixtures passed.\n";
+    echo "Multi-Path and per-IP policy fixtures passed.\n";
 }

@@ -100,7 +100,7 @@ final class Firewall
                     'type' => 'pass', 'direction' => 'in', 'interface' => $interface, 'ipprotocol' => 'inet',
                     'to' => '<' . Policy::LOCAL_TABLE . '>', 'to_not' => true, 'quick' => true, 'disablereplyto' => true,
                     'statetype' => 'keep', 'gateway' => $profile['gateway'], 'skip_rules_gw_down' => true,
-                    'label' => Policy::marker('device', $id), 'descr' => 'Blank VPN whole-network routing'
+                    'label' => Policy::marker('device', $id), 'descr' => 'Blank VPN Whole-Network coverage'
                 ] + self::stateOptions($profile));
                 self::registerClientNat($firewall, $profile, $interface, 'any', 60);
                 self::redirectDns($firewall, $interface, 'any', (int)$profile['dnsPort'], $id, 58);
@@ -545,7 +545,7 @@ final class Firewall
             foreach ($settings['smartInterfaces'] as $interface) {
                 $marker = Policy::marker('service_guard', $id . ':' . $interface);
                 if (($loaded[$marker]['action'] ?? '') !== 'block') {
-                    throw new \RuntimeException('A Smart Routing destination guard is missing.');
+                    throw new \RuntimeException('A Multi-Path destination guard is missing.');
                 }
             }
         }

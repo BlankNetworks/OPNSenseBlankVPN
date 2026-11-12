@@ -8,7 +8,7 @@
             return;
         }
 
-        const modes = {full: 'Full Tunneling', multi: 'Multi-Path', disabled: 'Off', blocked: 'Blocked'};
+        const modes = {full: 'Use one VPN or proxy', multi: 'Multi-Path', disabled: 'Off', blocked: 'Blocked'};
         const insecureWebGui = window.location.protocol === 'http:';
         const maxDomainBytes = 131072;
         const state = {
@@ -243,7 +243,7 @@
                 cell(row, networkName(assignment.interface), 'Interface');
                 cell(row, modes[assignment.mode] || 'Normal internet', 'Rule',
                     assignment.profile ? profileName(assignment.profile) : '');
-                const status = wholeNetwork ? 'Paused by whole-network routing'
+                const status = wholeNetwork ? 'Paused by Whole-Network coverage'
                     : !state.settings?.enabled ? 'Routing off'
                         : assignment.appliedRoute || 'Rule saved';
                 cell(row, status, 'Status', !wholeNetwork && assignment.killSwitchActive ? 'Kill switch active' : '');
@@ -493,7 +493,7 @@
                     if (state.canManage) {
                         actions.append(button('Edit', () => editService(service), 'Edit ' + service.name));
                         actions.append(button('Remove', (event) => {
-                            if (window.confirm('Remove Smart Routing for ' + service.name + '?')) {
+                            if (window.confirm('Remove the Multi-Path list for ' + service.name + '?')) {
                                 void mutate(event.currentTarget, () => api('removeService', {id: service.id}),
                                     'Service removed.', () => {
                                         if (state.editingService === service.id) {
@@ -1228,7 +1228,7 @@
             const id = state.editing?.id;
             const strict = list(state.settings?.strictInterfaces).includes(state.editing?.interface);
             const explanation = strict ? ' This strict interface blocks unassigned clients.'
-                : ' The device will use the normal network policy and any Smart Routing rules.';
+                : ' The device will use the normal network policy and any Multi-Path rules.';
             if (id && window.confirm('Remove this device assignment?' + explanation)) {
                 void mutate(event.currentTarget, () => api('removeAssignment', {id}), 'Device assignment removed.', () => {
                     byId('assignment').hidden = true;

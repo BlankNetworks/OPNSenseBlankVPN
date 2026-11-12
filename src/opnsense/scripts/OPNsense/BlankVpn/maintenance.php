@@ -134,7 +134,7 @@ try {
                         try {
                             Operations::resetSegments($segments, $settings);
                         } catch (\Throwable) {
-                            syslog(LOG_WARNING, 'Blank VPN could not reset old whole-network sessions.');
+                            syslog(LOG_WARNING, 'Blank VPN could not reset old sessions under Whole-Network coverage.');
                         }
                     }
                     $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model) : [];

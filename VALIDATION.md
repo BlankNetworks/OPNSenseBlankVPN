@@ -6,7 +6,7 @@
 | --- | --- |
 | OPNsense 26.7 platform and upstream contracts | Reviewed stable/26.7 native WireGuard, gateways, firewall plugin API, configuration locking, diagnostics, ACLs and resolver integration. |
 | Mullvad integration references | Reviewed Mullvad’s published WireGuard tools and device API source. |
-| Dashboard browser fixture | Passed at 390 × 844 and 1280 × 900 with controlled API responses. Covered input escaping, assignment and retarget requests, read-only controls, connections, counters, account and relay rendering, the Netflix preset, service submission, Smart Routing settings, and the proxy import and individual exit controls. |
+| Dashboard browser fixture | Passed at 390 × 844 and 1280 × 900 with controlled API responses. Covered input escaping, assignment and retarget requests, read-only controls, connections, counters, account and relay rendering, the Netflix preset, service submission, Multi-Path settings, and the proxy import and individual exit controls. |
 | PHP and XML source | PHP parsed with Tree-sitter. The repository checks workflow runs the PHP fixtures on an Ubuntu runner. MVC, menu and ACL XML parsed. JavaScript syntax checked with Node. |
 | Package archives | The release workflow checks the ABI and checksums for both FreeBSD architectures, opens each package with native pkg in a FreeBSD 15.1 guest, and runs the bundled core version commands. |
 | Router access | Read-only SSH was blocked by the development environment. No router changes or Mullvad account changes were made. |
@@ -21,7 +21,7 @@ A passing lab should confirm all of the following on the exact CE 26.7 build. Us
 | --- | --- |
 | pkg registration, dashboard, login and ACLs | Native pkg accepts the archive. Fresh install leaves routing disabled. View-only and unauthorized users cannot change policy. |
 | HTTPS and local dashboard DNS | The hostname resolves in each permitted group, the HTTPS certificate is trusted and the existing admin entry still works. |
-| Smart Routing and wildcard learning | A fresh apex and subdomain lookup populate the PF table and route matched IPv4 through the chosen exit. Test normal DNS over IPv4 and IPv6, shared destination IPs, and unrelated native WAN traffic. |
+| Multi-Path and wildcard learning | A fresh apex and subdomain lookup populate the PF table and route matched IPv4 through the chosen exit. Test normal DNS over IPv4 and IPv6, shared destination IPs, and unrelated native WAN traffic. |
 | Proxy runtime and subscription | Verify the pinned core binaries on FreeBSD and the loopback-only listeners, enable two distinct servers, confirm correct route selection and DNS, and exercise refresh, removal, reboot, and transport loss. |
 | Shared-LAN per-IP kill switch | A reserved IPv4 address loses internet when its tunnel goes down. Other clients and approved local services remain available. Start with an existing direct session and confirm activation resets it. |
 | Two simultaneous exits and a shared exit | Clients select different IPv4 exits. Two clients share an exit. Moving one client leaves the other sessions on their prior path. |
