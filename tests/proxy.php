@@ -2,10 +2,11 @@
 
 declare(strict_types=1);
 
+use OPNsense\BlankVpn\ProxyCatalog;
 use OPNsense\BlankVpn\ProxyImport;
 use OPNsense\BlankVpn\ProxyRuntime;
 
-foreach (['ProxyImport', 'ProxyRuntime'] as $file) {
+foreach (['ProxyCatalog', 'ProxyImport', 'ProxyRuntime'] as $file) {
     require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/' . $file . '.php';
 }
 
@@ -55,6 +56,17 @@ rejectProxy('{"proxies":[{"name":"bad","type":"socks5","server":"192.0.2.2","por
 rejectProxy('{"outbounds":[{"type":"ssh","server":"192.0.2.2","server_port":22,"private_key_path":"/etc/key"}]}');
 rejectProxy('{"outbounds":[{"type":"ssh","server":"192.0.2.2","server_port":22,"private_key":"../../secret"}]}');
 rejectProxy('{"outbounds":[{"protocol":"freedom","settings":{}}]}');
+
+$manual = ProxyImport::manual('Manual', 'hysteria2', '2001:db8::1', '443', '', 'fixture:@ secret', '', 'sni=example.com');
+assertProxy($manual['host'] === '2001:db8::1' && $manual['config']['password'] === 'fixture:@ secret',
+    'Manual proxy entry preserves IPv6 endpoints and credentials.');
+$manualReality = ProxyImport::manual('REALITY', 'vless', '192.0.2.2', '443', $uuid, '', '',
+    'security=reality&sni=example.com&pbk=fixture&sid=0123&fp=chrome');
+assertProxy($manualReality['config']['reality-opts']['short-id'] === '0123', 'Manual REALITY parameters are preserved.');
+assertProxy(ProxyCatalog::subscriptionUsage('Upload=12; download=34; total=100; expire=1798761600') ===
+    ['upload' => 12, 'download' => 34, 'total' => 100, 'expire' => 1798761600], 'Read quota and expiry headers.');
+assertProxy(ProxyCatalog::subscriptionUsage('upload=1; upload=2; total=9223372036854775808; expire=-1; download=0') ===
+    ['download' => 0], 'Ignore duplicate, overflowed and negative metadata.');
 
 $route = ProxyRuntime::route('proxy-exit', 0, proxyNode($ss)['id'], 'test', 'mihomo', 'ss');
 $ssConfig = ProxyRuntime::configuration($route, proxyNode($ss));

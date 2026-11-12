@@ -20,9 +20,12 @@ try {
             $output = Resolver::command(['/sbin/pfctl', '-sr']);
             foreach (explode("\n", $output) as $line) {
                 if (preg_match('/\blabel "(blankvpn_[a-z0-9_]+)"/', $line, $match)) {
-                    preg_match('/\broute-to\s+[({\s]*(wg[0-9]+|tun20[0-7])\b/', $line, $gateway);
+                    preg_match('/\broute-to\s+[({\s]*(wg[0-9]+|ovpnc[0-9]+|tun20[0-7])\b/', $line, $gateway);
                     preg_match('/^(?:@\d+\s+)?(pass|block|match)\b/', ltrim($line), $action);
-                    $rules[$match[1]] = ['gateway' => $gateway[1] ?? null, 'action' => $action[1] ?? null];
+                    preg_match('/\bfrom\s+([0-9.]+)(?:\/32)?\s/', $line, $source);
+                    $rules[$match[1]] = [
+                        'gateway' => $gateway[1] ?? null, 'action' => $action[1] ?? null, 'source' => $source[1] ?? null
+                    ];
                 }
             }
             echo json_encode((object)$rules, JSON_THROW_ON_ERROR), "\n";
@@ -89,6 +92,15 @@ try {
                             continue;
                         }
                         $probe = ProxyRuntime::probe($profile);
+                    } elseif (($profile['kind'] ?? '') === 'native') {
+                        $source = $profile['address'];
+                        $changed = $changed || ($old[$id]['source'] ?? '') !== $source;
+                        $pass = $loaded[$marker] ?? [];
+                        $guard = $loaded[$marker . '_block'] ?? [];
+                        $verified = $verifiedRule && ($pass['action'] ?? '') === 'pass' &&
+                            ($pass['source'] ?? '') === $source && ($guard['action'] ?? '') === 'block' &&
+                            ($guard['source'] ?? '') === $source;
+                        $probe = WireGuard::probeSource($verified ? $source : '');
                     } else {
                         $probe = WireGuard::probe($profile, $verifiedRule);
                     }
@@ -100,6 +112,9 @@ try {
                         'reachable' => $reachable, 'failures' => $failures, 'checkedAt' => time(),
                         'probeSucceeded' => $success
                     ];
+                    if (($profile['kind'] ?? '') === 'native') {
+                        $health[$id]['source'] = $source;
+                    }
                     $changed = $changed || ($previous['reachable'] ?? true) !== $reachable;
                 }
                 Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));

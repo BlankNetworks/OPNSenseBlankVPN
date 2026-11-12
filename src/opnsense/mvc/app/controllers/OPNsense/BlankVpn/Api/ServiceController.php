@@ -9,6 +9,7 @@ use OPNsense\BlankVpn\BlankVpn;
 use OPNsense\BlankVpn\Diagnostics;
 use OPNsense\BlankVpn\Firewall;
 use OPNsense\BlankVpn\Mullvad;
+use OPNsense\BlankVpn\NativeVpn;
 use OPNsense\BlankVpn\Operations;
 use OPNsense\BlankVpn\Policy;
 use OPNsense\BlankVpn\ProxyCatalog;
@@ -20,6 +21,9 @@ use OPNsense\BlankVpn\WireGuard;
 
 class ServiceController extends ApiControllerBase
 {
+    private const MULLVAD_SESSION = 'blankvpn_mullvad_login';
+    private const MULLVAD_SESSION_SECONDS = 600;
+
     public function dashboardAction()
     {
         return $this->respond(function () {
@@ -54,6 +58,15 @@ class ServiceController extends ApiControllerBase
                     'reachability' => time() - ($checked['checkedAt'] ?? 0) > 180 ? 'unverified or stale'
                         : (($checked['probeSucceeded'] ?? false) ? 'router probe succeeded' : 'router probe failed'),
                     'checkedAt' => $checked['checkedAt'] ?? null
+                ];
+            }
+            foreach (NativeVpn::routes($model) as $id => $route) {
+                $checked = $health[$id] ?? [];
+                $profiles[$id] = $route + [
+                    'status' => !$route['configured'] ? 'Native gateway changed' :
+                        ($route['address'] === '' ? 'Tunnel IPv4 unavailable' : 'Tunnel interface up'),
+                    'reachability' => time() - ($checked['checkedAt'] ?? 0) > 180 ? 'unverified or stale'
+                        : (($checked['probeSucceeded'] ?? false) ? 'router probe succeeded' : 'router probe failed')
                 ];
             }
             $proxyStatus = ProxyRuntime::lastStatus();
@@ -99,6 +112,8 @@ class ServiceController extends ApiControllerBase
             return $discovery + [
                 'profiles' => array_values($profiles),
                 'proxyCores' => ProxyRuntime::capabilities(),
+                'mullvadSignedIn' => $this->mullvadToken() !== null,
+                'nativeGateways' => array_values(NativeVpn::gateways()),
                 'assignments' => array_values($assignments),
                 'settings' => $settings,
                 'services' => array_values($services),
@@ -121,7 +136,39 @@ class ServiceController extends ApiControllerBase
 
     public function accountAction()
     {
-        return $this->respond(fn () => (new Mullvad())->account($this->input('account', 64)), true, true, true);
+        return $this->respond(function () {
+            if (!$this->isExternalClient()) {
+                $this->session->remove(self::MULLVAD_SESSION);
+            }
+            $login = (new Mullvad())->authenticate($this->input('account', 64));
+            if (!$this->isExternalClient()) {
+                $this->session->set(self::MULLVAD_SESSION, [
+                    'token' => $login['token'], 'expires' => time() + self::MULLVAD_SESSION_SECONDS,
+                    'user' => $this->getUserName()
+                ]);
+            }
+            return $login['account'];
+        }, true, true, true);
+    }
+
+    public function logoutMullvadAction()
+    {
+        return $this->respond(function () {
+            if (!$this->isExternalClient()) {
+                $this->session->remove(self::MULLVAD_SESSION);
+            }
+            return [];
+        }, true, true, true);
+    }
+
+    private function mullvadToken(): ?string
+    {
+        if ($this->isExternalClient() || !$this->request->isSecure()) {
+            return null;
+        }
+        $login = $this->session->get(self::MULLVAD_SESSION);
+        return is_array($login) && ($login['expires'] ?? 0) > time() &&
+            ($login['user'] ?? null) === $this->getUserName() ? ($login['token'] ?? null) : null;
     }
 
     public function registerAction()
@@ -130,12 +177,20 @@ class ServiceController extends ApiControllerBase
             $relayId = $this->input('relay', 100);
             $name = $this->name($relayId);
             $account = $this->input('account', 64);
+            $token = $account === '' ? $this->mullvadToken() : null;
+            if ($account === '' && $token === null) {
+                throw new \DomainException('Sign in to Mullvad before adding an exit.');
+            }
             $mullvad = new Mullvad();
             $existing = Policy::profiles(new BlankVpn());
             foreach ($existing as $profile) {
                 if ($profile['relay'] === $relayId && $relayId !== '') {
                     if (!empty($profile['accountBinding'])) {
-                        $mullvad->verifyBinding($account, $profile['accountBinding']);
+                        if ($token !== null) {
+                            $mullvad->verifyBindingWithToken($token, $profile['accountBinding']);
+                        } else {
+                            $mullvad->verifyBinding($account, $profile['accountBinding']);
+                        }
                     }
                     if (!WireGuard::check($profile)['ok']) {
                         throw new \DomainException('The existing exit needs repair before it can be reused.');
@@ -143,10 +198,10 @@ class ServiceController extends ApiControllerBase
                     return ['profile' => $profile['id'], 'reused' => true, 'message' => 'The existing exit was reused.'];
                 }
             }
-            $dnsPort = Resolver::freePort($existing);
+            $dnsPort = Resolver::freePort(Policy::routes(new BlankVpn()));
             $relay = $this->relay($mullvad, $relayId);
             WireGuard::preflight($relay['ipv4']);
-            $identity = $mullvad->register($account, $relayId);
+            $identity = $token !== null ? $mullvad->registerWithToken($token, $relayId) : $mullvad->register($account, $relayId);
             $result = $this->addProfile($name, $relayId, $identity, $relay, $dnsPort);
             try {
                 $mullvad->completeRegistration($identity['registrationReceipt']);
@@ -215,7 +270,7 @@ class ServiceController extends ApiControllerBase
             $config = $mullvad->parseConfig($this->input('config', 16384));
             $identity = $config;
             $identity['publicKey'] = $mullvad->derivePublicKey($config['privateKey']);
-            $dnsPort = Resolver::freePort(Policy::profiles(new BlankVpn()));
+            $dnsPort = Resolver::freePort(Policy::routes(new BlankVpn()));
             return $this->addProfile($this->name(), '', $identity, $config, $dnsPort);
         }), true, true, true);
     }
@@ -245,6 +300,39 @@ class ServiceController extends ApiControllerBase
         return ['profile' => $result['id']];
     }
 
+    public function addNativeExitAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $name = $this->name();
+            $id = $this->input('gateway', 64);
+            $dns = trim($this->input('dns', 64));
+            $gateway = NativeVpn::gateways()[$id] ?? null;
+            if ($gateway === null || !filter_var($dns, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ||
+                Policy::contains('127.0.0.0/8', $dns) || Policy::contains('224.0.0.0/4', $dns) ||
+                in_array($dns, ['0.0.0.0', '255.255.255.255'], true)) {
+                throw new \DomainException('Choose a configured tunnel gateway and enter its IPv4 DNS resolver.');
+            }
+            return Operations::change(function (BlankVpn $model) use ($name, $id, $dns, $gateway) {
+                foreach (Policy::routes($model) as $existing) {
+                    if (($existing['interface'] ?? '') === $gateway['interface']) {
+                        throw new \DomainException('This tunnel interface already has an exit.');
+                    }
+                }
+                $port = Resolver::freePort(Policy::routes($model));
+                $node = $model->nativeRoutes->route->add();
+                $node->name = $name;
+                $node->gatewayId = $id;
+                $node->gatewayName = $gateway['gateway'];
+                $node->device = $gateway['interface'];
+                $node->logicalInterface = $gateway['logicalInterface'];
+                $node->protocol = $gateway['protocol'];
+                $node->dns = $dns;
+                $node->dnsPort = (string)$port;
+                return ['profile' => (string)$node->getAttribute('uuid'), 'reload' => Policy::settings($model)['enabled']];
+            });
+        }), true, true);
+    }
+
     public function removeProfileAction()
     {
         return $this->respond(fn () => Operations::exclusive(function () {
@@ -262,6 +350,10 @@ class ServiceController extends ApiControllerBase
                 $this->requireUnusedByService($model, $id);
                 if (($profile['kind'] ?? '') === 'proxy') {
                     $model->proxyRoutes->route->del($id);
+                    return ['reload' => Policy::settings($model)['enabled']];
+                }
+                if (($profile['kind'] ?? '') === 'native') {
+                    $model->nativeRoutes->route->del($id);
                     return ['reload' => Policy::settings($model)['enabled']];
                 }
                 WireGuard::remove($profile);
@@ -498,6 +590,19 @@ class ServiceController extends ApiControllerBase
         ), true, true, true);
     }
 
+    public function addProxyNodeAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $node = ProxyImport::manual(
+                $this->name(), $this->input('protocol', 24), trim($this->input('host', 255)),
+                $this->input('port', 5), trim($this->input('username', 255)), $this->input('secret', 2048),
+                trim($this->input('cipher', 80)), trim($this->input('parameters', 4096))
+            );
+            ProxyCatalog::saveManual([$node['id'] => $node]);
+            return ['id' => $node['id']];
+        }), true, true, true);
+    }
+
     public function addSubscriptionAction()
     {
         return $this->respond(fn () => Operations::exclusive(fn () => ProxyCatalog::addFeed(
@@ -566,9 +671,11 @@ class ServiceController extends ApiControllerBase
 
     private static function routeConfigured(array $profile): bool
     {
-        return ($profile['kind'] ?? '') === 'proxy'
-            ? isset(ProxyCatalog::read()['nodes'][$profile['node']])
-            : WireGuard::check($profile)['ok'];
+        return match ($profile['kind'] ?? '') {
+            'proxy' => isset(ProxyCatalog::read()['nodes'][$profile['node']]),
+            'native' => $profile['configured'],
+            default => WireGuard::check($profile)['ok']
+        };
     }
 
     public function connectionsAction($ip = '')

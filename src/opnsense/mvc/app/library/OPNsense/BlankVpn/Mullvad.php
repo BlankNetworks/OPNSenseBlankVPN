@@ -68,17 +68,27 @@ class Mullvad
 
     public function account(string $account): array
     {
+        return $this->authenticate($account)['account'];
+    }
+
+    public function authenticate(string $account): array
+    {
         $token = $this->token($account);
         $details = $this->accountDetails($token);
         unset($details['id']);
         $details['devices'] = $this->devices($token);
         $details['availableSlots'] = max(0, $details['maxDevices'] - count($details['devices']));
-        return $details;
+        return ['token' => $token, 'account' => $details];
     }
 
     public function verifyBinding(string $account, string $binding): void
     {
-        $details = $this->accountDetails($this->token($account));
+        $this->verifyBindingWithToken($this->token($account), $binding);
+    }
+
+    public function verifyBindingWithToken(string $token, string $binding): void
+    {
+        $details = $this->accountDetails($token);
         if (!hash_equals($binding, $this->binding($details['id']))) {
             throw new RuntimeException('That exit is linked to a different Mullvad account.');
         }
@@ -112,10 +122,14 @@ class Mullvad
 
     public function register(string $account, string $registrationId = ''): array
     {
+        return $this->registerWithToken($this->token($account), $registrationId);
+    }
+
+    public function registerWithToken(string $token, string $registrationId = ''): array
+    {
         if (strlen($registrationId) > 256) {
             throw new InvalidArgumentException('Invalid WireGuard registration identifier.');
         }
-        $token = $this->token($account);
         $details = $this->accountDetails($token);
         $binding = $this->binding($details['id']);
         $scope = hash('sha256', $details['id'] . "\0" . $registrationId);
@@ -199,7 +213,7 @@ class Mullvad
         $text = preg_replace('/^\xEF\xBB\xBF/', '', $text);
         $fields = [
             'interface' => ['privatekey', 'address', 'dns', 'mtu'],
-            'peer' => ['publickey', 'allowedips', 'endpoint', 'persistentkeepalive'],
+            'peer' => ['publickey', 'presharedkey', 'allowedips', 'endpoint', 'persistentkeepalive'],
         ];
         $config = [];
         $section = '';
@@ -230,7 +244,8 @@ class Mullvad
         $peer = $config['peer'] ?? [];
         $privateKey = $interface['privatekey'] ?? '';
         $publicKey = $peer['publickey'] ?? '';
-        if (!$this->validKey($privateKey) || !$this->validKey($publicKey)) {
+        $presharedKey = $peer['presharedkey'] ?? '';
+        if (($presharedKey !== '' && !$this->validKey($presharedKey)) || !$this->validKey($privateKey) || !$this->validKey($publicKey)) {
             throw new InvalidArgumentException('Import requires a valid WireGuard private key and peer public key.');
         }
         $addresses = [4 => '', 6 => ''];
@@ -240,7 +255,7 @@ class Mullvad
             if ($cidr === '' || $addresses[$version] !== '') {
                 throw new InvalidArgumentException('Import supports one tunnel address per IP family in CIDR format.');
             }
-            $addresses[$version] = $cidr;
+            $addresses[$version] = explode('/', $cidr, 2)[0] . ($version === 4 ? '/32' : '/128');
         }
         $allowed = array_unique($this->commaList($peer['allowedips'] ?? ''));
         sort($allowed);
@@ -264,6 +279,7 @@ class Mullvad
             'address6' => $addresses[6],
             'host' => $host,
             'port' => $port,
+            'presharedKey' => $presharedKey,
             'dns' => array_values(array_unique($dns)),
             'keepalive' => strtolower($peer['persistentkeepalive'] ?? '') === 'off'
                 ? 0 : $this->integer($peer['persistentkeepalive'] ?? '0', 0, 65535, 'keepalive'),

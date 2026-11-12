@@ -50,18 +50,23 @@ final class ProxyCatalog
                 array_intersect_key($node, array_flip(['id', 'name', 'core', 'protocol', 'host', 'port', 'legacy', 'sources'])),
                 $data['nodes'])),
             'feeds' => array_values(array_map(static fn (array $feed): array =>
-                array_intersect_key($feed, array_flip(['id', 'name', 'auto', 'updated', 'error', 'skipped', 'count'])),
+                array_intersect_key($feed, array_flip(['id', 'name', 'auto', 'updated', 'error', 'skipped', 'count', 'usage'])),
                 $data['feeds']))
         ];
     }
 
     public static function import(string $body): array
     {
-        $data = self::read();
         $parsed = ProxyImport::parse($body);
-        self::replaceNodes($data, 'manual', $parsed['nodes'], []);
-        self::save($data);
+        self::saveManual($parsed['nodes']);
         return ['imported' => count($parsed['nodes']), 'skipped' => $parsed['skipped']];
+    }
+
+    public static function saveManual(array $nodes): void
+    {
+        $data = self::read();
+        self::replaceNodes($data, 'manual', $nodes, []);
+        self::save($data);
     }
 
     public static function addFeed(string $name, string $url, bool $auto, array $pinned): array
@@ -122,11 +127,12 @@ final class ProxyCatalog
 
     private static function refresh(array &$data, array $feed, array $pinned): array
     {
-        $result = ProxyImport::parse(self::fetch($feed['url']));
+        $download = self::fetch($feed['url']);
+        $result = ProxyImport::parse($download['body']);
         self::replaceNodes($data, $feed['id'], $result['nodes'], $pinned);
         $data['feeds'][$feed['id']] = [
             'updated' => time(), 'attempted' => time(), 'error' => null,
-            'count' => count($result['nodes']), 'skipped' => $result['skipped']
+            'count' => count($result['nodes']), 'skipped' => $result['skipped'], 'usage' => $download['usage']
         ] + $feed;
         return ['imported' => count($result['nodes']), 'skipped' => $result['skipped']];
     }
@@ -184,7 +190,33 @@ final class ProxyCatalog
         return [$host, $port];
     }
 
-    private static function fetch(string $url): string
+    public static function subscriptionUsage(string $header): array
+    {
+        $usage = [];
+        $seen = [];
+        if (strlen($header) > 1024) {
+            return $usage;
+        }
+        foreach (explode(';', $header) as $field) {
+            if (!preg_match('/^\s*(upload|download|total|expire)\s*=\s*([0-9]{1,19})\s*$/iD', $field, $match)) {
+                continue;
+            }
+            $key = strtolower($match[1]);
+            if (isset($seen[$key])) {
+                unset($usage[$key]);
+                continue;
+            }
+            $seen[$key] = true;
+            $digits = ltrim($match[2], '0') ?: '0';
+            $limit = $key === 'expire' ? '253402300799' : (string)PHP_INT_MAX;
+            if (strlen($digits) < strlen($limit) || (strlen($digits) === strlen($limit) && strcmp($digits, $limit) <= 0)) {
+                $usage[$key] = (int)$digits;
+            }
+        }
+        return $usage;
+    }
+
+    private static function fetch(string $url): array
     {
         [$host, $port] = self::endpoint($url);
         $addresses = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : (gethostbynamel($host) ?: []);
@@ -196,11 +228,20 @@ final class ProxyCatalog
         $resolve = !filter_var($host, FILTER_VALIDATE_IP) ? [sprintf('%s:%d:%s', $host, $port, $ip)] : [];
         $curl = curl_init($url);
         $body = '';
+        $usage = [];
         $options = [
             CURLOPT_PROTOCOLS_STR => 'https', CURLOPT_FOLLOWLOCATION => false, CURLOPT_RESOLVE => $resolve,
             CURLOPT_PROXY => '', CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_SSLVERSION => CURL_SSLVERSION_TLSv1_2, CURLOPT_CONNECTTIMEOUT => 4, CURLOPT_TIMEOUT => 10,
             CURLOPT_ENCODING => '', CURLOPT_USERAGENT => 'Blank VPN/0.3 (OPNsense; Clash-compatible)',
+            CURLOPT_HEADERFUNCTION => static function ($handle, string $header) use (&$usage): int {
+                if (str_starts_with($header, 'HTTP/')) {
+                    $usage = [];
+                } elseif (stripos($header, 'subscription-userinfo:') === 0) {
+                    $usage = self::subscriptionUsage(substr($header, strlen('subscription-userinfo:')));
+                }
+                return strlen($header);
+            },
             CURLOPT_WRITEFUNCTION => static function ($handle, string $chunk) use (&$body): int {
                 if (strlen($body) + strlen($chunk) > ProxyImport::MAX_BYTES) {
                     return 0;
@@ -213,6 +254,6 @@ final class ProxyCatalog
             (int)curl_getinfo($curl, CURLINFO_RESPONSE_CODE) !== 200) {
             throw new RuntimeException('The subscription could not be downloaded. Check the HTTPS URL and provider response.');
         }
-        return $body;
+        return ['body' => $body, 'usage' => $usage];
     }
 }

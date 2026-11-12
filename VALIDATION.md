@@ -33,3 +33,7 @@ A passing lab should confirm all of the following on the exact CE 26.7 build. Us
 | Provider behavior | Test a real Mullvad exit, cache expiry or API outage, account expiry and full slots. Confirm that changing an unassigned profile preserves its registered device. |
 
 There was no matching OPNsense guest or FreeBSD pkg executable on the development host. Native installation, PHP execution on OPNsense, actual data-plane routing, proxy TUN forwarding, and leak resistance remain unverified. Test real Netflix playback separately because service-side VPN restrictions are independent of correct routing.
+
+## Provider and subscription checks
+
+Sign in to Mullvad over HTTPS and add a relay after the account field clears. Sign out and confirm another relay requires sign-in. Attach a native OpenVPN gateway and import a WireGuard profile. Assign a test device to each exit, stop and restart each tunnel, and check the device’s IPv4 egress and the unassigned client’s WAN path. Import a subscription with provider usage fields and confirm the displayed quota and expiry. Enable one server and verify refresh preserves its route.

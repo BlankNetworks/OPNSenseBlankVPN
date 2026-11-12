@@ -43,7 +43,7 @@ final class Policy
 
     public static function routes(BlankVpn $model): array
     {
-        return self::profiles($model) + ProxyRuntime::routes($model);
+        return self::profiles($model) + NativeVpn::routes($model) + ProxyRuntime::routes($model);
     }
 
     public static function assignments(BlankVpn $model): array
@@ -64,7 +64,7 @@ final class Policy
                 !self::interfaceId($id) || !isset($node->enable) ||
                 !empty((string)$node->gateway) || !empty((string)$node->gatewayv6) ||
                 !empty((string)$node->gateway_interface) || !preg_match('/^[a-z][a-z0-9_.:-]{0,31}$/iD', $device) ||
-                preg_match('/^(wg|ovpn|ipsec|enc|tun|tap|ppp|lo)[0-9]/i', $device)
+                preg_match('/^(wg|ovpn[cs]?|ipsec|enc|tun|tap|ppp|lo)[0-9]/i', $device)
             ) {
                 continue;
             }

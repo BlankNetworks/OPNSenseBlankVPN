@@ -3,6 +3,8 @@
 import json
 import sys
 
+sys.path.insert(0, "/usr/local/share/blankvpn/python")
+
 try:
     import yaml
 except ImportError:

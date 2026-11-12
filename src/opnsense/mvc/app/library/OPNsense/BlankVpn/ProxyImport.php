@@ -64,6 +64,56 @@ final class ProxyImport
         return self::result($nodes, $skipped);
     }
 
+    public static function manual(
+        string $name,
+        string $protocol,
+        string $host,
+        string $port,
+        string $username,
+        string $secret,
+        string $cipher,
+        string $parameters
+    ): array {
+        $host = self::host($host);
+        $port = self::port($port);
+        $endpoint = (str_contains($host, ':') ? '[' . $host . ']' : $host) . ':' . $port;
+        $query = self::query(ltrim($parameters, '?'));
+        foreach ([$username, $secret, $cipher] as $credential) {
+            if (preg_match('/[\x00-\x1f\x7f]/', $credential)) {
+                throw new DomainException('Proxy credentials must use a single line.');
+            }
+        }
+        if ($protocol === 'ss') {
+            if ($cipher === '' || $secret === '') {
+                throw new DomainException('Enter a Shadowsocks cipher and password.');
+            }
+            $authentication = rawurlencode($cipher . ':' . $secret);
+        } elseif (in_array($protocol, ['vless', 'vmess', 'tuic'], true)) {
+            if (!preg_match('/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iD', $username) ||
+                ($protocol === 'tuic' && $secret === '')) {
+                throw new DomainException('Enter a valid UUID and, for TUIC, its password.');
+            }
+            $authentication = rawurlencode($username) . ($protocol === 'tuic' ? ':' . rawurlencode($secret) : '');
+        } elseif (in_array($protocol, ['trojan', 'hysteria', 'hysteria2', 'anytls', 'snell'], true)) {
+            if ($secret === '') {
+                throw new DomainException('Enter the proxy password, authentication string or key.');
+            }
+            $authentication = rawurlencode($secret);
+        } elseif (in_array($protocol, ['http', 'https', 'socks5'], true)) {
+            if ($secret !== '' && $username === '') {
+                throw new DomainException('Enter the username for this proxy password.');
+            }
+            $authentication = $username === '' ? '' : rawurlencode($username) . ':' . rawurlencode($secret);
+        } else {
+            throw new DomainException('Choose a supported proxy protocol.');
+        }
+        $link = $protocol . '://' . ($authentication === '' ? '' : $authentication . '@') . $endpoint;
+        if ($query !== []) {
+            $link .= '?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        }
+        return self::link($link . '#' . rawurlencode($name));
+    }
+
     private static function structured(array $document): array
     {
         if (isset($document['proxies']) && is_array($document['proxies'])) {

@@ -59,7 +59,11 @@ namespace OPNsense\Firewall {
 
         public function getGateway(string $name): array
         {
-            return $name === 'VPN' ? ['interface' => 'wg0', 'proto' => 'inet', 'logic' => 'route-to wg0'] : [];
+            return match ($name) {
+                'VPN' => ['interface' => 'wg0', 'proto' => 'inet', 'logic' => 'route-to wg0'],
+                'NORD' => ['interface' => 'ovpnc1', 'proto' => 'inet', 'logic' => 'route-to ovpnc1'],
+                default => []
+            };
         }
     }
 }
@@ -67,11 +71,12 @@ namespace OPNsense\Firewall {
 namespace {
     use OPNsense\BlankVpn\Diagnostics;
     use OPNsense\BlankVpn\Firewall;
+    use OPNsense\BlankVpn\NativeVpn;
     use OPNsense\BlankVpn\Policy;
     use OPNsense\BlankVpn\SmartRouting;
     use OPNsense\Firewall\Plugin;
 
-    foreach (['Policy', 'Resolver', 'SmartRouting', 'ProxyRuntime', 'Firewall'] as $file) {
+    foreach (['Policy', 'NativeVpn', 'Resolver', 'SmartRouting', 'ProxyRuntime', 'Firewall'] as $file) {
         require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/' . $file . '.php';
     }
 
@@ -150,6 +155,24 @@ namespace {
     $compileDevice->invoke(null, $down, $settings, $interfaces, ['device-a' => $assignment], $profiles, ['jp' => ['reachable' => false]], $diag);
     checkRouting(isset($down->rules[Policy::marker('kill', 'device-a')]) &&
         !isset($down->rules[Policy::marker('device', 'device-a')]), 'Down exit must remove the pass and preserve the IPv4 guard.');
+    $native = array_replace($profiles['jp'], [
+        'kind' => 'native', 'interface' => 'ovpnc1', 'gateway' => 'NORD', 'address' => '198.51.100.20'
+    ]);
+    $vpn = new Plugin();
+    $compileDevice->invoke(null, $vpn, $settings, $interfaces, ['device-a' => $assignment], ['jp' => $native], [], $diag);
+    checkRouting($vpn->rules[Policy::marker('device', 'device-a')]['gateway'] === 'NORD' &&
+        $vpn->nat[0]['target'] === '198.51.100.20', 'An attached OpenVPN gateway gets a scoped policy and NAT.');
+    $vpnDown = new Plugin();
+    $compileDevice->invoke(null, $vpnDown, $settings, $interfaces, ['device-a' => $assignment],
+        ['jp' => array_replace($native, ['owned' => false, 'address' => ''])], [], $diag);
+    checkRouting(isset($vpnDown->rules[Policy::marker('kill', 'device-a')]) &&
+        !isset($vpnDown->rules[Policy::marker('device', 'device-a')]) && $vpnDown->nat === [],
+        'Loss of the native tunnel address keeps the per-IP guard without a route or NAT.');
+    $address = ['up' => true, 'unicast' => [['address' => '198.51.100.20']]];
+    checkRouting(NativeVpn::sourceAddress('ovpnc1', ['ovpnc1' => $address]) === '198.51.100.20',
+        'A native exit needs an active source address.');
+    checkRouting(NativeVpn::sourceAddress('ovpnc1', ['ovpnc1' => $address, 'wg3' => $address]) === '',
+        'Reject a native exit when its source IP is also bound to a different interface.');
     $diag->reserved = false;
     $moved = new Plugin();
     $compileDevice->invoke(null, $moved, $settings, $interfaces, ['device-a' => $assignment], $profiles, [], $diag);

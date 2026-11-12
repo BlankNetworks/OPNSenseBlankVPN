@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "os-blank-vpn"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 SERIES = "26.7"
 ABI = "FreeBSD:15:amd64"
 LEGACY_ABI = "freebsd:15:x86:64"
@@ -34,7 +34,7 @@ def command(*args):
     return subprocess.check_output(args, text=True).strip()
 
 
-def payload():
+def payload(runtime_dir=None):
     source = ROOT / "src"
     files = {}
     for path in sorted(source.rglob("*")):
@@ -55,6 +55,20 @@ def payload():
         files[f"{PREFIX}/{relative.as_posix()}"] = (path.read_bytes(), mode)
     if not files:
         raise ValueError("No plugin files found under src/")
+    if runtime_dir is not None:
+        for core in ("mihomo", "tun2socks", "xray", "sing-box"):
+            binary = (runtime_dir / "bin" / core).read_bytes()
+            if len(binary) < 64 or binary[:6] != b"\x7fELF\x02\x01" or binary[18:20] != b"\x3e\x00":
+                raise ValueError(f"{core} is not an amd64 ELF executable")
+            files[f"{PREFIX}/libexec/blankvpn/{core}"] = (binary, 0o755)
+        for name in ("mihomo", "tun2socks", "xray", "sing-box", "pyyaml"):
+            license_path = f"licenses/{name}.txt"
+            files[f"{PREFIX}/share/blankvpn/{license_path}"] = ((runtime_dir / license_path).read_bytes(), 0o644)
+        yaml_files = sorted((runtime_dir / "yaml").glob("*.py"))
+        if not any(path.name == "__init__.py" for path in yaml_files):
+            raise ValueError("The staged PyYAML source is missing")
+        for path in yaml_files:
+            files[f"{PREFIX}/share/blankvpn/python/yaml/{path.name}"] = (path.read_bytes(), 0o644)
     return files
 
 
@@ -74,7 +88,7 @@ def version_info(files):
         "product_name": "blank-vpn",
         "product_tier": "3",
         "product_version": VERSION,
-        "product_website": "https://github.com/BlankNetworks",
+        "product_website": "https://github.com/BlankNetworks/OPNSenseBlankVPN",
     }
 
 
@@ -88,7 +102,7 @@ def build_metadata(files, dependencies):
         "name": NAME,
         "version": VERSION,
         "origin": f"opnsense/{NAME}",
-        "comment": "Smart Routing and per-IP WireGuard and proxy exits",
+        "comment": "Per-device VPN and proxy routing with IPv4 kill switches",
         "desc": (ROOT / "pkg-descr").read_text(encoding="utf-8").strip(),
         "maintainer": version["product_email"],
         "www": version["product_website"],
@@ -232,6 +246,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cross", action="store_true", help="Produce the native pkg format on a non-OPNsense host")
     parser.add_argument("--output", type=Path, default=ROOT / "dist", help="Output directory")
+    parser.add_argument("--runtime-dir", type=Path, help="Include the staged FreeBSD proxy runtimes and licenses")
     args = parser.parse_args()
     timestamp = int(os.environ.get("SOURCE_DATE_EPOCH", "0"))
     if timestamp < 0:
@@ -240,7 +255,7 @@ def main():
         pkg, dependencies = None, DEPENDENCIES
     else:
         pkg, dependencies = native_pkg()
-    files = payload()
+    files = payload(args.runtime_dir)
     metadata = build_metadata(files, dependencies)
     scripts = hook_scripts()
     output = args.output.resolve()

@@ -14,7 +14,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Run PHP fixtures and syntax checks
         run: |
-          find src tests -type f \( -name '*.php' -o -name '*.inc' \) -exec php -l {} \;
+          set -eu
+          find src tests -type f \( -name '*.php' -o -name '*.inc' \) -print0 | xargs -0 -n1 php -l
           for test in tests/*.php; do php "$test"; done
           node --check src/opnsense/www/js/blankvpn.js
           node --check tests/ui-fixture.js
@@ -32,3 +33,35 @@ jobs:
             dist/*.pkg
             dist/*.pkg.sha256
           if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[publish release]')
+    needs: checks
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Stage pinned FreeBSD runtimes
+        run: sh build/prepare-release.sh "$RUNNER_TEMP/blankvpn-runtime"
+      - name: Build the downloadable package
+        run: |
+          python3 build/package.py --cross --runtime-dir "$RUNNER_TEMP/blankvpn-runtime"
+          cd dist
+          sha256sum -c os-blank-vpn-0.4.0.pkg.sha256
+      - name: Publish the GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag=v0.4.0
+          if gh release view "$tag" >/dev/null 2>&1; then
+            test "$(gh release view "$tag" --json isDraft,targetCommitish --jq '.isDraft and (.targetCommitish == env.GITHUB_SHA)')" = true
+          else
+            gh release create "$tag" --draft --prerelease --target "$GITHUB_SHA" \
+              --title "Blank VPN 0.4.0 for OPNsense CE 26.7 amd64" --notes-file RELEASE_NOTES.md
+          fi
+          gh release upload "$tag" dist/os-blank-vpn-0.4.0.pkg dist/os-blank-vpn-0.4.0.pkg.sha256 --clobber
+          gh release edit "$tag" --draft=false

@@ -13,7 +13,15 @@
     <div id="bv-message" class="alert" role="status" aria-live="polite" hidden></div>
     <ul id="bv-warnings" class="alert alert-warning bv-warnings" hidden></ul>
 
-    <section class="bv-panel" aria-labelledby="bv-smart-title">
+    <nav class="bv-actions" aria-label="Blank VPN sections">
+        <button type="button" class="btn btn-primary" data-bv-section="devices" aria-pressed="true">Devices</button>
+        <button type="button" class="btn btn-default" data-bv-section="vpns" aria-pressed="false">VPNs</button>
+        <button type="button" class="btn btn-default" data-bv-section="proxies" aria-pressed="false" data-manage-only>Proxies</button>
+        <button type="button" class="btn btn-default" data-bv-section="smart" aria-pressed="false">Smart Routing</button>
+        <button type="button" class="btn btn-default" data-bv-section="settings" aria-pressed="false" data-manage-only>Settings</button>
+    </nav>
+
+    <section class="bv-panel" data-bv-panel="smart" aria-labelledby="bv-smart-title" hidden>
         <div class="bv-heading">
             <div>
                 <h2 id="bv-smart-title">Smart Routing</h2>
@@ -26,7 +34,7 @@
                 <thead>
                     <tr>
                         <th scope="col">Service and domains</th>
-                        <th scope="col">VPN exit</th>
+                        <th scope="col">Exit</th>
                         <th scope="col">Routing</th>
                         <th scope="col"><span class="sr-only">Actions</span></th>
                     </tr>
@@ -57,7 +65,7 @@
         </form>
     </section>
 
-    <section class="bv-panel" aria-labelledby="bv-devices-title">
+    <section class="bv-panel" data-bv-panel="devices" aria-labelledby="bv-devices-title">
         <div class="bv-heading">
             <div>
                 <h2 id="bv-devices-title">Devices</h2>
@@ -97,14 +105,14 @@
                 </label>
                 <label>MAC address <input id="bv-mac" type="text" class="form-control" autocomplete="off" spellcheck="false" required></label>
                 <label>Internet route <select id="bv-profile" class="form-control"></select></label>
-                <label id="bv-failure-field">If the VPN fails
+                <label id="bv-failure-field">If the exit fails
                     <select id="bv-failure" class="form-control">
                         <option value="block">Block IPv4 internet (kill switch)</option>
-                        <option value="backup">Use a backup VPN</option>
+                        <option value="backup">Use a backup exit</option>
                         <option value="wan">Use normal internet</option>
                     </select>
                 </label>
-                <label id="bv-backup-field" hidden>Backup VPN <select id="bv-backup" class="form-control"></select></label>
+                <label id="bv-backup-field" hidden>Backup exit <select id="bv-backup" class="form-control"></select></label>
             </div>
             <p id="bv-identity" class="text-muted"></p>
             <p id="bv-route-note" class="text-muted"></p>
@@ -149,7 +157,7 @@
         </div>
     </section>
 
-    <details class="bv-panel" id="bv-tunnels">
+    <details class="bv-panel" id="bv-tunnels" data-bv-panel="vpns" hidden>
         <summary>VPN exits</summary>
         <p class="text-muted">Choose an existing exit when multiple devices should share a tunnel.</p>
         <div class="bv-scroll">
@@ -180,7 +188,8 @@
                             <input id="bv-register-name" type="text" class="form-control" maxlength="64" placeholder="Defaults to server name">
                         </label>
                     </div>
-                    <button id="bv-inspect-account" type="button" class="btn btn-default">Check account</button>
+                    <button id="bv-inspect-account" type="button" class="btn btn-default">Sign in to Mullvad</button>
+                    <button id="bv-sign-out" type="button" class="btn btn-default" hidden>Sign out</button>
                     <div id="bv-account-status" class="bv-account-status" aria-live="polite"></div>
                     <div class="bv-heading bv-relay-heading">
                         <p id="bv-relay-status" class="text-muted" aria-live="polite">Relay catalog has not been loaded.</p>
@@ -195,7 +204,7 @@
                     <label id="bv-retarget-row" hidden>Reuse an unassigned Mullvad profile
                         <select id="bv-retarget" class="form-control"><option value="">Use a new profile</option></select>
                     </label>
-                    <button type="submit" class="btn btn-primary">Register and add exit</button>
+                    <button type="submit" class="btn btn-primary">Add Mullvad exit</button>
                 </form>
             </section>
 
@@ -206,14 +215,26 @@
                     <label>WireGuard configuration
                         <textarea id="bv-import-config" class="form-control bv-config-text" rows="9" maxlength="16384" autocomplete="off" spellcheck="false" required></textarea>
                     </label>
-                    <p class="text-muted">Paste a configuration exported for this router. It contains a private key.</p>
+                    <p class="text-muted">Paste a WireGuard configuration from a provider such as Proton VPN or Surfshark. The configuration contains a private key.</p>
                     <button type="submit" class="btn btn-primary">Import exit</button>
+                </form>
+            </section>
+            <section aria-labelledby="bv-native-title">
+                <h3 id="bv-native-title">Use an OPNsense VPN tunnel</h3>
+                <p class="text-muted">Set up the provider’s OpenVPN or WireGuard client in OPNsense and assign it an IPv4 gateway. Use this for NordVPN, ExpressVPN and other providers with manual configuration.</p>
+                <form id="bv-native-form">
+                    <label>Profile name <input id="bv-native-name" type="text" class="form-control" maxlength="64" required></label>
+                    <label>VPN gateway <select id="bv-native-gateway" class="form-control" required></select></label>
+                    <label>DNS resolver IPv4 address
+                        <input id="bv-native-dns" type="text" class="form-control" autocomplete="off" spellcheck="false" required>
+                    </label>
+                    <button id="bv-native-add" type="submit" class="btn btn-primary">Add VPN exit</button>
                 </form>
             </section>
         </div>
     </details>
 
-    <details class="bv-panel" id="bv-proxies" data-manage-only>
+    <details class="bv-panel" id="bv-proxies" data-bv-panel="proxies" data-manage-only hidden>
         <summary>Proxy servers and subscriptions</summary>
         <p id="bv-proxy-cores" class="text-muted"></p>
         <div class="bv-grid">
@@ -235,9 +256,41 @@
                 <button type="submit" class="btn btn-primary">Add subscription</button>
             </form>
         </div>
+        <details class="bv-panel">
+            <summary>Add a proxy manually</summary>
+            <form id="bv-proxy-manual">
+                <div class="bv-fields">
+                    <label>Server name <input id="bv-manual-name" class="form-control" maxlength="64" required></label>
+                    <label>Protocol
+                        <select id="bv-manual-protocol" class="form-control">
+                            <option value="socks5">SOCKS5</option><option value="http">HTTP</option><option value="https">HTTPS</option>
+                            <option value="ss">Shadowsocks</option><option value="vmess">VMess</option><option value="vless">VLESS / REALITY</option>
+                            <option value="trojan">Trojan</option><option value="hysteria">Hysteria</option><option value="hysteria2">Hysteria2</option>
+                            <option value="tuic">TUIC</option><option value="anytls">AnyTLS</option><option value="snell">Snell</option>
+                        </select>
+                    </label>
+                    <label>Hostname or IP <input id="bv-manual-host" class="form-control" maxlength="255" spellcheck="false" required></label>
+                    <label>Port <input id="bv-manual-port" class="form-control" type="number" min="1" max="65535" required></label>
+                    <label id="bv-manual-user-field"><span id="bv-manual-user-label">Username</span>
+                        <input id="bv-manual-username" class="form-control" maxlength="255" autocomplete="off" spellcheck="false">
+                    </label>
+                    <label id="bv-manual-secret-field">Password or key
+                        <input id="bv-manual-secret" class="form-control" type="password" maxlength="2048" autocomplete="off">
+                    </label>
+                    <label id="bv-manual-cipher-field" hidden>Cipher
+                        <input id="bv-manual-cipher" class="form-control" maxlength="80" placeholder="aes-256-gcm">
+                    </label>
+                    <label id="bv-manual-params-field" hidden>Advanced link parameters
+                        <input id="bv-manual-parameters" class="form-control" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="sni=example.com">
+                    </label>
+                </div>
+                <p id="bv-manual-note" class="text-muted" hidden></p>
+                <button type="submit" class="btn btn-primary">Save server</button>
+            </form>
+        </details>
         <div class="bv-scroll">
             <table class="table bv-table">
-                <thead><tr><th scope="col">Subscription</th><th scope="col">Servers</th><th scope="col">Last refresh</th><th scope="col">Actions</th></tr></thead>
+                <thead><tr><th scope="col">Subscription</th><th scope="col">Servers</th><th scope="col">Data and expiry</th><th scope="col">Last refresh</th><th scope="col">Actions</th></tr></thead>
                 <tbody id="bv-subscription-list"></tbody>
             </table>
         </div>
@@ -254,7 +307,7 @@
         <p class="text-muted">Enable an individual server as an exit. It then appears in the device and Smart Routing selectors.</p>
     </details>
 
-    <details class="bv-panel" id="bv-settings" data-manage-only>
+    <details class="bv-panel" id="bv-settings" data-bv-panel="settings" data-manage-only hidden>
         <summary>Routing settings</summary>
         <form id="bv-settings-form">
             <label class="bv-check"><input type="checkbox" id="bv-enabled"> Enable Blank VPN routing</label>

@@ -34,7 +34,9 @@ final class Firewall
                 }
                 continue;
             }
-            $profile['owned'] = WireGuard::check($profile)['ok'];
+            $profile['owned'] = ($profile['kind'] ?? '') === 'native'
+                ? $profile['configured'] && $profile['address'] !== ''
+                : WireGuard::check($profile)['ok'];
             self::registerProfile($firewall, $profile);
         }
         $firewall->setGatewayGroups($proxyGateways);
@@ -280,8 +282,12 @@ final class Firewall
             return ($gateway['proto'] ?? null) === 'inet' && ($gateway['type'] ?? null) === 'group' &&
                 str_contains($gateway['logic'] ?? '', $profile['interface'] . ' ' . $profile['peer']);
         }
+        $device = $profile['interface'] ?? '';
+        $validDevice = ($profile['kind'] ?? '') === 'native'
+            ? NativeVpn::tunnelDevice($device)
+            : preg_match('/^wg[0-9]+$/D', $device);
         if (
-            empty($profile['owned']) || empty($profile['gateway']) || !preg_match('/^wg[0-9]+$/D', $profile['interface'] ?? '') ||
+            empty($profile['owned']) || empty($profile['gateway']) || !$validDevice ||
             !Policy::interfaceId($profile['logicalInterface'] ?? '')
         ) {
             return false;

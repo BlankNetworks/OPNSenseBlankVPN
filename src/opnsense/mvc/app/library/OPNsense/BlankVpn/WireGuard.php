@@ -371,7 +371,14 @@ final class WireGuard
             return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified'];
         }
 
-        $address = explode('/', self::hostAddress((string)$profile['address'], false), 2)[0];
+        return self::probeSource(explode('/', $profile['address'], 2)[0]);
+    }
+
+    public static function probeSource(string $address): array
+    {
+        if (!filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified'];
+        }
         $curl = curl_init('https://' . self::PROBE_HOST . '/dns-query?name=cloudflare.com&type=A');
         $body = '';
         curl_setopt_array($curl, [
@@ -660,7 +667,7 @@ final class WireGuard
 
     private static function isTunnel(string $device): bool
     {
-        return preg_match('/^(wg|tun|tap|ovpn|ipsec|gif|gre|lo)[0-9]/i', $device) === 1;
+        return preg_match('/^(wg|tun|tap|ovpn[cs]?|ipsec|gif|gre|lo)[0-9]/i', $device) === 1;
     }
 
     private static function key(string $key): string

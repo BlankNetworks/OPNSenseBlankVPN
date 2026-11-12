@@ -15,8 +15,10 @@ final class ProxyRuntime
         'mihomo' => '/usr/local/libexec/blankvpn/mihomo',
         'tun2socks' => '/usr/local/libexec/blankvpn/tun2socks',
         'xray' => '/usr/local/libexec/blankvpn/xray',
-        'sing-box' => '/usr/local/bin/sing-box'
+        'sing-box' => '/usr/local/libexec/blankvpn/sing-box'
     ];
+
+    private const SYSTEM_SING_BOX = '/usr/local/bin/sing-box';
 
     public static function routes(BlankVpn $model): array
     {
@@ -62,12 +64,21 @@ final class ProxyRuntime
 
     public static function capabilities(): array
     {
-        return array_map(static fn ($path) => self::safeBinary($path), self::BIN);
+        $result = [];
+        foreach (array_keys(self::BIN) as $tool) {
+            $result[$tool] = self::available($tool);
+        }
+        return $result;
     }
 
     private static function available(string $tool): bool
     {
-        return isset(self::BIN[$tool]) && self::safeBinary(self::BIN[$tool]);
+        return isset(self::BIN[$tool]) && self::safeBinary(self::binary($tool));
+    }
+
+    private static function binary(string $tool): string
+    {
+        return $tool === 'sing-box' && !self::safeBinary(self::BIN[$tool]) ? self::SYSTEM_SING_BOX : self::BIN[$tool];
     }
 
     private static function safeBinary(string $path): bool
@@ -230,7 +241,7 @@ final class ProxyRuntime
             if ($configuration['adapter'] !== null) {
                 $adapter = $paths . '/adapter.json';
                 self::save($adapter, $configuration['adapter']);
-                $bin = self::BIN[$node['core']];
+                $bin = self::binary($node['core']);
                 $args = $node['core'] === 'xray' ? ['run', '-config', $adapter] : ['run', '-c', $adapter];
                 self::launch($slot, 'adapter', [$bin, ...$args]);
                 self::waitForSocket($route['adapterPort'], $slot, 'adapter');
@@ -334,7 +345,8 @@ final class ProxyRuntime
                 str_contains($args, 'tun://tun' . (200 + $slot) . ' ') &&
                 str_contains($args, 'socks5://127.0.0.1:' . (47220 + $slot) . ' '),
             'mihomo' => str_starts_with($args, self::BIN['mihomo'] . ' ') && str_ends_with($args, $paths . '/mihomo.json'),
-            'adapter' => (str_starts_with($args, self::BIN['xray'] . ' ') || str_starts_with($args, self::BIN['sing-box'] . ' ')) &&
+            'adapter' => (str_starts_with($args, self::BIN['xray'] . ' ') || str_starts_with($args, self::BIN['sing-box'] . ' ') ||
+                str_starts_with($args, self::SYSTEM_SING_BOX . ' ')) &&
                 str_ends_with($args, $paths . '/adapter.json'),
             default => false
         };

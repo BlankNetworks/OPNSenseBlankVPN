@@ -1,10 +1,14 @@
-# Blank VPN 0.3.0
+# Blank VPN 0.4.0
 
-Blank VPN is an OPNsense plug-in for assigning Mullvad WireGuard and individually selected proxy exits to services and IPv4 addresses. Smart Routing keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
+Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Smart Routing keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
 ## Compatibility
 
-This lab candidate targets **OPNsense Community Edition 26.7.x**, **amd64**, package ABI **`FreeBSD:15:amd64`**. It uses the standard WebGUI process mode and the 26.7 native WireGuard and firewall implementation. This package was cross-built on macOS and has yet to be installed or exercised on OPNsense. See [VALIDATION.md](VALIDATION.md) for the tests and deployment gates.
+This lab candidate targets **OPNsense Community Edition 26.7.x**, **amd64**, package ABI **`FreeBSD:15:amd64`**. It uses the standard WebGUI process mode and the 26.7 native WireGuard and firewall implementation. The release is a cross-built lab prerelease. Live OPNsense forwarding and kill-switch behavior still need testing. See [VALIDATION.md](VALIDATION.md) for the tests and deployment gates.
+
+## Download
+
+Download the package and its SHA-256 file from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). The full prerelease package includes the proxy runtimes and Clash YAML parser.
 
 ## Build
 
@@ -20,7 +24,7 @@ On another development host, build the same package format with the cross-build 
 python3 build/package.py --cross
 ```
 
-The package and SHA-256 file are written to `dist/`. No package repository needs to be added to OPNsense.
+The package and SHA-256 file are written to `dist/`. To reproduce the bundled release on a Linux development host with Go, run `sh build/prepare-release.sh /tmp/blankvpn-runtime`, followed by `python3 build/package.py --cross --runtime-dir /tmp/blankvpn-runtime`.
 
 ## Lab installation
 
@@ -29,9 +33,9 @@ The package and SHA-256 file are written to `dist/`. No package repository needs
 3. Transfer the package and checksum to the lab system. From their directory, verify and install as root.
 
    ```sh
-   sha256 -c "$(awk '{print $1}' os-blank-vpn-0.3.0.pkg.sha256)" os-blank-vpn-0.3.0.pkg
-   pkg info -F ./os-blank-vpn-0.3.0.pkg
-   pkg add ./os-blank-vpn-0.3.0.pkg
+   sha256 -c "$(awk '{print $1}' os-blank-vpn-0.4.0.pkg.sha256)" os-blank-vpn-0.4.0.pkg
+   pkg info -F ./os-blank-vpn-0.4.0.pkg
+   pkg add ./os-blank-vpn-0.4.0.pkg
    pkg info os-blank-vpn
    ```
 
@@ -46,23 +50,33 @@ The managed IPv4 DNS listener serves the configured hostname at the static LAN a
 
 ## Add a Mullvad exit
 
-1. Open the WebGUI over HTTPS and go to **VPN exits**. Enter the Mullvad account number locally, select **Check account**, then choose a country, city, and exact server. For the Netflix example choose Japan. The account number and token are used for the request and kept out of configuration and logs.
-2. Choose **Register and add exit**. For a new exit, Blank VPN checks the available slot, generates the private key locally, and verifies the native peer and tunnel. An interrupted registration retains a private recovery key for retry with the same account and server. New registrations record a router-specific account binding, which is checked when an existing exit is requested with an account number.
-3. To use your own WireGuard configuration, import a single-peer, full-tunnel configuration with an IPv4 endpoint. An endpoint hostname must resolve to IPv4. Smart Routing requires an IPv4 DNS address on the exit.
+1. Open the WebGUI over HTTPS and choose **VPNs → Sign in to Mullvad**. Enter your account number, then choose a country, city, and exact server.
+2. Choose **Add Mullvad exit**. Blank VPN checks your device slots, generates a WireGuard key locally, and creates the native tunnel. The account number is cleared from the form after sign-in. The provider token is kept in your WebGUI session for up to ten minutes.
+3. Select the exit under **Devices** or **Smart Routing**. Sign-out ends the setup session. Saved tunnels keep running with their WireGuard keys.
+
+An interrupted registration retains a restricted recovery key. Retry with the same account and server to recover it without consuming a second device slot.
+
+## Add other VPN providers
+
+| Provider | Setup path | Provider instructions |
+| --- | --- | --- |
+| NordVPN | Configure OpenVPN in OPNsense with its service credentials, or use a provider-issued manual WireGuard configuration if available for your account. | [Service credentials](https://support.nordvpn.com/hc/en-us/articles/19685514639633) · [Manual WireGuard](https://support.nordvpn.com/hc/en-us/articles/51264943286545) |
+| ExpressVPN | Configure the OpenVPN client in OPNsense with the provider’s manual credentials and server file. | [Manual configuration](https://www.expressvpn.com/support/manage-account/find-manual-configuration-credentials/) |
+| Surfshark | Download the server’s WireGuard configuration and import it in Blank VPN. You can also attach a native OpenVPN client. | [WireGuard configuration](https://support.surfshark.com/hc/en-us/articles/6585805595666) · [OPNsense OpenVPN](https://support.surfshark.com/hc/en-us/articles/12434921071890) |
+| Proton VPN | Download the server’s WireGuard configuration and import it in Blank VPN. | [WireGuard configuration](https://protonvpn.com/support/wireguard-configurations) |
+| Other providers | Use a compatible full-tunnel WireGuard configuration or a native OpenVPN client gateway. | [OPNsense WireGuard selective routing](https://docs.opnsense.org/manual/how-tos/wireguard-selective-routing.html) |
+
+For a direct import, open **VPNs → Import a WireGuard exit** and paste a one-peer configuration with full-tunnel IPv4 AllowedIPs. The endpoint must resolve over IPv4. The tunnel address is installed with a host prefix for policy routing. Each concurrent WireGuard exit needs a distinct local tunnel address and key pair. Providers that reuse a tunnel address across servers can require using one exit at a time.
+
+For a native tunnel, configure the provider client, assign its interface, and create a named IPv4 gateway in OPNsense. Keep the WAN as the system default, disable any provider-pushed default route or split default routes, and confirm the firewall’s own default traffic still leaves over WAN. Then choose **VPNs → Use an OPNsense VPN tunnel**, select the gateway, and enter the provider’s IPv4 DNS resolver reachable through the tunnel. Device and service assignments can then select the exit by name. OPNsense manages the VPN credentials, certificates, and connection. A selected gateway must remain attached to the same named interface and have a unique active IPv4 tunnel address.
 
 ## Add proxy servers and subscriptions
 
-Install the upstream FreeBSD proxy runtimes on a matching test router.
+The GitHub release includes Mihomo, tun2socks, Xray, sing-box, and the Clash YAML parser. The source build can also use independently installed runtimes. Review [PROXY_SUPPORT.md](PROXY_SUPPORT.md) for formats and protocol coverage.
 
-```sh
-/usr/local/bin/python3.13 /usr/local/opnsense/scripts/OPNsense/BlankVpn/install_proxy_cores.py --xray
-```
-
-The command installs Mihomo and tun2socks, with Xray selected by the flag. It verifies SHA-256 hashes from pinned upstream releases. Add the OPNsense `sing-box` package if available for native sing-box outbounds. Clash YAML uses `py313-yaml` from the OPNsense package feed. Review [PROXY_SUPPORT.md](PROXY_SUPPORT.md) for formats, exact versions, routing behavior, and coverage.
-
-1. Open **Proxy servers and subscriptions** over HTTPS. Paste links, a base64 list, a Clash proxy list, or individual native Xray or sing-box outbounds. Alternatively, add an HTTPS subscription URL.
-2. Search the imported servers and choose **Enable exit** on the specific server. Each enabled server gets its own exit. Subscription refresh preserves existing selections even when a provider renames or removes a node.
-3. Select the exit under **Smart Routing** or **Devices**. A per-IPv4 assignment can use the same kill switch or backup policy as a WireGuard exit. UDP support depends on the selected upstream protocol and transport. IPv4 proxy routing and live failover need native lab verification.
+1. Open **Proxies** over HTTPS. Add a single server with **Add a proxy manually**, paste its share link, or import a base64 list, Clash YAML, Xray JSON, or sing-box JSON.
+2. For a provider feed, add its direct HTTPS subscription URL. The list shows reported traffic allowance, usage, and expiry when the provider sends those fields. Automatic refresh runs every six hours. An enabled exit retains its server if a later refresh removes it.
+3. Choose **Enable exit** on a server, then select the exit under **Smart Routing** or **Devices**. Device assignments can use the IPv4 kill switch or a backup exit. UDP support varies with the upstream protocol and transport.
 
 ## Route Netflix or another service
 
@@ -79,7 +93,7 @@ Smart Routing forwards matching DNS through the chosen tunnel and uses the regul
 3. Verify normal traffic from an unassigned test client. Confirm the protected client’s egress goes through WireGuard, then disable the test tunnel and check that its IPv4 internet traffic stops and the unassigned client stays online.
 4. If you need to block internet-bound IPv6 for a whole device, use a dedicated **Strict VPN interface**. Strict mode blocks internet-bound IPv6 and internet traffic from unassigned devices. The per-IP rule on a shared LAN covers the reserved IPv4 address. Keep the IPv6 behavior of your existing firewall in mind.
 
-Per-IP rules take precedence over Smart Routing. A selected **Backup VPN** can carry the address when the primary fails. **Normal internet** is an explicit fallback to the normal network policy. VPN health is observed with a router-side probe, while the client path must be checked from that client.
+Per-IP rules take precedence over Smart Routing. A selected **Backup exit** can carry the address when the primary fails. **Normal internet** is an explicit fallback to the normal network policy. VPN health is observed with a router-side probe, while the client path must be checked from that client.
 
 ## Upgrade, rollback and removal
 
@@ -91,6 +105,8 @@ Per-IP rules take precedence over Smart Routing. A selected **Backup VPN** can c
 
 ## Release notes
 
+- Native OpenVPN and WireGuard gateway exits for mainstream providers.
+- Mullvad sign-in scoped to the WebGUI session.
 - Individually selectable proxy exits from pasted servers and HTTPS subscriptions.
 - Mihomo protocol adapter, native Xray and sing-box configurations, and a FreeBSD tun2socks bridge.
 - Existing Smart Routing, per-IPv4 policies, and fail-closed firewall rules apply to proxy exits.

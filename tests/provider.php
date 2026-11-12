@@ -152,6 +152,10 @@ try {
     $parsed = $provider->parseConfig(str_replace("\n", "\r\n", $config));
     check($parsed['host'] === '2001:db8::91' && $parsed['port'] === 51820 && $parsed['address6'] === 'fc00:bbbb:bbbb:bb01::9/128', 'Import lost tunnel address or endpoint information.');
     check($parsed['mtu'] === 1380 && $parsed['keepalive'] === 25 && count($parsed['dns']) === 2, 'Import lost tunnel settings.');
+    $withPsk = $provider->parseConfig(str_replace('[Peer]', "[Peer]\nPresharedKey = " . base64_encode(str_repeat('P', 32)), $config));
+    if ($withPsk['presharedKey'] !== base64_encode(str_repeat('P', 32))) {
+        throw new RuntimeException('Imported WireGuard configuration lost its preshared key.');
+    }
     expectFailure(fn () => $provider->parseConfig(str_replace('MTU = 1380', 'PostUp = invalid', $config)), 'unsupported');
     expectFailure(fn () => $provider->parseConfig(str_replace('0.0.0.0/0, ::/0', '0.0.0.0/0', $config)), 'AllowedIPs');
     expectFailure(fn () => $provider->parseConfig(str_replace('[2001:db8::91]:51820', 'vpn.example:70000', $config)), 'UDP port');

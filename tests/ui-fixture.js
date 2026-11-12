@@ -5,6 +5,8 @@ const reply = {
         profiles: [{id:'vpn1', name:'Canada', relay:'ca-test-wg-001', interface:'wg1', dns:['10.64.0.1'], latestHandshake:1794490200, status:'Recent handshake', receivedBytes:4096, sentBytes:2048}],
         assignments: [],
         services: [],
+        nativeGateways: [{id:'gw1', gateway:'NORD', protocol:'OpenVPN'}],
+        mullvadSignedIn: false,
         proxyCores: {mihomo:true,tun2socks:true,xray:true,"sing-box":true},
         servicePresets: {Netflix:['netflix.com','nflxvideo.net']},
         settings: {enabled:true, interfaces:['lan'], availableInterfaces:[{id:'lan', name:'LAN'}], strictInterfaces:[], localNetworks:[], hostname:'opnsense.home.arpa'},
@@ -14,7 +16,7 @@ const reply = {
     connections: {connections:[{protocol:'tcp', source:'10.0.0.20', sourcePort:1234, destination:'2001:db8::25', destinationPort:443, age:'00:00:10', bytes:[1024,1024]}]},
     account: {ok:true, devices:[{name:'Test router'}], maxDevices:5, expiresAt:'2027-01-01'},
     proxyCatalog: {nodes:[{id:'proxy-1', name:'Example proxy', host:'192.0.2.9', port:1080, core:'mihomo',
-        protocol:'socks5', legacy:true, sources:['feed-1']}], feeds:[{id:'feed-1', name:'Test feed', count:1, auto:true}]},
+        protocol:'socks5', legacy:true, sources:['feed-1']}], feeds:[{id:'feed-1', name:'Test feed', count:1, auto:true, usage:{upload:1024,download:1024,total:1048576,expire:1798761600}}]},
     importProxies: {ok:true, imported:1, skipped:0},
     refreshRelays: {ok:true, relays:[{id:'ca-test-wg-003',country:'Canada',city:'Test',hostname:'ca-test-wg-003',active:true}], stale:true, error:'Provider unavailable'}
 };
@@ -22,6 +24,8 @@ window.jQuery = (ready) => document.addEventListener('DOMContentLoaded', ready);
 window.jQuery.ajax = async (request) => {
     const action = request.url.split('/')[4];
     requests.push({action, method:request.method, data:request.data ? JSON.parse(request.data) : null});
+    if (action === 'account') reply.dashboard.mullvadSignedIn = true;
+    if (action === 'logoutMullvad') reply.dashboard.mullvadSignedIn = false;
     return structuredClone(reply[action] || {ok:true});
 };
 
@@ -47,7 +51,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(bv('connection-list').textContent.includes('[2001:db8::25]:443'), 'IPv6 destination rendering failed');
     assert(bv('connection-list').textContent.includes('2.0 KiB'), 'connection bytes not rendered');
-    bv('tunnels').open = true;
+    document.querySelector('[data-bv-section="vpns"]').click();
+    assert(!bv('tunnels').hidden && bv('tunnels').open, 'VPN section did not open');
+    bv('native-name').value = 'NordVPN';
+    bv('native-gateway').value = 'gw1';
+    bv('native-dns').value = '192.0.2.9';
+    bv('native-form').requestSubmit(bv('native-add'));
+    await wait();
+    assert(requests.some(x => x.action === 'addNativeExit' && x.data.gateway === 'gw1'), 'native VPN gateway was not submitted');
     await wait();
     assert(bv('relay').options.length === 3 && bv('relay').options[2].disabled, 'server availability not enforced');
     bv('account').value = '1234567890123456';
@@ -57,7 +68,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('relay').value = 'ca-test-wg-001';
     bv('register-form').requestSubmit(bv('register-form').querySelector('button[type=submit]'));
     await wait();
-    assert(requests.some(x => x.action === 'register' && x.data.relay === 'ca-test-wg-001'), 'registration payload failed');
+    assert(requests.some(x => x.action === 'register' && x.data.relay === 'ca-test-wg-001' && !Object.hasOwn(x.data, 'account')), 'registration payload failed');
     assert(bv('account').value === '', 'successful registration retained account input');
     bv('relay').value = 'ca-test-wg-001';
     bv('retarget').value = 'vpn1';
@@ -65,6 +76,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'retargetProfile' && x.data.id === 'vpn1' &&
       !Object.hasOwn(x.data, 'account')), 'retarget must reuse a profile without an account number');
+    document.querySelector('[data-bv-section="smart"]').click();
     bv('service-preset').value = 'Netflix';
     bv('service-preset').dispatchEvent(new Event('change'));
     assert(bv('service-domains').value === 'netflix.com, nflxvideo.net', 'Netflix preset domains not populated');
@@ -75,10 +87,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         x.data.domains.includes('nflxvideo.net')), 'service rule payload failed');
     bv('use-lan').click();
     assert(bv('smart-interfaces').value === 'lan' && bv('managed').value === 'lan', 'LAN setup did not prefill');
-    bv('proxies').open = true;
+    document.querySelector('[data-bv-section="proxies"]').click();
     await wait();
     assert(bv('proxy-list').textContent.includes('Example proxy'), 'proxy catalog not displayed');
     assert(bv('subscription-list').textContent.includes('Test feed'), 'proxy subscription not displayed');
+    assert(bv('subscription-list').textContent.includes('2.0 KiB used / 1.0 MiB'), 'subscription quota not displayed');
+    bv('manual-name').value = 'Manual example';
+    bv('manual-host').value = '192.0.2.8';
+    bv('manual-port').value = '1080';
+    bv('proxy-manual').requestSubmit(bv('proxy-manual').querySelector('button'));
+    await wait();
+    assert(requests.some(x => x.action === 'addProxyNode' && x.data.protocol === 'socks5'), 'manual proxy was not submitted');
     bv('proxy-list').querySelector('button').click();
     await wait();
     assert(requests.some(x => x.action === 'enableProxyExit' && x.data.id === 'proxy-1'), 'proxy was not selected individually');

@@ -16,6 +16,8 @@
             proxyNodes: [],
             proxyFeeds: [],
             proxyCores: {},
+            section: 'devices',
+            mullvadSignedIn: false,
             presets: {},
             editingService: null,
             relays: [],
@@ -146,10 +148,49 @@
 
         function options(select, choices, placeholder, previous = select.value) {
             select.replaceChildren(new Option(placeholder, ''));
+            const groups = new Map();
             for (const choice of choices) {
-                select.add(new Option(choice.label, choice.value));
+                const option = new Option(choice.label, choice.value);
+                if (!choice.group) {
+                    select.append(option);
+                    continue;
+                }
+                if (!groups.has(choice.group)) {
+                    const group = document.createElement('optgroup');
+                    group.label = choice.group;
+                    select.append(group);
+                    groups.set(choice.group, group);
+                }
+                groups.get(choice.group).append(option);
             }
             select.value = choices.some((choice) => choice.value === previous) ? previous : '';
+        }
+
+        function exitChoice(profile) {
+            return {value: profile.id, label: profileName(profile.id),
+                group: profile.kind === 'proxy' ? 'Proxy exits' : 'VPN exits'};
+        }
+
+        function showSection(section) {
+            state.section = section;
+            for (const button of root.querySelectorAll('[data-bv-section]')) {
+                const active = button.dataset.bvSection === section;
+                button.setAttribute('aria-pressed', String(active));
+                button.classList.toggle('btn-primary', active);
+                button.classList.toggle('btn-default', !active);
+            }
+            for (const panel of root.querySelectorAll('[data-bv-panel]')) {
+                panel.hidden = panel.dataset.bvPanel !== section;
+                if (!panel.hidden && panel.tagName === 'DETAILS') {
+                    panel.open = true;
+                }
+            }
+            if (section !== 'devices') {
+                byId('assignment').hidden = true;
+                state.editing = null;
+                byId('connections').hidden = true;
+                state.connectionTarget = null;
+            }
         }
 
         function profileName(id) {
@@ -238,19 +279,19 @@
 
         function renderProfiles() {
             const body = byId('profile-list');
-            if (!state.profiles.length) {
+            const vpns = state.profiles.filter((profile) => profile.kind !== 'proxy');
+            if (!vpns.length) {
                 empty(body, 'No VPN exits have been added.');
             } else {
                 body.replaceChildren();
-                for (const profile of state.profiles) {
+                for (const profile of vpns) {
                     const row = body.insertRow();
                     const used = state.assignments.filter((assignment) =>
                         [assignment.profile, assignment.backup].includes(profile.id)).length;
                     const services = state.services.filter((service) => service.profile === profile.id).length;
                     cell(row, profile.name || profile.relay, '', used + ' device assignment' + (used === 1 ? '' : 's')
                         + ' · ' + services + ' service' + (services === 1 ? '' : 's'));
-                    cell(row, profile.kind === 'proxy' ? profile.protocol : profile.relay, '',
-                        profile.kind === 'proxy' ? profile.core : '');
+                    cell(row, profile.relay || profile.gateway || profile.protocol || 'Imported WireGuard', '', profile.protocol);
                     cell(row, profile.interface, '', profile.ipv6 ? 'IPv6 configured' : '');
                     cell(row, date(profile.handshake ?? profile.latestHandshake));
                     const received = formatBytes(profile.receivedBytes ?? profile.received);
@@ -277,7 +318,7 @@
                 }
             }
 
-            const choices = state.profiles.map((item) => ({value: item.id, label: profileName(item.id)}));
+            const choices = state.profiles.map(exitChoice);
             const select = byId('profile');
             const selected = select.value;
             if (selected && !choices.some((choice) => choice.value === selected)) {
@@ -340,7 +381,7 @@
 
             const select = byId('service-profile');
             const choices = state.profiles.filter((profile) => profile.kind === 'proxy' || list(profile.dns).some((ip) => !ip.includes(':')))
-                .map((profile) => ({value: profile.id, label: profileName(profile.id)}));
+                .map(exitChoice);
             options(select, choices, 'Choose an exit');
             byId('save-service').disabled = !choices.length;
             options(byId('service-preset'), Object.keys(state.presets).map((name) => ({value: name, label: name})),
@@ -379,12 +420,20 @@
             const subscriptions = byId('subscription-list');
             subscriptions.replaceChildren();
             if (!state.proxyFeeds.length) {
-                empty(subscriptions, 'No proxy subscriptions.', 4);
+                empty(subscriptions, 'No proxy subscriptions.', 5);
             }
             for (const feed of state.proxyFeeds) {
                 const row = subscriptions.insertRow();
                 cell(row, feed.name, '', feed.auto ? 'Automatic refresh' : 'Manual refresh');
                 cell(row, feed.count ?? 0, '', feed.skipped ? feed.skipped + ' entries skipped' : '');
+                const usage = feed.usage || {};
+                const used = Number.isInteger(usage.upload) && Number.isInteger(usage.download)
+                    ? formatBytes(usage.upload + usage.download) || '0 B' : '';
+                const cap = usage.total === 0 ? 'Unlimited' : formatBytes(usage.total);
+                const data = [used ? used + ' used' : '', cap].filter(Boolean).join(' / ');
+                const expiry = usage.expire > 0
+                    ? (usage.expire <= Date.now() / 1000 ? 'Expired ' : 'Expires ') + date(usage.expire) : '';
+                cell(row, data || '—', '', expiry);
                 cell(row, date(feed.updated), '', feed.error || '');
                 const actions = row.insertCell();
                 actions.append(button('Refresh', (event) => void mutate(event.currentTarget,
@@ -413,9 +462,15 @@
                 const row = servers.insertRow();
                 cell(row, node.name, '', endpoint(node.host, node.port));
                 cell(row, node.protocol, '', node.legacy ? 'Legacy or unencrypted transport' : '');
-                cell(row, node.core, '', list(node.sources).length === 0 ? 'Retained for an enabled exit' : '');
-                const actions = row.insertCell();
                 const exit = state.profiles.find((profile) => profile.node === node.id);
+                cell(row, node.core, '', exit?.status || '');
+                const actions = row.insertCell();
+                if (exit) {
+                    const disable = button('Remove exit', (event) => removeProfile(exit, event.currentTarget));
+                    disable.disabled = state.assignments.some((item) => [item.profile, item.backup].includes(exit.id))
+                        || state.services.some((item) => item.profile === exit.id);
+                    actions.append(disable);
+                }
                 const enable = button(exit ? 'Exit enabled' : 'Enable exit', (event) =>
                     void mutate(event.currentTarget, () => api('enableProxyExit', {id: node.id}), 'Proxy exit enabled.'));
                 enable.disabled = Boolean(exit) || missing.length > 0 || state.proxyCores[node.core] !== true;
@@ -465,6 +520,22 @@
                 state.presets = data.servicePresets || {};
                 state.settings = data.settings;
                 state.canManage = data.canManage !== false;
+                if (state.mullvadSignedIn && data.mullvadSignedIn !== true) {
+                    byId('account-status').textContent = 'Mullvad sign-in expired. Sign in again to add exits.';
+                }
+                state.mullvadSignedIn = data.mullvadSignedIn === true;
+                byId('sign-out').hidden = !state.mullvadSignedIn;
+                if (state.mullvadSignedIn && !byId('account-status').textContent) {
+                    byId('account-status').textContent = 'Signed in to Mullvad.';
+                }
+                const gateways = array(data.nativeGateways);
+                options(byId('native-gateway'), gateways.map((item) => ({
+                    value: item.id, label: item.gateway + ' · ' + item.protocol
+                })), gateways.length ? 'Choose a VPN gateway' : 'Configure a tunnel gateway in OPNsense');
+                byId('native-add').disabled = !gateways.length;
+                if (!state.canManage && ['proxies', 'settings'].includes(state.section)) {
+                    showSection('devices');
+                }
                 root.dataset.canManage = String(state.canManage);
                 if (!state.canManage) {
                     byId('assignment').hidden = true;
@@ -505,8 +576,8 @@
             byId('backup-field').hidden = !showBackup;
             byId('backup').required = Boolean(showBackup);
             const choices = state.profiles.filter((profile) => profile.id !== primary)
-                .map((profile) => ({value: profile.id, label: profileName(profile.id)}));
-            options(byId('backup'), choices, 'Choose a backup VPN');
+                .map(exitChoice);
+            options(byId('backup'), choices, 'Choose a backup exit');
             const profile = state.profiles.find((item) => item.id === primary);
             byId('profile').setCustomValidity(primary && !profile ? 'Choose an available route.' : '');
             const notes = [];
@@ -536,7 +607,7 @@
             byId('mac').readOnly = Boolean(assignment);
             byId('device-label').value = assignment?.label || device.name || '';
             const selected = assignment?.profile || '';
-            const choices = state.profiles.map((item) => ({value: item.id, label: profileName(item.id)}));
+            const choices = state.profiles.map(exitChoice);
             if (selected && !choices.some((choice) => choice.value === selected)) {
                 choices.push({value: selected, label: 'Unavailable VPN profile'});
             }
@@ -584,10 +655,10 @@
         }
 
         function removeProfile(profile, control) {
-            if (!window.confirm('Remove VPN exit “' + profileName(profile.id) + '” from this router?')) {
+            if (!window.confirm('Remove exit “' + profileName(profile.id) + '” from this router?')) {
                 return;
             }
-            void mutate(control, () => api('removeProfile', {id: profile.id}), 'VPN exit removed.');
+            void mutate(control, () => api('removeProfile', {id: profile.id}), 'Exit removed.');
         }
 
         function relayCity(relay) {
@@ -602,7 +673,7 @@
             ]);
             const reusable = state.profiles.filter((profile) => profile.relay && !assigned.has(profile.id));
             byId('retarget-row').hidden = reusable.length === 0;
-            options(retarget, reusable.map((profile) => ({value: profile.id, label: profileName(profile.id)})), 'Use a new profile');
+            options(retarget, reusable.map(exitChoice), 'Use a new profile');
             const countries = [...new Set(state.relays.map((item) => item.country).filter(Boolean))].sort();
             options(byId('country'), countries.map((value) => ({value, label: value})), 'All countries');
             const country = byId('country').value;
@@ -670,13 +741,15 @@
             const control = byId('inspect-account');
             const target = byId('account-status');
             control.disabled = true;
-            target.textContent = 'Checking account…';
+            target.textContent = 'Signing in…';
+            state.mullvadSignedIn = false;
+            byId('sign-out').hidden = true;
             try {
                 const account = accountNumber();
                 const response = await api('account', {account});
-                if (byId('account').value.replace(/[\s-]/g, '') !== account) {
-                    return;
-                }
+                byId('account').value = '';
+                state.mullvadSignedIn = true;
+                byId('sign-out').hidden = false;
                 const devices = array(response.devices);
                 const limit = response.maxDevices ?? response.limit;
                 const expiry = response.expiresAt ?? response.expiry;
@@ -850,6 +923,14 @@
         byId('country').addEventListener('change', renderRelays);
         byId('city').addEventListener('change', renderRelays);
         byId('inspect-account').addEventListener('click', () => void inspectAccount());
+        byId('sign-out').addEventListener('click', (event) => {
+            void mutate(event.currentTarget, () => api('logoutMullvad', {}), 'Signed out of Mullvad.', () => {
+                state.mullvadSignedIn = false;
+                byId('account').value = '';
+                byId('account-status').textContent = '';
+                byId('sign-out').hidden = true;
+            });
+        });
         byId('account').addEventListener('input', () => {
             byId('account-status').textContent = '';
         });
@@ -866,15 +947,13 @@
                     });
                 return;
             }
-            try {
-                payload.account = accountNumber();
-            } catch (error) {
-                notice(error.message, 'danger');
+            if (!state.mullvadSignedIn) {
+                notice('Sign in to Mullvad before adding an exit.', 'danger');
+                byId('account').focus();
                 return;
             }
             void mutate(event.submitter, () => api('register', payload), 'Mullvad exit added.', () => {
                 event.target.reset();
-                byId('account-status').textContent = '';
                 renderRelays();
             });
         });
@@ -886,7 +965,7 @@
             });
         });
         byId('use-lan').addEventListener('click', () => {
-            byId('settings').open = true;
+            showSection('settings');
             byId('enabled').checked = true;
             byId('managed').value = [...new Set([...list(byId('managed').value), 'lan'])].join(', ');
             byId('smart-interfaces').value = [...new Set([...list(byId('smart-interfaces').value), 'lan'])].join(', ');
@@ -916,6 +995,50 @@
                 void refreshProxyCatalog();
             }
         });
+        for (const button of root.querySelectorAll('[data-bv-section]')) {
+            button.addEventListener('click', () => showSection(button.dataset.bvSection));
+        }
+        byId('native-form').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const payload = {name: byId('native-name').value.trim(), gateway: byId('native-gateway').value,
+                dns: byId('native-dns').value.trim()};
+            void mutate(event.submitter, () => api('addNativeExit', payload), 'VPN exit added.', () => event.target.reset());
+        });
+
+        function manualFields() {
+            const protocol = byId('manual-protocol').value;
+            const basic = ['socks5', 'http', 'https'].includes(protocol);
+            const uuid = ['vless', 'vmess', 'tuic'].includes(protocol);
+            byId('manual-user-label').textContent = uuid ? 'UUID' : 'Username';
+            byId('manual-user-field').hidden = !basic && !uuid;
+            byId('manual-username').required = uuid;
+            byId('manual-secret-field').hidden = ['vless', 'vmess'].includes(protocol);
+            byId('manual-secret').required = !basic && !byId('manual-secret-field').hidden;
+            byId('manual-cipher-field').hidden = protocol !== 'ss';
+            byId('manual-cipher').required = protocol === 'ss';
+            byId('manual-params-field').hidden = basic;
+            byId('manual-note').hidden = protocol !== 'vless';
+            byId('manual-note').textContent = 'For REALITY, include security=reality, sni, pbk (public key), sid (short ID), and fp (fingerprint) in the link parameters, joined by &.';
+        }
+
+        byId('manual-protocol').addEventListener('change', manualFields);
+        byId('proxy-manual').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const payload = {name: byId('manual-name').value.trim(), protocol: byId('manual-protocol').value,
+                host: byId('manual-host').value.trim(), port: byId('manual-port').value};
+            for (const [field, wrapper] of [['username', 'user'], ['secret', 'secret'], ['cipher', 'cipher'], ['parameters', 'params']]) {
+                if (!byId('manual-' + wrapper + '-field').hidden) {
+                    payload[field] = byId('manual-' + field).value;
+                }
+            }
+            void mutate(event.submitter, () => api('addProxyNode', payload), 'Proxy server added.', () => {
+                event.target.reset();
+                manualFields();
+                void refreshProxyCatalog();
+            });
+        });
+        manualFields();
+
         byId('proxy-search').addEventListener('input', renderProxyCatalog);
         byId('proxy-import').addEventListener('submit', (event) => {
             event.preventDefault();
@@ -965,6 +1088,8 @@
             byId('import-config').value = '';
             byId('proxy-body').value = '';
             byId('subscription-url').value = '';
+            byId('manual-secret').value = '';
+            byId('manual-parameters').value = '';
         });
 
         void refreshDashboard();
