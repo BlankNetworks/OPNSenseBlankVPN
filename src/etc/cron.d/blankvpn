@@ -1,0 +1,2 @@
+# Refresh the local plugin's bounded runtime state once per minute.
+* * * * * root /usr/local/bin/php /usr/local/opnsense/scripts/OPNsense/BlankVpn/maintenance.php maintain

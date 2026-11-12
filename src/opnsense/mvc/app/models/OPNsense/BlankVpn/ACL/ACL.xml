@@ -1,0 +1,18 @@
+<acl>
+    <page-blankvpn-dashboard>
+        <name>VPN: Blank VPN: View devices and connections</name>
+        <patterns>
+            <pattern>ui/blankvpn/index*</pattern>
+            <pattern>api/blankvpn/service/dashboard*</pattern>
+            <pattern>api/blankvpn/service/relays*</pattern>
+            <pattern>api/blankvpn/service/connections*</pattern>
+        </patterns>
+    </page-blankvpn-dashboard>
+    <page-blankvpn-manage>
+        <name>VPN: Blank VPN: Manage tunnels and policy routing</name>
+        <patterns>
+            <pattern>ui/blankvpn/index*</pattern>
+            <pattern>api/blankvpn/service/*</pattern>
+        </patterns>
+    </page-blankvpn-manage>
+</acl>

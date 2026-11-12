@@ -1,0 +1,9 @@
+set -eu
+
+if [ ! -f /conf/config.xml ]; then
+    exit 0
+fi
+
+/usr/local/opnsense/mvc/script/run_migrations.php OPNsense/BlankVpn
+/usr/local/etc/rc.d/configd restart
+/usr/local/etc/rc.configure_plugins POST_INSTALL

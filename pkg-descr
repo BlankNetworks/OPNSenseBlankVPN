@@ -1,0 +1,3 @@
+Blank VPN is an OPNsense plug-in for managing per-device internet routing with
+Mullvad WireGuard. The dashboard uses the OPNsense web interface and operates
+locally on the firewall.

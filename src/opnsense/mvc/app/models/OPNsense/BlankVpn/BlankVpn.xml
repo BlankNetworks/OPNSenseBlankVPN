@@ -1,0 +1,47 @@
+<model>
+    <mount>//OPNsense/BlankVpn</mount>
+    <version>1.1.0</version>
+    <description>Blank VPN configuration and native object ownership</description>
+    <items>
+        <settings>
+            <enabled type="BooleanField"><Default>0</Default></enabled>
+            <interfaces type="TextField"/>
+            <strictInterfaces type="TextField"/>
+            <smartInterfaces type="TextField"/>
+            <localNetworks type="TextField"/>
+            <hostname type="TextField"><Default>opnsense.home.arpa</Default></hostname>
+        </settings>
+        <profiles>
+            <profile type="ArrayField">
+                <name type="TextField"><Required>Y</Required></name>
+                <relay type="TextField"/>
+                <ownership type="TextField"><Required>Y</Required></ownership>
+            </profile>
+        </profiles>
+        <assignments>
+            <assignment type="ArrayField">
+                <ip type="TextField"><Required>Y</Required></ip>
+                <interface type="TextField"><Required>Y</Required></interface>
+                <mac type="TextField"><Required>Y</Required></mac>
+                <label type="TextField"/>
+                <profile type="TextField"/>
+                <backup type="TextField"/>
+                <failure type="OptionField">
+                    <Default>block</Default>
+                    <OptionValues>
+                        <block>Block internet (IPv4 kill switch)</block>
+                        <backup>Backup VPN</backup>
+                        <wan>Normal internet</wan>
+                    </OptionValues>
+                </failure>
+            </assignment>
+        </assignments>
+        <services>
+            <service type="ArrayField">
+                <name type="TextField"><Required>Y</Required></name>
+                <domains type="TextField"><Required>Y</Required></domains>
+                <profile type="TextField"><Required>Y</Required></profile>
+            </service>
+        </services>
+    </items>
+</model>

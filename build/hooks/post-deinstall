@@ -1,0 +1,8 @@
+set -eu
+
+if { [ "${PKG_UPGRADE:-}" = true ] || [ "${PKG_UPGRADE:-}" = 1 ]; } || [ ! -f /conf/config.xml ]; then
+    exit 0
+fi
+
+/usr/local/etc/rc.d/configd restart
+/usr/local/etc/rc.configure_plugins POST_DEINSTALL

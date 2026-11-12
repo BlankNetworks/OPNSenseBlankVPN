@@ -1,0 +1,32 @@
+name: Check Blank VPN
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Run PHP fixtures and syntax checks
+        run: |
+          find src tests -type f \( -name '*.php' -o -name '*.inc' \) -exec php -l {} \;
+          for test in tests/*.php; do php "$test"; done
+          node --check src/opnsense/www/js/blankvpn.js
+          node --check tests/ui-fixture.js
+      - name: Build and verify package archive
+        run: |
+          python3 build/package.py --cross
+          cd dist
+          sha256sum -c ./*.pkg.sha256
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: blank-vpn-opnsense-ce-26.7-amd64
+          path: |
+            dist/*.pkg
+            dist/*.pkg.sha256
+          if-no-files-found: error

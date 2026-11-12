@@ -1,0 +1,192 @@
+.blankvpn {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 1rem 0 2rem;
+}
+
+.blankvpn [hidden] {
+    display: none !important;
+}
+
+.blankvpn h1,
+.blankvpn h2,
+.blankvpn h3 {
+    margin: 0;
+}
+
+.blankvpn h2,
+.blankvpn summary {
+    font-size: 1.25em;
+    font-weight: 600;
+}
+
+.blankvpn h3 {
+    font-size: 1.08em;
+    margin-bottom: .9rem;
+}
+
+.blankvpn .bv-panel {
+    border: 1px solid currentColor;
+    border-color: color-mix(in srgb, currentColor 20%, transparent);
+    border-radius: .5rem;
+    padding: 1rem;
+    margin: 1rem 0;
+}
+
+.blankvpn .bv-heading,
+.blankvpn .bv-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .6rem 1rem;
+    flex-wrap: wrap;
+}
+
+.blankvpn .bv-actions {
+    justify-content: flex-start;
+}
+
+.blankvpn .bv-heading p {
+    margin: .35rem 0 0;
+}
+
+.blankvpn .bv-scroll {
+    overflow-x: auto;
+    margin-top: .75rem;
+}
+
+.blankvpn .bv-table {
+    width: 100%;
+    margin-bottom: 0;
+}
+
+.blankvpn .bv-table td,
+.blankvpn .bv-table th {
+    vertical-align: middle;
+}
+
+.blankvpn .bv-table td > small {
+    display: block;
+    margin-top: .25rem;
+    overflow-wrap: anywhere;
+}
+
+.blankvpn .bv-table td > .btn {
+    margin: .2rem .35rem .2rem 0;
+}
+
+.blankvpn .bv-devices,
+.blankvpn .bv-profiles,
+.blankvpn .bv-connections-table {
+    min-width: 42rem;
+}
+
+.blankvpn .bv-empty {
+    padding: 1rem;
+    text-align: center;
+}
+
+.blankvpn .bv-fields,
+.blankvpn .bv-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+    gap: .8rem 1rem;
+    margin: .75rem 0;
+}
+
+.blankvpn .bv-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 28rem), 1fr));
+    gap: 1.75rem;
+}
+
+.blankvpn label {
+    display: block;
+}
+
+.blankvpn label .form-control {
+    margin-top: .35rem;
+}
+
+.blankvpn .bv-check {
+    display: flex;
+    gap: .55rem;
+    align-items: baseline;
+    font-weight: normal;
+}
+
+.blankvpn .bv-check input {
+    margin: 0;
+}
+
+.blankvpn summary {
+    cursor: pointer;
+    width: max-content;
+    max-width: 100%;
+}
+
+.blankvpn details[open] summary {
+    margin-bottom: .85rem;
+}
+
+.blankvpn .bv-config-text {
+    font-family: ui-monospace, monospace;
+    resize: vertical;
+}
+
+.blankvpn .bv-account-status:not(:empty),
+.blankvpn .bv-relay-heading {
+    margin-top: .9rem;
+}
+
+.blankvpn .bv-warnings {
+    padding-left: 2.25rem;
+}
+
+@media (max-width: 767px) {
+    .blankvpn .bv-devices,
+    .blankvpn .bv-devices tbody,
+    .blankvpn .bv-devices tr,
+    .blankvpn .bv-devices td {
+        display: block;
+        min-width: 0;
+    }
+
+    .blankvpn .bv-devices thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+    }
+
+    .blankvpn .bv-devices tr + tr {
+        border-top: 1px solid currentColor;
+        border-color: color-mix(in srgb, currentColor 20%, transparent);
+        margin-top: .65rem;
+        padding-top: .5rem;
+    }
+
+    .blankvpn .bv-devices td {
+        padding: .23rem .1rem;
+        border: 0;
+    }
+
+    .blankvpn .bv-devices td[data-label]::before {
+        content: attr(data-label) " ";
+        font-weight: 600;
+    }
+
+    .blankvpn .bv-devices td > small {
+        margin-top: .1rem;
+    }
+}
+
+.blankvpn #bv-message {
+    position: sticky;
+    top: 3.75rem;
+    z-index: 2;
+}
+
+.blankvpn[data-can-manage="false"] [data-manage-only] {
+    display: none !important;
+}
