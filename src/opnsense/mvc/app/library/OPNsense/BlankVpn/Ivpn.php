@@ -28,7 +28,11 @@ class Ivpn
     {
         $state = $this->readState();
         if (!isset($state['token']) || !$refresh) {
-            if (($state['status'] ?? null) === 'authenticated' && ($state['checkedAt'] ?? 0) + self::STATUS_TTL <= $this->now()) {
+            if (($state['status'] ?? null) === 'authenticated' && ($state['activeUntil'] ?? PHP_INT_MAX) <= $this->now()) {
+                $state['status'] = 'expired';
+                $state['message'] = 'The last verified IVPN subscription period ended. Refresh the session status.';
+            } elseif (($state['status'] ?? null) === 'authenticated'
+                && ($state['checkedAt'] ?? 0) + self::STATUS_TTL <= $this->now()) {
                 $state['status'] = 'stale';
                 $state['message'] = 'IVPN sign-in was saved. Refresh the session status to verify it.';
             }
@@ -79,7 +83,7 @@ class Ivpn
             try {
                 $response = $this->request('/v4/session/new', $body);
             } catch (RuntimeException $error) {
-                if ($error->getCode() === 401 || $error->getCode() === 429) {
+                if (in_array($error->getCode(), [401, 403, 429], true)) {
                     throw $error;
                 }
                 throw new RuntimeException('IVPN did not confirm registration. Retrying uses the same key. If IVPN reports a device limit, check the account device list.');
@@ -113,8 +117,7 @@ class Ivpn
             $state['publicKey'] = $publicKey;
             // Preserve the owned session even if its WireGuard allocation was incomplete.
             $allocation = $response['wireguard'] ?? [];
-            $state['address'] = self::code(is_array($allocation) ? $allocation : []) === 200
-                ? self::tunnelAddress($allocation['ip_address'] ?? null) : null;
+            $state['address'] = self::tunnelAddress($allocation['ip_address'] ?? null);
             return self::status($this->saveStatus($state, $response));
         });
     }
@@ -123,7 +126,14 @@ class Ivpn
     {
         $this->locked(function (array $state): void {
             if (isset($state['token'])) {
-                $response = $this->request('/v4/session/delete', ['session_token' => $state['token']]);
+                try {
+                    $response = $this->request('/v4/session/delete', ['session_token' => $state['token']]);
+                } catch (RuntimeException $error) {
+                    if ($error->getCode() !== 401) {
+                        throw $error;
+                    }
+                    $response = ['status' => 401];
+                }
                 if (!in_array(self::code($response), [200, 401, 601], true)) {
                     throw new RuntimeException('IVPN could not release this router’s session. Try again.');
                 }
@@ -233,7 +243,8 @@ class Ivpn
         $state['checkedAt'] = $this->now();
         [$state['status'], $state['message']] = match (true) {
             $code === 401 || $code === 601 => ['expired', 'The saved IVPN session ended. Sign in again.'],
-            $code === 702 || ($account['is_active'] ?? null) === false => ['expired', 'The IVPN subscription is inactive.'],
+            $code === 702 || ($account['is_active'] ?? null) === false
+                || ($state['activeUntil'] ?? PHP_INT_MAX) <= $this->now() => ['expired', 'The IVPN subscription is inactive.'],
             $code !== 200 || !is_bool($account['is_active'] ?? null) => ['stale', 'Blank VPN could not confirm the IVPN session. Try again.'],
             !isset($state['address']) => ['stale', 'IVPN did not allocate a compatible WireGuard address. Sign out and try again or import a configuration.'],
             default => ['authenticated', null],
@@ -304,11 +315,13 @@ class Ivpn
         }
         $http = (int)curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
         $data = json_decode($response, true, 24);
-        if ($http >= 200 && $http < 500 && $http !== 429 && is_array($data) && ($http < 300 || self::code($data) > 0)) {
+        $code = is_array($data) ? self::code($data) : 0;
+        if (is_array($data) && (($http >= 200 && $http < 300)
+            || ($http >= 400 && $http < 500 && $http !== 429 && $code > 0 && $code !== 200))) {
             return $data;
         }
         throw new RuntimeException(match ($http) {
-            401 => 'IVPN rejected account authorization.',
+            401, 403 => 'IVPN rejected account authorization.',
             429 => 'IVPN is rate limiting requests. Try again shortly.',
             default => 'IVPN returned an unexpected response.',
         }, $http);

@@ -206,6 +206,7 @@ try {
     $client->limitExceeded = true;
     expectError(fn () => $client->provision('DE', 'hosting', 'Berlin'), 'connection limit');
     $client->limitExceeded = false;
+    $client->allowedIps = '0.0.0.0/0';
     $client->targetCity = 'Hamburg';
     $client->expectReset = true;
     $moved = $client->provision('DE', 'hosting', 'Hamburg');
