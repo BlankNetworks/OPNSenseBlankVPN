@@ -16,6 +16,9 @@ final class Firewall
         $proxyGateways = [];
         $pausedCore = $settings['enabled'] ? ProxyCores::pausedCore() : null;
         foreach ($profiles as &$profile) {
+            if (!empty($profile['disabled'])) {
+                continue;
+            }
             if (($profile['kind'] ?? '') === 'proxy') {
                 $profile['owned'] = $settings['enabled'] &&
                     ($pausedCore === null || !ProxyCores::uses($profile, $pausedCore)) &&

@@ -54,14 +54,16 @@ class ServiceController extends ApiControllerBase
             foreach ($profiles as $id => $profile) {
                 $status = WireGuard::status($profile, $runtime);
                 $owned = WireGuard::check($profile);
-                if (!$owned['ok']) {
+                if (!empty($profile['disabled'])) {
+                    $status['status'] = 'Disabled';
+                } elseif (!$owned['ok']) {
                     $warnings[] = $profile['name'] . ': ' . $owned['error'];
                     $status['status'] = 'Native configuration changed';
                 }
                 $checked = $health[$id] ?? [];
                 $profiles[$id] = array_intersect_key(
                     $profile,
-                    array_flip(['id', 'name', 'relay', 'identity', 'interface', 'address6', 'dns'])
+                    array_flip(['id', 'name', 'relay', 'identity', 'interface', 'address6', 'dns', 'disabled'])
                 ) + $status + [
                     'reachability' => time() - ($checked['checkedAt'] ?? 0) > 180 ? 'unverified or stale'
                         : (($checked['probeSucceeded'] ?? false) ? 'router probe succeeded' : 'router probe failed'),
@@ -97,6 +99,7 @@ class ServiceController extends ApiControllerBase
                 ];
             }
             $gatewayNames = array_column($profiles, 'name', 'interface');
+            $multiActive = SmartRouting::active($routing, $services);
             foreach ($assignments as $id => $row) {
                 $rule = $loaded[Policy::marker('device', $id)] ?? null;
                 $guard = ($loaded[Policy::marker('kill', $id)]['action'] ?? '') === 'block';
@@ -104,7 +107,7 @@ class ServiceController extends ApiControllerBase
                 $mode = Policy::mode($row);
                 $applied = $gateway !== null ? ($gatewayNames[$gateway] ?? $gateway)
                     : ($guard ? 'Internet blocked' : match ($mode) {
-                        'multi' => SmartRouting::active($routing, $services) ? 'Multi-Path domain lists' : 'Waiting for domain lists',
+                        'multi' => $multiActive ? 'Multi-Path domain lists' : 'Waiting for domain lists',
                         'full' => 'Using regular internet',
                         default => 'Regular internet'
                     });
@@ -114,7 +117,7 @@ class ServiceController extends ApiControllerBase
                     'device' => $row['interface'] . '/' . (($row['kind'] ?? '') === 'tailnet' ? $row['ip'] : $row['mac']),
                     'verified' => false,
                     'killSwitchActive' => $guard && $rule === null && $row['killSwitch'],
-                    'appliedRoute' => $applied
+                    'appliedRoute' => $loaded === null ? 'Firewall status unavailable' : $applied
                 ];
             }
             $settings['networkRouting'] = [];
@@ -410,6 +413,10 @@ class ServiceController extends ApiControllerBase
             }
             $mullvad->rememberRouterKey($profile['accountBinding'], WireGuard::ownedPrivateKey($profile));
             if ($profile['relay'] === $relayId) {
+                if (!empty($profile['disabled'])) {
+                    $this->setMullvadTunnelEnabled($profile['id'], true);
+                    return ['profile' => $profile['id'], 'message' => 'Mullvad server enabled.'];
+                }
                 return ['profile' => $profile['id'], 'reused' => true, 'message' => 'This server is already enabled.'];
             }
             return $this->switchMullvadServer($profile, $relayId, $this->relay($mullvad, $relayId));
@@ -434,6 +441,10 @@ class ServiceController extends ApiControllerBase
             $this->requireUnusedByRouting($model, $id);
             $node = $model->profiles->profile->getChild($id);
             $ownership = WireGuard::retarget($profile, $relay);
+            if (!empty($profile['disabled'])) {
+                WireGuard::setEnabled($ownership, true);
+            }
+            unset($ownership['disabled']);
             unset($ownership['id'], $ownership['name'], $ownership['relay'], $ownership['registered']);
             $node->relay = $relayId;
             if ($profile['name'] === $profile['relay']) {
@@ -554,6 +565,40 @@ class ServiceController extends ApiControllerBase
             ProxyCatalog::renameNode($this->input('id', 64), $this->input('name', 256));
             return [];
         }), true, true);
+    }
+
+    public function setMullvadEnabledAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $this->setMullvadTunnelEnabled($this->input('id', 64), $this->flag('enabled'));
+            return [];
+        }), true, true);
+    }
+
+    private function setMullvadTunnelEnabled(string $id, bool $enabled): void
+    {
+        Operations::change(function (BlankVpn $model) use ($id, $enabled) {
+            $profile = Policy::profiles($model)[$id] ?? null;
+            if ($profile === null || $profile['relay'] === '') {
+                throw new \DomainException('Choose a saved Mullvad server.');
+            }
+            if ($enabled === empty($profile['disabled'])) {
+                return [];
+            }
+            if (!$enabled) {
+                $this->requireUnusedByRouting($model, $id);
+                foreach (Policy::assignments($model) as $row) {
+                    if (in_array($id, [$row['profile'], $row['backup']], true)) {
+                        throw new \DomainException('Remove this server from device rules before disabling it.');
+                    }
+                }
+            }
+            WireGuard::setEnabled($profile, $enabled);
+            $ownership = array_diff_key($profile, array_flip(['id', 'name', 'relay']));
+            $ownership['disabled'] = !$enabled;
+            $model->profiles->profile->getChild($id)->ownership = json_encode($ownership, JSON_THROW_ON_ERROR);
+            return [$enabled ? 'added' : 'removed' => $ownership, 'reload' => true];
+        });
     }
 
     public function removeProfileAction()

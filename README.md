@@ -65,7 +65,7 @@ Choose **Tailscale address** and save to use the router’s MagicDNS hostname an
 ## Enable a Mullvad server
 
 1. Open **VPN Login**, enter your Mullvad account number, and sign in. Select **Save login on this router** to restore sign-in in future WebGUI sessions. The router stores the account number in a private file scoped to your WebGUI user, outside the OPNsense configuration export.
-2. Pick a country, city, and server, then choose **Add server**. The tunnel is available for routing immediately. For the first tunnel on the account, Blank VPN generates a local WireGuard key and registers its public key with Mullvad.
+2. Pick a country, city, and server, then choose **Add server**. The tunnel is available for routing immediately. Disable an unused Mullvad server to pause its tunnel and keep its registration. For the first tunnel on the account, Blank VPN generates a local WireGuard key and registers its public key with Mullvad.
 3. To change locations, select a new server. Blank VPN reuses the router’s registration. If you already have multiple Mullvad tunnels from an earlier release, choose which tunnel to switch. Move its device and Multi-Path assignments before switching.
 
 The router retains the registration key in private storage across upgrades and tunnel removal. Existing Mullvad tunnels from earlier releases stay available. Mullvad allows up to five registered devices per account. [Mullvad device limits](https://mullvad.net/en/help/using-mullvad-vpn-app#too-many-devices)

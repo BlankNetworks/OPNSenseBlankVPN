@@ -403,11 +403,19 @@
                         remove.title = 'Remove this server from routing policies first.';
                     }
                     if (state.canManage) {
-                        appendConnectionTest(actions, 'testExit', profile.id, profileName(profile.id));
+                        appendConnectionTest(actions, 'testExit', profile.id, profileName(profile.id), '', profile.disabled === true);
                         const edit = nameEditor(row, profile.name || profile.relay, profile.id, 'renameProfile',
                             renderProfiles, (name) => { profile.name = name; });
                         if (edit) {
                             actions.append(edit);
+                        }
+                        if (profile.relay) {
+                            const disabled = profile.disabled === true;
+                            const toggle = button(disabled ? 'Enable' : 'Disable', (event) =>
+                                void mutate(event.currentTarget, () => api('setMullvadEnabled', {id: profile.id, enabled: disabled}),
+                                    disabled ? 'Mullvad server enabled.' : 'Mullvad server disabled.'));
+                            toggle.disabled = remove.disabled && !disabled;
+                            actions.append(toggle);
                         }
                         actions.append(remove);
                     }
@@ -521,7 +529,7 @@
 
         function routingServers() {
             const activeNodes = new Set(state.profiles.map((profile) => profile.node).filter(Boolean));
-            return [...state.profiles, ...state.proxyNodes.filter((node) => !node.disabled && !activeNodes.has(node.id))
+            return [...state.profiles.filter((profile) => !profile.disabled), ...state.proxyNodes.filter((node) => !node.disabled && !activeNodes.has(node.id))
                 .map((node) => ({...node, id: 'proxy-' + node.id, kind: 'proxy'}))];
         }
 
@@ -1241,7 +1249,7 @@
             byId('relay-test').dataset.result = result?.kind || '';
             const register = byId('register');
             register.disabled = !relay || !state.mullvadSignedIn;
-            const enabled = relay && state.profiles.some((profile) => profile.relay === relay.id);
+            const enabled = relay && state.profiles.some((profile) => profile.relay === relay.id && !profile.disabled);
             register.textContent = enabled ? 'Enabled' : byId('retarget').value ? 'Switch server' : 'Add server';
             register.disabled ||= Boolean(enabled);
             byId('test-relay').disabled = !relay || !state.mullvadSignedIn || state.testingRelay;
@@ -1266,7 +1274,7 @@
             }
         }
 
-        function appendConnectionTest(actions, action, id, name, nodeId = '') {
+        function appendConnectionTest(actions, action, id, name, nodeId = '', disabled = false) {
             const key = nodeId ? 'proxy:' + nodeId : 'exit:' + id;
             const status = document.createElement('small');
             status.className = 'bv-test-result';
@@ -1274,6 +1282,7 @@
             const control = button('Test', () => void testConnection(action, id, key, Boolean(nodeId)), 'Test ' + name);
             control.dataset.testKey = key;
             control.dataset.proxyTest = String(Boolean(nodeId));
+            control.dataset.disabled = String(disabled);
             status.dataset.testResult = key;
             actions.append(control, status);
             updateConnectionTest(control, status);
@@ -1281,7 +1290,7 @@
 
         function updateConnectionTest(control, status) {
             const result = state.tests.get(control.dataset.testKey);
-            control.disabled = result?.kind === 'pending' || (control.dataset.proxyTest === 'true' && state.proxyTestRunning);
+            control.disabled = control.dataset.disabled === 'true' || result?.kind === 'pending' || (control.dataset.proxyTest === 'true' && state.proxyTestRunning);
             status.hidden = !result;
             status.textContent = result?.text || '';
             status.dataset.result = result?.kind || '';

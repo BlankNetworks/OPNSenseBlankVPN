@@ -227,9 +227,20 @@ final class WireGuard
         self::validateDefaultGateway('');
     }
 
+    public static function setEnabled(array $profile, bool $enabled): void
+    {
+        [$servers] = self::ownedObjects($profile);
+        $instance = $servers->getNodeByReference('servers.server.' . self::instanceId($profile));
+        $instance->enabled = $enabled ? '1' : '0';
+        self::serialize($servers, 'WireGuard instances');
+    }
+
     public static function check(array $profile): array
     {
         try {
+            if (!empty($profile['disabled'])) {
+                return ['ok' => false, 'error' => 'This VPN tunnel is disabled.'];
+            }
             self::ownedObjects($profile);
             if ((string)(new General())->enabled !== '1') {
                 throw new RuntimeException('The OPNsense WireGuard service is disabled.');
@@ -527,7 +538,7 @@ final class WireGuard
             (string)$interface->descr !== $owner || (string)$interface->enable !== '1' ||
             (string)$interface->gateway_interface !== '1' ||
             !empty((string)$interface->ipaddr) || !empty((string)$interface->ipaddrv6) ||
-            (string)$instance->enabled !== '1' || (string)$peer->enabled !== '1' ||
+            (string)$instance->enabled !== (!empty($profile['disabled']) ? '0' : '1') || (string)$peer->enabled !== '1' ||
             (string)$instance->disableroutes !== '1' || !$instance->gateway->isEmpty() ||
             !$instance->carp_depend_on->isEmpty() || (int)(string)$instance->mtu !== (int)($profile['mtu'] ?? 1420) ||
             (string)$instance->peers !== $profile['peer'] ||

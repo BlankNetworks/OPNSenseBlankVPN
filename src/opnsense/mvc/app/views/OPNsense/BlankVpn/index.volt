@@ -80,7 +80,7 @@
                     </label>
                 </div>
                 <div class="bv-actions">
-                    <button id="bv-register" type="submit" class="btn btn-primary" disabled>Enable</button>
+                    <button id="bv-register" type="submit" class="btn btn-primary" disabled>Add server</button>
                     <p class="text-muted">Blank VPN reuses this router’s Mullvad device registration when you switch servers.</p>
                 </div>
             </form>
@@ -229,7 +229,7 @@
             <form id="bv-settings-form">
                 <label class="bv-coverage-choice">Who should use these routing rules?
                     <select id="bv-coverage" class="form-control">
-                        <option value="device">Only devices I choose</option>
+                        <option value="device">Only Devices I choose</option>
                         <option value="network">Whole-Network coverage</option>
                     </select>
                 </label>

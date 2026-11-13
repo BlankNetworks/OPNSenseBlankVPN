@@ -72,6 +72,9 @@ window.jQuery.ajax = async (request) => {
     if (action === 'renameProfile') {
         reply.dashboard.profiles.find(x => x.id === data.id).name = data.name;
     }
+    if (action === 'setMullvadEnabled') {
+        reply.dashboard.profiles.find(x => x.id === data.id).disabled = !data.enabled;
+    }
     if (action === 'renameProxyNode') {
         reply.proxyCatalog.nodes.find(x => x.id === data.id).name = data.name;
     }
@@ -216,6 +219,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'renameProfile' && x.data.id === 'vpn1' && x.data.name === 'Canada home') &&
         bv('profile-list').textContent.includes('Canada home') &&
         bv('profile-list').querySelector('[data-test-result]').textContent.includes('45.2 ms'), 'VPN rename lost the row or its result');
+    [...bv('profile-list').querySelectorAll('button')].find(button => button.textContent === 'Disable').click();
+    await wait();
+    assert(reply.dashboard.profiles[0].disabled && ![...bv('network-profile').options].some(option => option.value === 'vpn1'),
+        'A disabled Mullvad server must leave the routing picker.');
+    [...bv('profile-list').querySelectorAll('button')].find(button => button.textContent === 'Enable').click();
+    await wait();
+    assert(!reply.dashboard.profiles[0].disabled, 'The existing Mullvad tunnel must be re-enabled.');
     assert(bv('account').value === '', 'successful sign-in retained account input');
     bv('batch-scope').value = 'jp:nrt';
     bv('batch-scope').dispatchEvent(new Event('change'));
