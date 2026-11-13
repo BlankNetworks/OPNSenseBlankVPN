@@ -1,6 +1,6 @@
 <model>
     <mount>//OPNsense/BlankVpn</mount>
-    <version>1.7.0</version>
+    <version>1.8.0</version>
     <description>Blank VPN configuration and native object ownership</description>
     <items>
         <settings>
@@ -21,6 +21,7 @@
         <mullvadCatalog>
             <worldwide type="BooleanField"><Default>0</Default></worldwide>
             <countries type="TextField"/>
+            <cities type="TextField"/>
         </mullvadCatalog>
         <profiles>
             <profile type="ArrayField">

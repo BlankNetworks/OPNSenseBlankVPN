@@ -69,35 +69,36 @@ class Mullvad
 
     public static function savedBatches(array $fields): array
     {
-        $countries = preg_grep('/^[a-z]{2}$/D', explode(',', $fields['countries'] ?? ''));
         return [
             'worldwide' => ($fields['worldwide'] ?? '') === '1',
-            'countries' => array_values(array_unique($countries))
+            'countries' => array_values(array_unique(preg_grep('/^[a-z]{2}$/D', explode(',', $fields['countries'] ?? '')))),
+            'cities' => array_values(array_unique(preg_grep('/^[a-z]{2}:[a-z0-9-]{1,24}$/D', explode(',', $fields['cities'] ?? ''))))
         ];
     }
 
-    public function updateBatch(array $batches, string $country, bool $add): array
+    public function updateBatch(array $batches, string $country, bool $add, string $city = ''): array
     {
-        // An empty country code selects the complete catalog.
-        if ($country !== '' && !preg_match('/^[a-z]{2}$/D', $country)) {
-            throw new \DomainException('Choose a valid Mullvad country.');
+        if (($country !== '' && !preg_match('/^[a-z]{2}$/D', $country)) ||
+            ($city !== '' && ($country === '' || !preg_match('/^[a-z0-9-]{1,24}$/D', $city)))) {
+            throw new \DomainException('Choose a valid Mullvad country and city.');
         }
-        $saved = $country === '' ? $batches['worldwide'] : in_array($country, $batches['countries'], true);
+        $scope = $city === '' ? $country : $country . ':' . $city;
+        $field = $city === '' ? 'countries' : 'cities';
+        $saved = $scope === '' ? $batches['worldwide'] : in_array($scope, $batches[$field], true);
         if ($saved === $add) {
             return $batches;
         }
-        if ($add) {
-            $relays = $this->relays()['relays'];
-            if ($country === '' ? $relays === [] : !in_array($country, array_column($relays, 'countryCode'), true)) {
-                throw new \DomainException('No Mullvad servers are available in this catalog selection. Refresh the catalog and try again.');
-            }
+        if ($add && array_filter($this->relays()['relays'], static fn (array $relay): bool =>
+            ($country === '' || $relay['countryCode'] === $country) &&
+            ($city === '' || $relay['cityCode'] === $city)) === []) {
+            throw new \DomainException('No Mullvad servers are in this selection. Refresh the catalog and try again.');
         }
-        if ($country === '') {
+        if ($scope === '') {
             $batches['worldwide'] = $add;
         } else {
-            $countries = $add ? [...$batches['countries'], $country] : array_diff($batches['countries'], [$country]);
-            sort($countries, SORT_STRING);
-            $batches['countries'] = $countries;
+            $values = $add ? [...$batches[$field], $scope] : array_diff($batches[$field], [$scope]);
+            sort($values, SORT_STRING);
+            $batches[$field] = $values;
         }
         return $batches;
     }
@@ -110,14 +111,19 @@ class Mullvad
     public function authenticate(string $account): array
     {
         $auth = $this->authorization($account);
-        $details = $this->accountDetails($auth['token']);
+        return $auth + ['account' => $this->accountWithToken($auth['token'])];
+    }
+
+    public function accountWithToken(string $token): array
+    {
+        $details = $this->accountDetails($token);
         unset($details['id']);
-        $devices = $this->devices($auth['token']);
+        $devices = $this->devices($token);
         $details['devices'] = array_map(static fn (array $device): array =>
             array_intersect_key($device, array_flip(['name', 'created'])), $devices);
         $details['availableSlots'] = max(0, $details['maxDevices'] - count($devices));
         $details['canAddDevices'] = $details['canAddDevices'] && $details['availableSlots'] > 0 && !$details['expired'];
-        return $auth + ['account' => $details];
+        return $details;
     }
 
     public function hasSavedAccount(string $user): bool
@@ -242,7 +248,8 @@ class Mullvad
                 throw new RuntimeException('The Mullvad account has expired. Add time before registering a device.');
             }
             if (count($devices) >= $details['maxDevices'] || !$details['canAddDevices']) {
-                throw new RuntimeException('The Mullvad account cannot add a device. Check the available device slots.');
+                throw new RuntimeException(sprintf('Mullvad cannot register another exit. %d of %d device slots are in use.',
+                    count($devices), $details['maxDevices']));
             }
             if ($privateKey === null) {
                 $privateKey = $this->wireGuardKey('genkey');

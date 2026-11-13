@@ -325,7 +325,7 @@ final class ProxyCatalog
             throw new RuntimeException($oversized ? 'The subscription response exceeds the 2 MiB download limit.' :
                 match (curl_errno($curl)) {
                     CURLE_OPERATION_TIMEDOUT => 'The subscription download timed out.',
-                    CURLE_PEER_FAILED_VERIFICATION => 'The subscription server’s TLS certificate could not be verified.',
+                    CURLE_SSL_CACERT => 'The subscription server’s TLS certificate could not be verified.',
                     CURLE_SSL_CONNECT_ERROR => 'The subscription server could not establish a TLS connection.',
                     CURLE_COULDNT_CONNECT => 'The router could not connect to the subscription server over HTTPS.',
                     default => 'The HTTPS subscription download failed (cURL code ' . curl_errno($curl) . ').'

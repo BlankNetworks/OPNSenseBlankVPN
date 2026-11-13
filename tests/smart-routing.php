@@ -286,6 +286,16 @@ namespace {
         !Policy::tailnetAddress('192.0.2.23'), 'Validate both Tailscale peer address families.');
     checkRouting(\OPNsense\BlankVpn\Resolver::validHostname('blankvpn.local') &&
         !\OPNsense\BlankVpn\Resolver::validHostname('other.local'), 'Permit the scoped mDNS name.');
+    $magic = ['BackendState' => 'Running', 'Self' => ['DNSName' => 'opnsense.tailnet.ts.net.'],
+        'CurrentTailnet' => ['MagicDNSEnabled' => true]];
+    checkRouting(\OPNsense\BlankVpn\Resolver::magicDnsFromStatus($magic) === 'opnsense.tailnet.ts.net' &&
+        \OPNsense\BlankVpn\Resolver::magicDnsFromStatus(array_replace($magic, ['BackendState' => 'Stopped'])) === '',
+        'Use the connected node’s MagicDNS hostname.');
+    $webGui = new SimpleXMLElement('<opnsense><system><webgui><althostnames>router.home.arpa</althostnames></webgui></system></opnsense>');
+    checkRouting(\OPNsense\BlankVpn\Resolver::allowDashboardHostname($webGui, 'opnsense.tailnet.ts.net') &&
+        !\OPNsense\BlankVpn\Resolver::allowDashboardHostname($webGui, 'opnsense.tailnet.ts.net') &&
+        (string)$webGui->system->webgui->althostnames === 'router.home.arpa opnsense.tailnet.ts.net',
+        'Allow the new dashboard hostname without overwriting aliases.');
     $diag->reserved = false;
     $moved = new Plugin();
     $compileDevice->invoke(null, $moved, $settings, $interfaces, ['device-a' => $assignment], $profiles, [], $diag);

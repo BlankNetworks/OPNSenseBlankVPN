@@ -8,16 +8,16 @@ const reply = {
         services: [],
         canManageCores: true,
         mullvadSignedIn: false,
-        mullvadBatches: {worldwide:false,countries:[]},
+        mullvadBatches: {worldwide:false,countries:[],cities:[]},
         proxyCores: {mihomo:true,tun2socks:true,xray:true,"sing-box":true},
         servicePresets: {Netflix:['netflix.com','nflxvideo.net']},
-        settings: {dashboardBind:'lan',dashboardAddresses:{lan:'10.0.0.1',tailnet:'100.101.102.103'},enabled:false, interfaces:['lan','opt2'], availableInterfaces:[{id:'opt1', name:'VLAN 2', device:'vlan02'},
+        settings: {dashboardBind:'lan',dashboardAddresses:{lan:'10.0.0.1',tailnet:'100.101.102.103'},dashboardMagicDns:'opnsense.tailnet.ts.net',enabled:false, interfaces:['lan','opt2'], availableInterfaces:[{id:'opt1', name:'VLAN 2', device:'vlan02'},
             {id:'opt2', name:'LAN 6', device:'igc5'}, {id:'lan', name:'LAN 1', device:'igc0'}],
             tailscaleInterfaces:['opt2'], tailscaleInstalled:true, tailscaleExitAdvertised:true, strictInterfaces:[], localNetworks:[], hostname:'opnsense.home.arpa'},
         warnings: []
     },
-    relays: {relays:[{id:'ca-test-wg-001',country:'Canada',countryCode:'ca',city:'Test',hostname:'ca-test-wg-001',active:true},{id:'ca-test-wg-002',country:'Canada',countryCode:'ca',city:'Test',hostname:'ca-test-wg-002',active:false},
-        {id:'jp-test-wg-001',country:'Japan',countryCode:'jp',city:'Test',hostname:'jp-test-wg-001',active:true}], stale:false, fetchedAt:1794490200},
+    relays: {relays:[{id:'ca-test-wg-001',country:'Canada',countryCode:'ca',cityCode:'yyz',city:'Test',hostname:'ca-test-wg-001',active:true},{id:'ca-test-wg-002',country:'Canada',countryCode:'ca',cityCode:'yyz',city:'Test',hostname:'ca-test-wg-002',active:false},
+        {id:'jp-test-wg-001',country:'Japan',countryCode:'jp',cityCode:'nrt',city:'Test',hostname:'jp-test-wg-001',active:true}], stale:false, fetchedAt:1794490200},
     connections: {connections:[{protocol:'tcp', source:'10.0.0.20', sourcePort:1234, destination:'2001:db8::25', destinationPort:443, age:'00:00:10', bytes:[1024,1024]}]},
     status: {ok:true, cores:[{id:'mihomo',version:'1.19.34',installed:true,source:'Bundled',
         available:{version:'1.19.35',sha256:'a'.repeat(64)},update:true,rollback:false}],
@@ -27,10 +27,11 @@ const reply = {
     proxyCatalog: {nodes:[{id:'proxy-1', name:'Example proxy', host:'192.0.2.9', port:1080, core:'mihomo',
         protocol:'socks5', legacy:true, sources:['feed-1']}], feeds:[{id:'feed-1', name:'Test feed', count:1, auto:true, usage:{upload:1024,download:1024,total:1048576,expire:1798761600}}]},
     importProxies: {ok:true, imported:1, skipped:0},
+    mullvadAccountStatus: {ok:true, devices:[{name:'Test router'}], maxDevices:5, availableSlots:1, canAddDevices:true},
     testRelay: {ok:true, replied:true, milliseconds:12.345},
     testExit: {ok:true, reachable:true, milliseconds:45.2},
     testProxyNode: {ok:true, reachable:false, detail:'The proxy connection timed out.'},
-    refreshRelays: {ok:true, relays:[{id:'ca-test-wg-003',country:'Canada',countryCode:'ca',city:'Test',hostname:'ca-test-wg-003',active:true}], stale:true, error:'Provider unavailable'}
+    refreshRelays: {ok:true, relays:[{id:'ca-test-wg-003',country:'Canada',countryCode:'ca',cityCode:'yyz',city:'Test',hostname:'ca-test-wg-003',active:true}], stale:true, error:'Provider unavailable'}
 };
 window.confirm = () => true;
 window.jQuery = (ready) => document.addEventListener('DOMContentLoaded', ready);
@@ -56,6 +57,9 @@ window.jQuery.ajax = async (request) => {
         const add = data.action === 'add';
         if (data.country === '') {
             batches.worldwide = add;
+        } else if (data.city) {
+            const key = data.country + ':' + data.city;
+            batches.cities = add ? [...new Set([...batches.cities, key])] : batches.cities.filter((city) => city !== key);
         } else if (add && !batches.countries.includes(data.country)) {
             batches.countries.push(data.country);
         } else if (!add) {
@@ -180,7 +184,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         requests.some(x => x.action === 'testRelay' && x.data.relay === 'ca-test-wg-001'), 'per-relay ping missing');
     bv('profile-list').querySelector('button').click();
     await wait();
-    assert(bv('vpn-test').textContent.includes('45.2 ms'), 'exit HTTPS test missing');
+    assert(bv('profile-list').querySelector('[data-test-result]').textContent.includes('45.2 ms'), 'exit HTTPS test missing');
     bv('register-form').requestSubmit(bv('register-form').querySelector('button[type=submit]'));
     await wait();
     assert(requests.some(x => x.action === 'register' && x.data.relay === 'ca-test-wg-001' && !Object.hasOwn(x.data, 'account')), 'registration payload failed');
@@ -192,6 +196,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'retargetProfile' && x.data.id === 'vpn1' &&
       !Object.hasOwn(x.data, 'account')), 'retarget must reuse a profile without an account number');
+    bv('batch-scope').value = 'jp:nrt';
+    bv('batch-scope').dispatchEvent(new Event('change'));
+    bv('save-batch').click();
+    await wait();
+    assert(bv('relay-list').value === 'jp:nrt' && bv('relay').options[1].value === 'jp-test-wg-001',
+        'City batch must expose its saved relay.');
+    bv('activate-batch').click();
+    await wait();
+    assert(requests.some(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001') &&
+        bv('batch-operation').textContent.includes('1 exit added'), 'Batch activation must use the available device slot.');
     document.querySelector('[data-bv-section="smart"]').click();
     bv('service-preset').value = 'Netflix';
     bv('service-preset').dispatchEvent(new Event('change'));
@@ -248,7 +262,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     [...bv('proxy-list').querySelectorAll('button')].find((item) => item.textContent === 'Test server').click();
     await wait();
     assert(requests.some(x => x.action === 'testProxyNode' && x.data.id === 'proxy-1') &&
-        bv('proxy-test').textContent.includes('The proxy connection timed out.'), 'saved proxy test did not report its failure');
+        bv('proxy-list').querySelector('[data-test-result]').textContent.includes('The proxy connection timed out.'), 'saved proxy test did not report its failure');
 
     assert(bv('subscription-list').textContent.includes('Test feed'), 'proxy subscription not displayed');
     assert(bv('subscription-list').textContent.includes('2.0 KiB used / 1.0 MiB'), 'subscription quota not displayed');
@@ -277,7 +291,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         'standalone dashboard address missing');
     bv('dashboard-bind').value = 'tailnet';
     bv('dashboard-bind').dispatchEvent(new Event('input', {bubbles:true}));
-    assert(bv('bind-address').textContent.includes('100.101.102.103'), 'Tailscale dashboard address not displayed');
+    assert(bv('dashboard-link').hostname === 'opnsense.tailnet.ts.net' &&
+        bv('address-link').hostname === '100.101.102.103' && bv('dashboard-hostname-field').hidden,
+        'Tailscale dashboard must show MagicDNS and its direct IP.');
     bv('tailscale-form').requestSubmit(bv('tailscale-form').querySelector('button[type=submit]'));
     await wait();
     assert(requests.some(x => x.action === 'tailscaleSettings' && x.data.dashboardBind === 'tailnet' &&
@@ -327,6 +343,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         !bv('save-routing').classList.contains('bv-enabled') && bv('network-kill').checked,
         'Disabling VPN did not preserve the saved kill switch and clear the green state.');
     document.querySelector('[data-bv-section="vpns"]').click();
+    bv('relay-list').value = '';
+    bv('relay-list').dispatchEvent(new Event('change'));
     bv('refresh-relays').click();
     await wait();
     assert(bv('relay').options[1].value === 'ca-test-wg-003', 'cached relay lost after refresh error');

@@ -121,6 +121,19 @@ assertProxy($ssConfig['mihomo']['dns']['proxy-server-nameserver'] === ['system']
 assertProxy($ssConfig['mihomo']['dns']['nameserver'] === ['https://1.1.1.1/dns-query#blankvpn-upstream'], 'Use the same exit for service DNS.');
 $xray = ProxyRuntime::configuration($route, proxyNode($vless));
 assertProxy($xray['adapter']['inbounds'][0]['listen'] === '127.0.0.1' && $xray['adapter']['outbounds'][0]['protocol'] === 'vless', 'Xray runs behind a private SOCKS listener.');
+$reality = proxyNode('vless://' . $uuid .
+    '@192.0.2.11:23576?type=tcp&encryption=none&flow=xtls-rprx-vision&sni=example.com&fp=chrome&security=reality&pbk=' .
+    rtrim(strtr(base64_encode(str_repeat('k', 32)), '+/', '-_'), '=') . '&sid=01#Fixture');
+$realityConfig = ProxyRuntime::configuration($route, $reality)['mihomo'];
+assertProxy($realityConfig['proxies'][0]['flow'] === 'xtls-rprx-vision' &&
+    $realityConfig['proxies'][0]['reality-opts']['short-id'] === '01' &&
+    $realityConfig['proxies'][0]['servername'] === 'example.com', 'Preserve REALITY and XTLS Vision settings.');
+
+$probeFailure = new ReflectionMethod(ProxyRuntime::class, 'probeFailure');
+assertProxy(str_contains($probeFailure->invoke(null, CURLE_SSL_CACERT, 0), 'certificate') &&
+    str_contains($probeFailure->invoke(null, CURLE_RECV_ERROR, 0), 'ended') &&
+    str_contains($probeFailure->invoke(null, CURLE_OK, 403), 'HTTP 403'),
+    'Report PHP cURL failures without throwing an undefined-constant error.');
 $singNode = proxyNode('{"outbounds":[{"tag":"example","type":"anytls","server":"192.0.2.2","server_port":443,"password":"fixture-pass","tls":{"enabled":true,"server_name":"example.com"}}]}');
 $sing = ProxyRuntime::configuration($route, $singNode);
 assertProxy($sing['adapter']['route']['final'] === 'selected', 'sing-box has exactly one selected outbound.');
@@ -129,7 +142,7 @@ if (isset($argv[1])) {
     $dir = $argv[1];
     foreach (['ss' => $ssConfig['mihomo'], 'ssr' => ProxyRuntime::configuration($route, proxyNode($legacy))['mihomo'],
         'vmess' => ProxyRuntime::configuration($route, proxyNode($vmess))['mihomo'],
-        'ss2022' => ProxyRuntime::configuration($route, proxyNode($ss2022))['mihomo'],
+        'ss2022' => ProxyRuntime::configuration($route, proxyNode($ss2022))['mihomo'], 'reality' => $realityConfig,
         'adapter-bridge' => $xray['mihomo'], 'xray' => $xray['adapter'], 'sing-box' => $sing['adapter']] as $name => $config) {
         file_put_contents($dir . '/' . $name . '.json', json_encode($config, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     }

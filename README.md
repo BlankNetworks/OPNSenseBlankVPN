@@ -1,4 +1,4 @@
-# Blank VPN 0.8.4
+# Blank VPN 0.8.5
 
 Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Multi-Path keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
@@ -41,7 +41,7 @@ The package and SHA-256 file are written to `dist/`. To reproduce the bundled re
 3. Transfer the matching package and its SHA-256 file to the router. Run these commands one line at a time as root from the same directory. For ARM64, replace `amd64` with `aarch64`.
 
    ```sh
-   sha256sum -c os-blank-vpn-0.8.4-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.4-amd64.pkg
+   sha256sum -c os-blank-vpn-0.8.5-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.5-amd64.pkg
    pkg info os-blank-vpn
    ```
 
@@ -54,13 +54,13 @@ From a client on your LAN, open your existing OPNsense HTTPS address and select 
 
 For ordinary LAN DNS, set up `blankvpn.home.arpa` as a host override pointing to the router’s LAN IP. In OPNsense Unbound, use **Services → Unbound DNS → Overrides**. Add the hostname under **System → Settings → Administration → Alternate Hostnames** and use a trusted HTTPS certificate covering it. To open Blank VPN immediately after login, set the OPNsense user’s preferred landing page to `ui/blankvpn/index`.
 
-For `blankvpn.local` on the home network, open **Tailscale → Dashboard address**, click **Use blankvpn.local**, then click **Save Tailscale settings**. Add `blankvpn.local` to OPNsense **Alternate Hostnames** and use a trusted WebGUI certificate covering the name. Open **Publish blankvpn.local on your home network** to copy a Bonjour command populated with the router’s LAN IP and WebGUI port. Run it in Terminal on a Mac connected to the same link and leave it running, or publish the same address from an existing mDNS responder. Then open `https://blankvpn.local/ui/blankvpn/index`, with the WebGUI port if it differs from 443. For remote Tailscale access, use the direct Tailscale IP or a name resolved through tailnet DNS.
+For `blankvpn.local` on the home network, open **Tailscale → Dashboard address**, click **Use blankvpn.local**, then click **Save Tailscale settings**. Saving adds `blankvpn.local` to the OPNsense WebGUI’s allowed hostnames. Use a trusted WebGUI certificate covering the name. Open **Publish blankvpn.local on your home network** to copy a Bonjour command populated with the router’s LAN IP and WebGUI port. Run it in Terminal on a Mac connected to the same link and leave it running, or publish the same address from an existing mDNS responder. Then open `https://blankvpn.local/ui/blankvpn/index`, with the WebGUI port if it differs from 443. For remote Tailscale access, use the direct Tailscale IP or a name resolved through tailnet DNS.
 
 ### Open from Tailscale
 
 Open the **Tailscale** tab to see the router’s Tailscale address, its exit-node advertisement, and the direct dashboard URLs. Use **Open OPNsense Tailscale settings** to connect the router, advertise home subnets or the exit node, and approve them in the Tailscale admin console. Permit HTTPS only from peers that should manage OPNsense. [Tailscale setup for OPNsense](https://tailscale.com/docs/install/opnsense) · [Exit-node setup](https://tailscale.com/docs/features/exit-nodes)
 
-Choose **Tailscale address** to resolve the dashboard name to the detected Tailscale IP through Blank VPN’s managed DNS. For other tailnet clients, configure the matching host override in a DNS server reachable over Tailscale and add that server as the restricted nameserver for `home.arpa`. The direct URL is `https://blankvpn.home.arpa/ui/blankvpn/index` with the default hostname and port. Native OPNsense settings control the HTTPS listener and certificate. [Tailscale DNS](https://tailscale.com/docs/reference/dns-in-tailscale)
+Choose **Tailscale address** and save to use the router’s MagicDNS hostname and add it to the OPNsense WebGUI’s allowed hostnames. The dashboard also shows the direct Tailscale IP. The package detects and allows the MagicDNS hostname during an upgrade when Tailscale access was already selected. Use the WebGUI’s existing HTTPS certificate settings. The `blankvpn.local` name uses link-local Bonjour for home access. [MagicDNS](https://tailscale.com/docs/features/magicdns)
 
 ## Add a Mullvad exit
 
@@ -74,13 +74,13 @@ VPN Login currently offers Mullvad. Existing exits saved with earlier releases r
 
 ### Add server batches
 
-In **VPN Login**, open **Manage server batches** after signing in. Pick a country or **Worldwide · all servers**, then click **Add batch**. Repeat for any other countries you want to keep handy. Select a saved batch under **Server list**, then narrow it by country, city, or server. **Refresh servers** updates every batch from the latest Mullvad catalog. Unavailable servers remain visible and cannot be activated.
+In **VPN Login**, open **Manage server batches**. Select a city, country, or **Worldwide · all servers** and click **Add batch**. Pick a saved batch under **Server list** to browse every relay in it. **Refresh servers** updates the lists. Unavailable relays stay visible.
 
-The router saves the selected batches in its OPNsense configuration. Adding or removing a batch leaves existing exits and routing rules intact. To route through a saved server, select it and click **Add Mullvad exit**, then assign the exit under **Network** or **Multi-Path Settings**. Mullvad allows five registered devices per account, and each newly activated exit uses one slot.
+Click **Activate available exits** to register active servers from the selected batch, up to the available device slots, or choose a single server to activate it. Assign active exits under **Network** or **Multi-Path Settings**. Mullvad allows five registered devices per account, including devices outside Blank VPN. Saving a batch uses zero slots. Removing a batch leaves its activated exits and routing rules in place. [Mullvad device limits](https://mullvad.net/en/help/using-mullvad-vpn-app#too-many-devices)
 
 ### Test servers and exits
 
-Use **Ping server** beside the selected Mullvad relay to send one ICMP echo from OPNsense to its published IPv4 address. An unanswered ping can mean the relay filters ICMP. Use **Test exit** beside a configured VPN or enabled proxy to check an HTTPS request through that exit. Saved WireGuard and native VPN exits can be tested while device routing is off. Their HTTPS probe requires a verified firewall route with a fallback block. A relay ping checks ICMP before activation. The exit test verifies internet access through the configured tunnel.
+Use **Ping server** beside the selected Mullvad relay to send one ICMP echo from OPNsense to its published IPv4 address. An unanswered ping can mean the relay filters ICMP. Use **Test exit** beside a configured VPN or enabled proxy to check HTTPS through that exit. Results appear on the tested row. Saved WireGuard and native VPN exits can be tested while device routing is off. Their HTTPS probe requires a verified firewall route with a fallback block. A relay ping checks ICMP before activation. The exit test verifies internet access through the configured tunnel.
 
 ## Add proxy servers and subscriptions
 
@@ -88,7 +88,7 @@ The GitHub release includes Mihomo, tun2socks, Xray, sing-box, and the Clash YAM
 
 1. Open **Proxies** over HTTPS. Add a single server with **Add a proxy manually**, paste its share link, or import a base64 list, Clash YAML, Xray JSON, or sing-box JSON.
 2. For a provider feed, add its direct HTTPS subscription URL. The router follows public HTTPS redirects after validating each destination and reports DNS, TLS, HTTP, timeout, or format errors. The list shows reported traffic allowance, usage, and expiry when the provider sends those fields. New subscriptions enable automatic refresh every six hours. Change the setting per saved subscription. An enabled exit retains its server if a later refresh removes it.
-3. Choose **Test server** to check a saved proxy before enabling it. Choose **Enable exit** on a server to make it available for routing, then select the exit under **Multi-Path** or **Network**. Device assignments can use the IPv4 kill switch or a backup exit. UDP support varies with the upstream protocol and transport.
+3. Choose **Test server** to check HTTPS through a saved proxy before enabling it. Choose **Enable exit** on a server to make it available for routing, then select the exit under **Multi-Path** or **Network**. Device assignments can use the IPv4 kill switch or a backup exit. UDP support varies with the upstream protocol and transport.
 
 ## Update proxy cores
 

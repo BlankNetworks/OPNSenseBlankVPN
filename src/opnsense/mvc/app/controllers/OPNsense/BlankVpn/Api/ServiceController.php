@@ -30,6 +30,7 @@ class ServiceController extends ApiControllerBase
             $settings = Policy::settings($model);
             $routing = Policy::routingSettings($settings);
             $settings['dashboardAddresses'] = Resolver::dashboardAddresses();
+            $settings['dashboardMagicDns'] = $settings['dashboardAddresses']['tailnet'] !== '' ? Resolver::magicDnsName() : '';
             $settings['tailscaleInstalled'] = is_executable('/usr/local/bin/tailscale');
             $settings['tailscaleExitAdvertised'] =
                 (string)(Config::getInstance()->object()->OPNsense->tailscale->settings->advertiseExitNode ?? '') === '1';
@@ -153,17 +154,19 @@ class ServiceController extends ApiControllerBase
     {
         return $this->respond(fn () => Operations::exclusive(function () {
             $country = strtolower($this->input('country', 2));
+            $city = strtolower($this->input('city', 24));
             $action = $this->input('action', 6);
             if (!in_array($action, ['add', 'remove'], true)) {
                 throw new \DomainException('Choose whether to add or remove the Mullvad batch.');
             }
             $model = new BlankVpn();
             $before = Mullvad::savedBatches(Policy::fields($model->mullvadCatalog));
-            $after = (new Mullvad())->updateBatch($before, $country, $action === 'add');
+            $after = (new Mullvad())->updateBatch($before, $country, $action === 'add', $city);
             if ($after !== $before) {
                 Operations::change(function (BlankVpn $model) use ($after) {
                     $model->mullvadCatalog->worldwide = $after['worldwide'] ? '1' : '0';
                     $model->mullvadCatalog->countries = implode(',', $after['countries']);
+                    $model->mullvadCatalog->cities = implode(',', $after['cities']);
                     return [];
                 });
             }
@@ -250,6 +253,17 @@ class ServiceController extends ApiControllerBase
             $this->storeMullvadSession($user, $login);
             return $login['account'] + ['saved' => true];
         }), true, true, true);
+    }
+
+    public function mullvadAccountStatusAction()
+    {
+        return $this->respond(function () {
+            $token = $this->mullvadToken();
+            if ($token === null) {
+                throw new \DomainException('Sign in to Mullvad to refresh the device slot count.');
+            }
+            return (new Mullvad())->accountWithToken($token);
+        }, false, true, true);
     }
 
     public function logoutMullvadAction()
@@ -644,7 +658,8 @@ class ServiceController extends ApiControllerBase
             $bind = $this->input('dashboardBind', 12);
             $tailscale = $this->listInput('tailscaleInterfaces');
             $this->validateDashboardBinding($hostname, $bind);
-            Operations::change(function (BlankVpn $model) use ($hostname, $bind, $tailscale) {
+            $dashboardName = $bind === 'tailnet' ? Resolver::magicDnsName() : $hostname;
+            Operations::change(function (BlankVpn $model) use ($hostname, $bind, $tailscale, $dashboardName) {
                 $before = Policy::settings($model);
                 $this->validateTransitInterfaces($tailscale, $before['interfaces'], $before['strictInterfaces']);
                 foreach (Policy::assignments($model) as $row) {
@@ -655,6 +670,7 @@ class ServiceController extends ApiControllerBase
                 $model->settings->tailscaleInterfaces = implode(',', $tailscale);
                 $model->settings->hostname = $hostname;
                 $model->settings->dashboardBind = $bind;
+                Resolver::allowDashboardHostname(Config::getInstance()->object(), $dashboardName);
                 $after = Policy::settings($model);
                 $reset = [];
                 if ($after['enabled'] && $after['coverage'] === 'network' && $after['networkMode'] !== 'disabled') {
@@ -1077,7 +1093,10 @@ class ServiceController extends ApiControllerBase
             }
             syslog(LOG_WARNING, 'Blank VPN operation did not complete.');
         } catch (\Throwable) {
-            syslog(LOG_ERR, 'Blank VPN ' . $error::class . ' at ' . basename($error->getFile()) . ':' . $error->getLine());
+            $reference = gmdate('His') . '-' . getmypid();
+            syslog(LOG_ERR, 'Blank VPN ' . $reference . ' ' . $error::class . ' at ' .
+                basename($error->getFile()) . ':' . $error->getLine());
+            return ['ok' => false, 'error' => 'Blank VPN encountered an unexpected error. Log reference ' . $reference . '.'];
         }
         return ['ok' => false, 'error' => 'Blank VPN could not complete this operation.'];
     }

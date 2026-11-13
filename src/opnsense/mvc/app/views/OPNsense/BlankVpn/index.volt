@@ -67,8 +67,8 @@
                 <div class="bv-actions">
                     <p id="bv-relay-choice" class="text-muted" aria-live="polite"></p>
                     <button id="bv-test-relay" type="button" class="btn btn-default" disabled>Ping server</button>
+                    <small id="bv-relay-test" class="bv-test-result" role="status"></small>
                 </div>
-                <p id="bv-relay-test" class="text-muted" role="status"></p>
                 <div class="bv-fields">
                     <label>Exit name <input id="bv-register-name" type="text" class="form-control" maxlength="64"
                         placeholder="Defaults to server name"></label>
@@ -83,20 +83,21 @@
             </form>
             <details id="bv-mullvad-batches" class="bv-advanced" hidden>
                 <summary>Manage server batches</summary>
-                <p class="text-muted">Saved lists follow Mullvad’s catalog. Each new exit uses one device slot when you activate it.</p>
+                <p class="text-muted">Save a city, country, or the worldwide catalog. Activate servers in the batch using your available Mullvad device slots.</p>
                 <label>Batch to add or remove
                     <select id="bv-batch-scope" class="form-control" aria-describedby="bv-batch-status"></select>
                 </label>
                 <div class="bv-actions">
                     <button id="bv-save-batch" type="button" class="btn btn-primary">Add batch</button>
                     <button id="bv-remove-batch" type="button" class="btn btn-default" hidden>Remove batch</button>
+                    <button id="bv-activate-batch" type="button" class="btn btn-default" disabled>Activate available exits</button>
                     <p id="bv-batch-status" class="text-muted" role="status"></p>
                 </div>
+                <p id="bv-batch-operation" class="text-muted" role="status"></p>
             </details>
         </section>
         <section class="bv-panel" aria-label="Saved VPN exits">
             <h2>VPN exits</h2>
-            <p id="bv-vpn-test" class="text-muted" role="status"></p>
                 <div class="bv-scroll">
                 <table class="table bv-table bv-profiles">
                     <thead>
@@ -207,8 +208,7 @@
                 <tbody id="bv-proxy-list"></tbody>
             </table>
         </div>
-        <p id="bv-proxy-test" class="text-muted" role="status"></p>
-        <p class="text-muted">Enable a server as an exit to test its connection or select it in a routing rule.</p>
+        <p class="text-muted">Test a saved server here. Enable it as an exit to use it in a routing rule.</p>
     </section>
 
     <div id="bv-network-page" data-bv-panel="network" hidden>
@@ -443,14 +443,14 @@
             <h2 id="bv-dashboard-title">Dashboard address</h2>
             <p><a id="bv-dashboard-link" href="https://blankvpn.home.arpa/ui/blankvpn/index">https://blankvpn.home.arpa/ui/blankvpn/index</a></p>
             <p id="bv-address-row" hidden>Direct IP address <a id="bv-address-link"></a></p>
-            <p class="text-muted">Add the dashboard name to Alternate Hostnames under OPNsense System → Settings → Administration and use a WebGUI certificate that covers it.</p>
+            <p class="text-muted">Saving adds the dashboard name to OPNsense’s allowed hostnames. A trusted WebGUI certificate must cover the name for browsers to verify HTTPS.</p>
             <form id="bv-tailscale-form" data-manage-only>
                 <div class="bv-fields">
-                    <label>Dashboard name
+                    <label id="bv-dashboard-hostname-field">Home dashboard name
                         <input id="bv-hostname" type="text" class="form-control" placeholder="blankvpn.home.arpa" autocomplete="off"
                             spellcheck="false" maxlength="120" required>
                     </label>
-                    <label>Use this address for the dashboard name
+                    <label>Open the dashboard on
                         <select id="bv-dashboard-bind" class="form-control">
                             <option value="lan">Home Ethernet address</option>
                             <option value="tailnet">Tailscale address</option>

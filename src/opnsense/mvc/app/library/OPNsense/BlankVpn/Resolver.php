@@ -38,7 +38,8 @@ final class Resolver
         $wanted = [];
         if ($settings['enabled']) {
             $hostname = $settings['hostname'];
-            $host = self::dashboardAddresses()[$settings['dashboardBind']];
+            $bind = $hostname === 'blankvpn.local' ? 'lan' : $settings['dashboardBind'];
+            $host = self::dashboardAddresses()[$bind];
             if (!self::validHostname($hostname)) {
                 throw new \DomainException('Set a valid local dashboard hostname.');
             }
@@ -117,6 +118,41 @@ final class Resolver
             }
         }
         return ['lan' => filter_var($lan, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ?: '', 'tailnet' => $tailnet];
+    }
+
+    public static function magicDnsName(): string
+    {
+        if (!is_executable('/usr/local/bin/tailscale')) {
+            return '';
+        }
+        $output = self::command(['/usr/bin/timeout', '2', '/usr/local/bin/tailscale', 'status', '--json', '--peers=false'], false);
+        $status = json_decode($output, true);
+        return is_array($status) ? self::magicDnsFromStatus($status) : '';
+    }
+
+    public static function magicDnsFromStatus(array $status): string
+    {
+        if (($status['BackendState'] ?? '') !== 'Running' || ($status['CurrentTailnet']['MagicDNSEnabled'] ?? false) !== true) {
+            return '';
+        }
+        $name = strtolower(rtrim((string)($status['Self']['DNSName'] ?? ''), '.'));
+        return preg_match('/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){2,}ts\.net$/D', $name) &&
+            strlen($name) <= 253 ? $name : '';
+    }
+
+    public static function allowDashboardHostname(\SimpleXMLElement $config, string $hostname): bool
+    {
+        if ($hostname === '') {
+            return false;
+        }
+        $webgui = $config->system->webgui;
+        $current = trim((string)$webgui->althostnames);
+        $names = preg_split('/\s+/', strtolower($current), -1, PREG_SPLIT_NO_EMPTY);
+        if (in_array(strtolower($hostname), $names, true)) {
+            return false;
+        }
+        $webgui->althostnames = trim($current . ' ' . $hostname);
+        return true;
     }
 
     public static function validHostname(string $host): bool

@@ -25,7 +25,9 @@
             editingService: null,
             domainRead: 0,
             relays: [],
-            mullvadBatches: {worldwide: false, countries: []},
+            mullvadBatches: {worldwide: false, countries: [], cities: []},
+            tests: new Map(),
+            proxyTestRunning: false,
             settings: null,
             availableInterfaces: [],
             canManage: true,
@@ -296,7 +298,7 @@
                         remove.title = 'Remove this exit from routing policies first.';
                     }
                     if (state.canManage) {
-                        actions.append(button('Test exit', (event) => void testConnection(event.currentTarget, profileName(profile.id), 'vpn-test', 'testExit', profile.id)));
+                        appendConnectionTest(actions, 'Test exit', 'testExit', profile.id);
                         actions.append(remove);
                     }
                 }
@@ -463,26 +465,34 @@
 
         function renderDashboardAddress() {
             const settings = state.settings;
-            const address = settings?.dashboardAddresses?.[byId('dashboard-bind').value];
+            const home = byId('dashboard-bind').value === 'lan';
+            const address = settings?.dashboardAddresses?.[home ? 'lan' : 'tailnet'];
             const port = settings?.dashboardPort || 443;
             const suffix = (port === 443 ? '' : ':' + port) + '/ui/blankvpn/index';
-            const hostname = settings?.hostname || 'blankvpn.home.arpa';
-            const url = 'https://' + hostname + suffix;
+            const hostname = byId('hostname').value.trim().toLowerCase();
+            const localName = hostname === 'blankvpn.local';
+            const magicDns = settings?.dashboardMagicDns;
+            const validLocalName = localName || /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+home\.arpa$/.test(hostname);
+            const host = home && validLocalName ? hostname : (home ? address : magicDns || address);
             const link = byId('dashboard-link');
-            link.href = url;
-            link.textContent = url;
+            link.hidden = !host;
+            if (host) {
+                link.href = 'https://' + host + suffix;
+                link.textContent = link.href;
+            }
             const direct = byId('address-link');
-            byId('address-row').hidden = !address;
+            byId('address-row').hidden = !address || host === address;
             if (address) {
                 direct.href = 'https://' + address + suffix;
                 direct.textContent = direct.href;
             }
-            const localName = byId('hostname').value.trim().toLowerCase() === 'blankvpn.local';
-            const home = byId('dashboard-bind').value === 'lan';
+            byId('dashboard-hostname-field').hidden = !home;
+            byId('use-local-name').hidden = !home;
             byId('bind-address').textContent = !address ? 'The selected interface has no IPv4 address yet.'
-                : localName ? (home ? 'Publish this name with Bonjour on your home network.'
-                    : 'Bonjour is limited to the local network. Use the direct Tailscale IP link for remote access.')
-                    : 'Point the dashboard name at ' + address + ' in the DNS your devices use.';
+                : home ? (localName ? 'Publish this name with Bonjour on your home network.'
+                    : 'Point this name at ' + address + ' in the DNS your home devices use.')
+                    : magicDns ? 'Tailscale uses your router’s MagicDNS name. Use the IP link if MagicDNS is unavailable on your device.'
+                        : 'MagicDNS is unavailable. Open the dashboard using its Tailscale IP.';
             byId('bonjour').hidden = !localName || !home || !address;
             byId('bonjour-command').textContent = byId('bonjour').hidden ? ''
                 : 'dns-sd -P "Blank VPN" _https._tcp local ' + port + ' blankvpn.local ' + address;
@@ -682,9 +692,8 @@
                 const exit = state.profiles.find((profile) => profile.node === node.id);
                 cell(row, node.core, '', exit?.status || '');
                 const actions = row.insertCell();
-                actions.append(button(exit ? 'Test exit' : 'Test server', (event) => void testConnection(
-                    event.currentTarget, node.name, 'proxy-test', exit ? 'testExit' : 'testProxyNode', exit?.id || node.id
-                )));
+                appendConnectionTest(actions, exit ? 'Test exit' : 'Test server',
+                    exit ? 'testExit' : 'testProxyNode', exit?.id || node.id, node.id);
                 if (exit) {
                     const disable = button('Remove exit', (event) => removeProfile(exit, event.currentTarget));
                     disable.disabled = state.assignments.some((item) => [item.profile, item.backup].includes(exit.id))
@@ -761,6 +770,7 @@
                     setMullvadSignedIn(signedIn);
                     if (signedIn && !byId('account-status').textContent) {
                         byId('account-status').textContent = 'Signed in to Mullvad.';
+                        refreshMullvadAccount();
                     }
                     restoreSavedLogin();
                 }
@@ -937,56 +947,69 @@
             return relay.country + ' / ' + relay.city;
         }
 
+        function batchIncludes(relay, scope) {
+            const [country, city] = scope.split(':');
+            return !country || country === 'all' || (relay.countryCode === country && (!city || relay.cityCode === city));
+        }
+
         function renderMullvadBatches() {
-            const {worldwide, countries} = state.mullvadBatches;
-            const catalog = new Map(state.relays.filter((relay) => relay.countryCode)
-                .map((relay) => [relay.countryCode, relay.country || relay.countryCode.toUpperCase()]));
-            for (const code of countries) {
-                if (!catalog.has(code)) {
-                    catalog.set(code, code.toUpperCase());
+            const {worldwide, countries, cities = []} = state.mullvadBatches;
+            const saved = [...(worldwide ? ['all'] : []), ...countries, ...cities];
+            const labels = new Map([['all', 'Worldwide · all servers']]);
+            const counts = new Map();
+            for (const relay of state.relays) {
+                if (!relay.countryCode) {
+                    continue;
+                }
+                labels.set(relay.countryCode, relay.country || relay.countryCode.toUpperCase());
+                if (relay.cityCode) {
+                    labels.set(relay.countryCode + ':' + relay.cityCode, relay.city + ', ' + relay.country);
+                }
+                for (const value of [relay.countryCode, relay.countryCode + ':' + relay.cityCode]) {
+                    counts.set(value, (counts.get(value) || 0) + 1);
                 }
             }
-            const countryChoices = [...catalog].map(([value, label]) => ({value, label}))
-                .sort((left, right) => left.label.localeCompare(right.label));
-            const batches = [
-                ...(worldwide ? [{value: 'all', label: 'Worldwide'}] : []),
-                ...countryChoices.filter(({value}) => countries.includes(value))
-            ];
-            options(byId('relay-list'), batches.map((batch) => ({...batch, group: 'Saved batches'})), 'Mullvad catalog');
-            const scope = byId('batch-scope');
-            options(scope, [{value: 'all', label: 'Worldwide · all servers'}, ...countryChoices], 'Choose a batch');
+            for (const value of saved) {
+                if (!labels.has(value)) {
+                    labels.set(value, value.toUpperCase());
+                }
+            }
+            const choices = [...labels].map(([value, label]) => ({
+                value, label: label + ' · ' + (value === 'all' ? state.relays.length : counts.get(value) || 0),
+                group: value === 'all' ? '' : value.includes(':') ? 'Cities' : 'Countries'
+            })).sort((left, right) => left.label.localeCompare(right.label));
+            options(byId('relay-list'), choices.filter(({value}) => saved.includes(value))
+                .map((choice) => ({...choice, group: 'Saved batches'})), 'Mullvad catalog');
+            options(byId('batch-scope'), choices, 'Choose a batch');
             renderBatchChoice();
         }
 
         function renderBatchChoice() {
             const scope = byId('batch-scope').value;
-            const worldwide = scope === 'all';
-            const saved = worldwide ? state.mullvadBatches.worldwide : state.mullvadBatches.countries.includes(scope);
-            const count = scope ? state.relays.filter((relay) => worldwide || relay.countryCode === scope).length : 0;
-            const add = byId('save-batch');
-            const remove = byId('remove-batch');
-            add.hidden = saved;
-            add.disabled = !state.mullvadSignedIn || count === 0;
-            remove.hidden = !saved;
-            remove.disabled = !state.mullvadSignedIn;
+            const {worldwide, countries, cities = []} = state.mullvadBatches;
+            const saved = scope === 'all' ? worldwide : [...countries, ...cities].includes(scope);
+            const count = scope ? state.relays.filter((relay) => batchIncludes(relay, scope)).length : 0;
+            byId('save-batch').hidden = saved;
+            byId('save-batch').disabled = !state.mullvadSignedIn || count === 0;
+            byId('remove-batch').hidden = !saved;
+            byId('remove-batch').disabled = !state.mullvadSignedIn;
+            byId('activate-batch').disabled = !state.mullvadSignedIn || !count || state.busy;
             byId('batch-status').textContent = scope ? count + ' server' + (count === 1 ? '' : 's')
                 + (saved ? ' · Saved' : '') : '';
         }
 
         async function saveMullvadBatch(control, action) {
-            const scope = byId('batch-scope');
-            const selected = scope.value;
-            if (!selected || !state.mullvadSignedIn) {
+            const scope = byId('batch-scope').value;
+            if (!scope || !state.mullvadSignedIn) {
                 return;
             }
-            const label = selected === 'all' ? 'Worldwide' : scope.selectedOptions[0].textContent;
-            const country = selected === 'all' ? '' : selected;
-            await mutate(control, () => api('saveMullvadBatch', {country, action}),
-                label + (action === 'add' ? ' server batch added.' : ' server batch removed.'), (result) => {
+            const [country, city = ''] = scope === 'all' ? [''] : scope.split(':');
+            await mutate(control, () => api('saveMullvadBatch', {country, city, action}),
+                action === 'add' ? 'Mullvad batch saved.' : 'Mullvad batch removed.', (result) => {
                     state.mullvadBatches = result.batches;
                     renderMullvadBatches();
                     if (action === 'add') {
-                        byId('relay-list').value = selected;
+                        byId('relay-list').value = scope;
                         byId('country').value = '';
                         byId('city').value = '';
                         byId('relay').value = '';
@@ -994,6 +1017,60 @@
                     renderRelays();
                 });
             renderBatchChoice();
+        }
+
+        async function activateMullvadBatch(control) {
+            const scope = byId('batch-scope').value;
+            const status = byId('batch-operation');
+            if (!scope || state.busy || !state.mullvadSignedIn) {
+                return;
+            }
+            state.busy = true;
+            renderBatchChoice();
+            status.textContent = 'Checking Mullvad device slots…';
+            try {
+                const account = await api('mullvadAccountStatus');
+                renderMullvadAccount(account);
+                const existing = new Set(state.profiles.map((profile) => profile.relay));
+                const candidates = state.relays.filter((relay) => relay.active && batchIncludes(relay, scope) && !existing.has(relay.id));
+                const batch = candidates.slice(0, account.canAddDevices ? account.availableSlots : 0);
+                if (!batch.length) {
+                    status.textContent = candidates.length ? 'Mullvad has no available device slots.'
+                        : 'All available servers in this batch already have exits.';
+                    return;
+                }
+                if (!window.confirm('Activate ' + batch.length + ' of ' + candidates.length
+                    + ' available servers in this batch? Each new exit uses a Mullvad device slot.')) {
+                    status.textContent = '';
+                    return;
+                }
+                let completed = 0;
+                for (const relay of batch) {
+                    status.textContent = 'Adding ' + relay.id + ' (' + (completed + 1) + ' of ' + batch.length + ')…';
+                    try {
+                        await api('register', {relay: relay.id});
+                        completed++;
+                    } catch (error) {
+                        status.textContent = completed + ' added. ' + relay.id + ' · ' + errorMessage(error, 'Registration failed.');
+                        break;
+                    }
+                }
+                if (completed === batch.length) {
+                    status.textContent = completed + (completed === 1 ? ' exit added.' : ' exits added.') +
+                        (candidates.length > completed ? ' Remaining servers are available in the catalog.' : '');
+                }
+                await refreshDashboard();
+                const current = await api('mullvadAccountStatus').catch(() => null);
+                if (current) {
+                    renderMullvadAccount(current);
+                }
+            } catch (error) {
+                status.textContent = errorMessage(error, 'The batch could not be activated.');
+            } finally {
+                state.busy = false;
+                control.disabled = false;
+                renderBatchChoice();
+            }
         }
 
         function renderRelays() {
@@ -1008,7 +1085,7 @@
             options(retarget, reusable.map(exitChoice), 'Create a new exit');
             renderMullvadBatches();
             const batch = byId('relay-list').value;
-            const relays = state.relays.filter((relay) => !batch || batch === 'all' || relay.countryCode === batch);
+            const relays = state.relays.filter((relay) => batchIncludes(relay, batch));
             const countries = [...new Set(relays.map((item) => item.country).filter(Boolean))].sort();
             options(byId('country'), countries.map((value) => ({value, label: value})), 'All countries');
             const country = byId('country').value;
@@ -1040,6 +1117,9 @@
             byId('relay-choice').textContent = relay
                 ? [relay.country, relay.city, relay.hostname || relay.id].filter(Boolean).join(' · ')
                 : '';
+            const result = relay && state.tests.get('relay:' + relay.id);
+            byId('relay-test').textContent = result?.text || '';
+            byId('relay-test').dataset.result = result?.kind || '';
             const register = byId('register');
             register.disabled = !relay || !state.mullvadSignedIn;
             register.textContent = byId('retarget').value ? 'Change server' : 'Add Mullvad exit';
@@ -1048,36 +1128,71 @@
 
         async function pingRelay() {
             const relay = byId('relay').value;
-            const status = byId('relay-test');
+            const key = 'relay:' + relay;
             state.testingRelay = true;
+            state.tests.set(key, {kind: 'pending', text: 'Pinging from OPNsense…'});
             renderRelayChoice();
-            status.textContent = 'Pinging ' + relay + ' from OPNsense…';
             try {
                 const result = await api('testRelay', {relay});
-                status.textContent = relay + (result.replied
-                    ? ' replied in ' + result.milliseconds + ' ms.'
-                    : ' did not answer ICMP. The WireGuard service may still be available.');
+                state.tests.set(key, result.replied
+                    ? {kind: 'pass', text: 'ICMP reply · ' + result.milliseconds + ' ms'}
+                    : {kind: 'fail', text: 'No ICMP reply. The WireGuard service may still be available.'});
             } catch (error) {
-                status.textContent = errorMessage(error, 'Could not ping ' + relay + '.');
+                state.tests.set(key, {kind: 'fail', text: errorMessage(error, 'Could not ping this server.')});
             } finally {
                 state.testingRelay = false;
                 renderRelayChoice();
             }
         }
 
-        async function testConnection(control, name, output, action, id) {
-            const status = byId(output);
-            control.disabled = true;
-            status.textContent = 'Testing internet access through ' + name + '…';
+        function appendConnectionTest(actions, label, action, id, nodeId = '') {
+            const key = nodeId ? 'proxy:' + nodeId : 'exit:' + id;
+            const status = document.createElement('small');
+            status.className = 'bv-test-result';
+            status.setAttribute('role', 'status');
+            const control = button(label, () => void testConnection(action, id, key, Boolean(nodeId)));
+            control.dataset.testKey = key;
+            control.dataset.proxyTest = String(Boolean(nodeId));
+            status.dataset.testResult = key;
+            actions.append(control, status);
+            updateConnectionTest(control, status);
+        }
+
+        function updateConnectionTest(control, status) {
+            const result = state.tests.get(control.dataset.testKey);
+            control.disabled = result?.kind === 'pending' || (control.dataset.proxyTest === 'true' && state.proxyTestRunning);
+            status.hidden = !result;
+            status.textContent = result?.text || '';
+            status.dataset.result = result?.kind || '';
+        }
+
+        function refreshConnectionTests() {
+            for (const control of root.querySelectorAll('[data-test-key]')) {
+                updateConnectionTest(control, control.nextElementSibling);
+            }
+        }
+
+        async function testConnection(action, id, key, proxy) {
+            if (state.tests.get(key)?.kind === 'pending' || (proxy && state.proxyTestRunning)) {
+                return;
+            }
+            if (proxy) {
+                state.proxyTestRunning = true;
+            }
+            state.tests.set(key, {kind: 'pending', text: 'Testing HTTPS…'});
+            refreshConnectionTests();
             try {
                 const result = await api(action, {id});
-                status.textContent = name + (result.reachable === true
-                    ? ' passed the HTTPS test (' + result.milliseconds + ' ms).'
-                    : ' could not pass the HTTPS test. ' + (result.detail || 'No test result was available.'));
+                state.tests.set(key, result.reachable === true
+                    ? {kind: 'pass', text: 'HTTPS passed · ' + result.milliseconds + ' ms'}
+                    : {kind: 'fail', text: result.detail || 'The HTTPS test did not complete.'});
             } catch (error) {
-                status.textContent = errorMessage(error, 'The exit test could not be completed.');
+                state.tests.set(key, {kind: 'fail', text: errorMessage(error, 'The exit test could not be completed.')});
             } finally {
-                control.disabled = false;
+                if (proxy) {
+                    state.proxyTestRunning = false;
+                }
+                refreshConnectionTests();
             }
         }
 
@@ -1162,21 +1277,7 @@
                 state.restoreAttempted = false;
                 byId('save-login').checked = state.mullvadLoginSaved;
                 setMullvadSignedIn(true);
-                const devices = array(response.devices);
-                const limit = response.maxDevices ?? response.limit;
-                const expiry = response.expiresAt ?? response.expiry;
-                target.textContent = (state.mullvadLoginSaved ? 'Signed in to Mullvad. Login saved. ' : 'Signed in to Mullvad. ') + devices.length + (limit ? ' of ' + limit : '') + ' device slots used.'
-                    + (expiry ? (response.expired ? ' Account expired ' : ' Account expires ') + date(expiry) + '.' : '')
-                    + (response.canAddDevices === false ? ' Mullvad reports that this account cannot add a device.' : '');
-                if (devices.length) {
-                    const names = document.createElement('ul');
-                    for (const device of devices) {
-                        const entry = document.createElement('li');
-                        entry.textContent = shown(device.name, 'Registered WireGuard device');
-                        names.append(entry);
-                    }
-                    target.append(names);
-                }
+                renderMullvadAccount(response);
             } catch (error) {
                 setMullvadSignedIn(false);
                 target.textContent = errorMessage(error, 'Account information is unavailable.');
@@ -1184,6 +1285,35 @@
                 state.signingIn = false;
                 control.disabled = false;
                 byId('sign-out').disabled = false;
+            }
+        }
+
+        function renderMullvadAccount(response) {
+            const target = byId('account-status');
+            const devices = array(response.devices);
+            const limit = response.maxDevices ?? response.limit;
+            const expiry = response.expiresAt ?? response.expiry;
+            target.textContent = (state.mullvadLoginSaved ? 'Signed in to Mullvad. Login saved. ' : 'Signed in to Mullvad. ') + devices.length + (limit ? ' of ' + limit : '') + ' device slots used.'
+                + (expiry ? (response.expired ? ' Account expired ' : ' Account expires ') + date(expiry) + '.' : '')
+                + (response.canAddDevices === false ? ' Mullvad reports that this account cannot add a device.' : '');
+            if (devices.length) {
+                const names = document.createElement('ul');
+                for (const device of devices) {
+                    const entry = document.createElement('li');
+                    entry.textContent = shown(device.name, 'Registered WireGuard device');
+                    names.append(entry);
+                }
+                target.append(names);
+            }
+        }
+
+        function refreshMullvadAccount() {
+            if (state.mullvadSignedIn) {
+                void api('mullvadAccountStatus').then((response) => {
+                    if (state.mullvadSignedIn) {
+                        renderMullvadAccount(response);
+                    }
+                }).catch(() => {});
             }
         }
 
@@ -1360,6 +1490,7 @@
         byId('batch-scope').addEventListener('change', renderBatchChoice);
         byId('save-batch').addEventListener('click', (event) => void saveMullvadBatch(event.currentTarget, 'add'));
         byId('remove-batch').addEventListener('click', (event) => void saveMullvadBatch(event.currentTarget, 'remove'));
+        byId('activate-batch').addEventListener('click', (event) => void activateMullvadBatch(event.currentTarget));
         byId('country').addEventListener('change', renderRelays);
         byId('city').addEventListener('change', renderRelays);
         byId('relay').addEventListener('change', renderRelayChoice);
@@ -1394,7 +1525,10 @@
                 byId('register-name').value = '';
                 byId('retarget').value = '';
                 byId('relay').value = '';
-            }).then(renderRelayChoice);
+            }).then(() => {
+                renderRelayChoice();
+                refreshMullvadAccount();
+            });
         });
         byId('use-lan').addEventListener('click', () => {
             showSection('network');

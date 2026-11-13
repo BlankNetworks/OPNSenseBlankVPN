@@ -35,6 +35,7 @@ final class FixtureMullvad extends Mullvad
                     'country_name' => 'Canada',
                     'country_code' => 'ca',
                     'city_name' => 'Toronto',
+                    'city_code' => 'yyz',
                 ],
             ];
         }
@@ -114,22 +115,26 @@ try {
     check($provider->relays() === $offline && $provider->relayCalls === 2, 'An outage must limit background retries.');
 
     $batches = Mullvad::savedBatches([]);
-    check($batches === ['worldwide' => false, 'countries' => []], 'Upgrades should start with no saved batches.');
+    check($batches === ['worldwide' => false, 'countries' => [], 'cities' => []], 'Upgrades should start with no saved batches.');
     $batches = $provider->updateBatch($batches, 'ca', true);
-    check($batches === ['worldwide' => false, 'countries' => ['ca']], 'A country batch did not save.');
+    check($batches === ['worldwide' => false, 'countries' => ['ca'], 'cities' => []], 'A country batch did not save.');
     $batches = $provider->updateBatch($batches, '', true);
     check($provider->updateBatch($batches, 'ca', true) === $batches && $batches['worldwide'],
         'Adding an existing batch is idempotent, and worldwide coexists with country batches.');
     expectFailure(fn () => $provider->updateBatch($batches, 'zz', true), 'No Mullvad servers');
     expectFailure(fn () => $provider->updateBatch($batches, 'Canada', true), 'valid Mullvad country');
-    check($provider->updateBatch($batches, '', false) === ['worldwide' => false, 'countries' => ['ca']],
+    check($provider->updateBatch($batches, '', false) === ['worldwide' => false, 'countries' => ['ca'], 'cities' => []],
         'Removing worldwide must preserve saved country batches.');
-    check($provider->updateBatch($batches, 'ca', false) === ['worldwide' => true, 'countries' => []],
+    check($provider->updateBatch($batches, 'ca', false) === ['worldwide' => true, 'countries' => [], 'cities' => []],
         'Removing a country must preserve the worldwide batch.');
+    $withCity = $provider->updateBatch($batches, 'ca', true, 'yyz');
+    check($withCity['cities'] === ['ca:yyz'] && $withCity['countries'] === ['ca'] &&
+        $provider->updateBatch($withCity, 'ca', false, 'yyz') === $batches, 'City batches persist independently.');
+    expectFailure(fn () => $provider->updateBatch($withCity, 'ca', true, 'missing'), 'No Mullvad servers');
     check($provider->creates === 0 && $provider->relayCalls === 2,
         'Batch operations use cached server metadata and do not register devices.');
     check(Mullvad::savedBatches(['worldwide' => '1', 'countries' => 'ca,ca,invalid,jp']) ===
-        ['worldwide' => true, 'countries' => ['ca', 'jp']], 'Saved batches should validate and deduplicate country codes.');
+        ['worldwide' => true, 'countries' => ['ca', 'jp'], 'cities' => []], 'Saved batches should validate and deduplicate country codes.');
 
     $account = '0000 0000 0000 0000';
     expectFailure(fn () => $provider->account('invalid'), '16-digit');
@@ -158,7 +163,7 @@ try {
     $provider->completeRegistration($identity['registrationReceipt']);
     $provider->completeRegistration($identity['registrationReceipt']);
     check(glob($directory . '/mullvad-registration-*.json') === [], 'Completion should remove the retry key.');
-    expectFailure(fn () => $provider->register($account, 'profile-2'), 'available device slots');
+    expectFailure(fn () => $provider->register($account, 'profile-2'), '1 of 1 device slots');
 
     $privateKey = base64_encode(str_repeat('p', 32));
     $publicKey = base64_encode(str_repeat('r', 32));

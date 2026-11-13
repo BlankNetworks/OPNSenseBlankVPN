@@ -184,7 +184,11 @@ final class ProxyRuntime
     public static function reconcile(BlankVpn $model): array
     {
         // Maintenance holds the operation lock, so this only cleans an interrupted test.
-        self::stop(self::TEST_SLOT);
+        try {
+            self::stop(self::TEST_SLOT);
+        } catch (RuntimeException $error) {
+            syslog(LOG_WARNING, 'Blank VPN proxy test cleanup: ' . $error->getMessage());
+        }
         $desired = Policy::settings($model)['enabled'] ? array_column(self::routes($model), null, 'slot') : [];
         $catalog = $desired === [] ? [] : ProxyCatalog::read()['nodes'];
         $errors = [];
@@ -232,7 +236,11 @@ final class ProxyRuntime
             throw new DomainException('The saved proxy server is missing. Import it again before testing.');
         }
         if ($route !== null && self::ready($route)) {
-            return self::probe($route);
+            $result = self::probeSocks($route['socksPort'], true);
+            if (!$result['reachable']) {
+                syslog(LOG_NOTICE, 'Blank VPN proxy test (' . $node['core'] . '): ' . $result['detail']);
+            }
+            return $result;
         }
 
         // Use loopback listeners only, on ports reserved for this serialized test.
@@ -242,7 +250,14 @@ final class ProxyRuntime
         self::stop($slot);
         try {
             self::start($test, $node, true);
-            return self::probeSocks($test['socksPort']);
+            $result = self::probeSocks($test['socksPort'], true);
+            if (!$result['reachable']) {
+                syslog(LOG_NOTICE, 'Blank VPN proxy test (' . $node['core'] . '): ' . $result['detail']);
+            }
+            return $result;
+        } catch (DomainException | RuntimeException $error) {
+            syslog(LOG_WARNING, 'Blank VPN proxy test (' . $node['core'] . '): ' . $error->getMessage());
+            throw $error;
         } finally {
             self::stop($slot);
         }
@@ -256,36 +271,54 @@ final class ProxyRuntime
         return self::probeSocks($route['socksPort']);
     }
 
-    private static function probeSocks(int $port): array
+    private static function probeSocks(int $port, bool $tryAlternate = false): array
     {
         if (!function_exists('curl_init')) {
             throw new RuntimeException('The OPNsense PHP cURL extension is unavailable.');
         }
-        $curl = curl_init('https://cloudflare-dns.com/dns-query?name=example.com&type=A');
-        if ($curl === false) {
-            throw new RuntimeException('OPNsense could not initialize the proxy connection test.');
+        // A second destination distinguishes a failed endpoint or DNS lookup from a failed proxy.
+        $targets = ['https://1.1.1.1/dns-query?name=example.com&type=A' => 200];
+        if ($tryAlternate) {
+            $targets['https://www.gstatic.com/generate_204'] = 204;
         }
-        if (!curl_setopt_array($curl, [
-            CURLOPT_PROXY => 'socks5h://127.0.0.1:' . $port,
-            CURLOPT_NOPROXY => '', CURLOPT_PROTOCOLS_STR => 'https', CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_HTTPHEADER => ['Accept: application/dns-json'],
-            CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_TIMEOUT => 8,
-            CURLOPT_WRITEFUNCTION => static fn ($handle, string $body) => strlen($body)
-        ])) {
-            throw new RuntimeException('OPNsense could not configure the proxy connection test.');
+        $detail = 'The proxy did not complete the HTTPS test.';
+        foreach ($targets as $url => $expectedStatus) {
+            $curl = curl_init($url);
+            if ($curl === false || !curl_setopt_array($curl, [
+                CURLOPT_PROXY => 'socks5h://127.0.0.1:' . $port,
+                CURLOPT_NOPROXY => '', CURLOPT_PROTOCOLS_STR => 'https', CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
+                CURLOPT_HTTPHEADER => ['Accept: application/dns-json'],
+                CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_TIMEOUT => 8,
+                CURLOPT_WRITEFUNCTION => static fn ($handle, string $body) => strlen($body)
+            ])) {
+                throw new RuntimeException('OPNsense could not configure the proxy connection test.');
+            }
+            $transport = curl_exec($curl) !== false;
+            $status = (int)curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+            if ($transport && $status === $expectedStatus) {
+                return ['reachable' => true, 'detail' => null,
+                    'milliseconds' => round(curl_getinfo($curl, CURLINFO_TOTAL_TIME) * 1000, 1)];
+            }
+            $error = curl_errno($curl);
+            $detail = self::probeFailure($error, $status);
+            if ($error === CURLE_COULDNT_CONNECT || $error === CURLE_SSL_CACERT) {
+                break;
+            }
         }
-        $transport = curl_exec($curl) !== false;
-        $status = curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
-        $reachable = $transport && $status === 200;
-        $detail = match (curl_errno($curl)) {
-            CURLE_OPERATION_TIMEDOUT => 'The proxy connection timed out.',
-            CURLE_PEER_FAILED_VERIFICATION => 'The HTTPS test certificate could not be verified.',
-            default => $transport ? 'The HTTPS test returned HTTP ' . $status . '.'
-                : 'The proxy could not connect to the test destination. Check the server address, credentials, and transport.'
+        return ['reachable' => false, 'detail' => $detail, 'milliseconds' => null];
+    }
+
+    private static function probeFailure(int $error, int $status): string
+    {
+        return match ($error) {
+            CURLE_OPERATION_TIMEDOUT => 'The proxy did not complete the HTTPS request before the timeout.',
+            CURLE_SSL_CACERT => 'The HTTPS test certificate could not be verified.',
+            CURLE_COULDNT_CONNECT => 'The local SOCKS listener could not be reached.',
+            CURLE_PROXY => 'The proxy core could not open an upstream connection. Check the server credentials and transport.',
+            default => $status > 0 ? 'The HTTPS test returned HTTP ' . $status . '.'
+                : 'The HTTPS connection ended before a response (cURL ' . $error . ').'
         };
-        return ['reachable' => $reachable, 'detail' => $reachable ? null : $detail,
-            'milliseconds' => $reachable ? round(curl_getinfo($curl, CURLINFO_TOTAL_TIME) * 1000, 1) : null];
     }
 
     public static function prepareTunnelDriver(): void

@@ -62,7 +62,22 @@ try {
         case 'post_install':
             Operations::exclusive(function () {
                 $model = new BlankVpn();
-                if (Policy::settings($model)['enabled'] || Policy::profiles($model) !== [] || NativeVpn::routes($model) !== []) {
+                $settings = Policy::settings($model);
+                if ($settings['dashboardBind'] === 'tailnet') {
+                    $hostname = Resolver::magicDnsName();
+                    if ($hostname !== '') {
+                        $config = \OPNsense\Core\Config::getInstance();
+                        $config->lock();
+                        try {
+                            if (Resolver::allowDashboardHostname($config->object(), $hostname)) {
+                                $config->save(['description' => 'Allow the Blank VPN Tailscale dashboard hostname']);
+                            }
+                        } finally {
+                            $config->unlock();
+                        }
+                    }
+                }
+                if ($settings['enabled'] || Policy::profiles($model) !== [] || NativeVpn::routes($model) !== []) {
                     Operations::sync($model);
                 }
             });
