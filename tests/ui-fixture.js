@@ -10,6 +10,9 @@ const reply = {
         services: [],
         canManageCores: true,
         mullvadSignedIn: false,
+        vpnProviders: {mullvad:{name:'Mullvad',login:'mullvad'}, pia:{name:'Private Internet Access',login:'password'},
+            hide:{name:'hide.me'}, azire:{name:'AzireVPN',login:'token'}},
+        providerAccounts: {pia:false,azire:true},
         proxyCores: {mihomo:true,tun2socks:true,xray:true,"sing-box":true},
         servicePresets: {Netflix:['netflix.com','nflxvideo.net']},
         settings: {dashboardBind:'lan',dashboardAddresses:{lan:'10.0.0.1',tailnet:'100.101.102.103'},dashboardMagicDns:'opnsense.tailnet.ts.net',enabled:false, interfaces:['lan','opt2'], availableInterfaces:[{id:'opt1', name:'VLAN 2', device:'vlan02'},
@@ -29,6 +32,7 @@ const reply = {
         protocol:'socks5', legacy:true, sources:['feed-1']}], feeds:[{id:'feed-1', name:'Test feed', count:1, auto:true, usage:{upload:1024,download:1024,total:1048576,expire:1798761600}}]},
     importProxies: {ok:true, imported:1, skipped:0},
     mullvadAccountStatus: {ok:true, devices:[{name:'Test router'}], maxDevices:5, availableSlots:1, canAddDevices:true},
+    providerServers: {ok:true, servers:[{id:'chicago',name:'Chicago'}]},
     testRelay: {ok:true, replied:true, milliseconds:12.345},
     testExit: {ok:true, reachable:true, milliseconds:45.2},
     testProxyNode: {ok:true, reachable:false, detail:'The proxy connection timed out.'},
@@ -52,6 +56,16 @@ window.jQuery.ajax = async (request) => {
     if (action === 'logoutMullvad') {
         reply.dashboard.mullvadSignedIn = false;
         reply.dashboard.mullvadLoginSaved = false;
+    }
+    if (action === 'providerLogin' || action === 'providerLogout') {
+        reply.dashboard.providerAccounts[data.provider] = action === 'providerLogin';
+    }
+    if (action === 'addProviderExit') {
+        reply.dashboard.profiles.push({id:'pia1',name:data.name,provider:data.provider,providerLocation:data.server,
+            interface:'wg2',dns:['10.0.0.2']});
+    }
+    if (action === 'setServiceDestination') {
+        reply.dashboard.services.find(x => x.id === data.id).profile = data.profile;
     }
     if (action === 'renameProfile') {
         reply.dashboard.profiles.find(x => x.id === data.id).name = data.name;
@@ -241,17 +255,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('service-form').requestSubmit(bv('save-service'));
     await wait();
     assert(requests.some(x => x.action === 'saveService' && x.data.profile === '' &&
-        x.data.domains.includes('nflximg.net')) && bv('service-list').textContent.includes('Unassigned'),
+        x.data.domains.includes('nflximg.net')) && bv('service-list').querySelector('select').value === '',
         'domain list did not save without any exits');
     reply.dashboard.profiles = originalProfiles;
     bv('refresh').click();
     await wait();
-    bv('service-list').querySelector('button').click();
+    bv('service-list').querySelector('[aria-label="Edit Netflix"]').click();
     bv('service-profile').value = 'vpn1';
     bv('service-form').requestSubmit(bv('save-service'));
     await wait();
     assert(requests.some(x => x.action === 'saveService' && x.data.id === 'list1' && x.data.profile === 'vpn1' &&
         x.data.domains.includes('nflxvideo.net')), 'saved list could not be bound to an exit');
+    const destination = bv('service-list').querySelector('select');
+    destination.value = 'bypass';
+    destination.dispatchEvent(new Event('change'));
+    assert(!requests.some(x => x.action === 'setServiceDestination') &&
+        reply.dashboard.services[0].profile === 'vpn1', 'Changing a destination must wait for Save.');
+    destination.form.querySelector('button').click();
+    await wait();
+    assert(requests.some(x => x.action === 'setServiceDestination' && x.data.id === 'list1' &&
+        x.data.profile === 'bypass' && !Object.hasOwn(x.data, 'domains')) &&
+        reply.dashboard.services[0].domains.includes('*.nflxvideo.net') &&
+        bv('service-list').querySelector('select').value === 'bypass',
+        'The list destination must change without submitting or altering the domains.');
+    const switchBack = bv('service-list').querySelector('select');
+    switchBack.value = 'vpn1';
+    switchBack.dispatchEvent(new Event('change'));
+    switchBack.form.querySelector('button').click();
+    await wait();
     bv('use-lan').click();
     assert(bv('interface-rules').querySelector('[data-interface="lan"] select').value === 'smart' &&
         bv('managed').querySelector('[value="lan"]').checked, 'main Ethernet Multi-Path shortcut did not prefill');
@@ -500,6 +531,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(bv('relay').options[1].value === 'ca-test-wg-003', 'cached relay lost after refresh error');
     assert(bv('relay-status').textContent.includes('Provider unavailable'), 'stale catalog warning omitted');
+    bv('provider').value = 'pia';
+    bv('provider').dispatchEvent(new Event('change'));
+    assert(!bv('mullvad-provider').hidden && bv('provider-panel').hidden, 'Provider switched before Apply.');
+    bv('provider-picker').requestSubmit();
+    assert(bv('mullvad-provider').hidden && !bv('provider-login').hidden &&
+        bv('provider-title').textContent === 'Private Internet Access', 'Apply did not show the chosen provider login.');
+    bv('provider-user').value = 'p12345';
+    bv('provider-secret').value = 'fixture-password';
+    bv('provider-login').querySelector('button').click();
+    await wait();
+    assert(reply.dashboard.providerAccounts.pia && !bv('provider-server-form').hidden &&
+        bv('provider-secret').value === '' && bv('provider-server').options.length === 2,
+        'Provider sign-in must be saved, clear the password and load the catalog.');
+    bv('provider-server').value = 'chicago';
+    bv('provider-server').dispatchEvent(new Event('change'));
+    bv('provider-name').value = 'A Chicago server';
+    bv('provider-save').click();
+    await wait();
+    assert(requests.some(x => x.action === 'addProviderExit' && x.data.provider === 'pia' && x.data.server === 'chicago'),
+        'Save did not use the selected provider server.');
+    bv('provider').value = 'azire';
+    bv('provider-picker').requestSubmit();
+    await wait();
+    assert(!bv('provider-logout').hidden && reply.dashboard.providerAccounts.pia,
+        'Selecting another service must preserve earlier logins.');
+    bv('provider-logout').click();
+    await wait();
+    assert(!reply.dashboard.providerAccounts.azire && reply.dashboard.providerAccounts.pia &&
+        reply.dashboard.mullvadSignedIn, 'Signing out must affect only the selected account.');
+    const groups = [...bv('network-profile').querySelectorAll('optgroup')].map(x => x.label);
+    assert(groups.includes('Mullvad') && groups.includes('Private Internet Access') &&
+        groups.indexOf('Mullvad') < groups.indexOf('Private Internet Access') &&
+        [...bv('network-profile').options].some(x => x.value === 'pia1'), 'Routing choices must group by VPN service.');
     assert(document.documentElement.scrollWidth <= window.innerWidth, 'document has horizontal overflow');
     document.querySelector('[data-bv-section="network"]').click();
     const expected = window.innerWidth < 768 ? 'block' : 'table';

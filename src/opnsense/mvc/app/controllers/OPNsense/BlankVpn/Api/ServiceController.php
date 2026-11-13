@@ -17,6 +17,7 @@ use OPNsense\BlankVpn\ProxyImport;
 use OPNsense\BlankVpn\ProxyRuntime;
 use OPNsense\BlankVpn\Resolver;
 use OPNsense\BlankVpn\SmartRouting;
+use OPNsense\BlankVpn\VpnProviders;
 use OPNsense\BlankVpn\WireGuard;
 
 class ServiceController extends ApiControllerBase
@@ -68,7 +69,7 @@ class ServiceController extends ApiControllerBase
                 $checked = $health[$id] ?? [];
                 $profiles[$id] = array_intersect_key(
                     $profile,
-                    array_flip(['id', 'name', 'relay', 'identity', 'interface', 'address6', 'dns', 'disabled'])
+                    array_flip(['id', 'name', 'relay', 'identity', 'interface', 'address6', 'dns', 'disabled', 'provider', 'providerLocation', 'providerServer'])
                 ) + $status + [
                     'reachability' => time() - ($checked['checkedAt'] ?? 0) > 180 ? 'unverified or stale'
                         : (($checked['probeSucceeded'] ?? false) ? 'router probe succeeded' : 'router probe failed'),
@@ -104,7 +105,9 @@ class ServiceController extends ApiControllerBase
                 ];
             }
             $gatewayNames = array_column($profiles, 'name', 'interface');
-            $multiActive = SmartRouting::active($routing, $services);
+            $activeLists = SmartRouting::activeServices($routing, $services);
+            $bypass = SmartRouting::usesBypass($routing);
+            $multiActive = !$bypass && $activeLists !== [];
             foreach ($assignments as $id => $row) {
                 $rule = $loaded[Policy::marker('device', $id)] ?? null;
                 $guard = ($loaded[Policy::marker('kill', $id)]['action'] ?? '') === 'block';
@@ -138,10 +141,23 @@ class ServiceController extends ApiControllerBase
                     ];
                 }
             }
-            $learned = SmartRouting::active($routing, $services) ? SmartRouting::status() : [];
+            $learned = $activeLists !== [] && !$bypass ? SmartRouting::status() : [];
             foreach ($services as $id => &$service) {
                 $service['learned'] = $learned[$id] ?? null;
                 $service['routing'] = [];
+                if (!isset($activeLists[$id])) {
+                    continue;
+                }
+                if ($bypass) {
+                    foreach ($routing['interfaces'] as $interface) {
+                        $key = 'network:' . $interface;
+                        $service['routing'][$interface] = [
+                            'bypass' => ($loaded[Policy::marker('bypass', $key)]['action'] ?? '') === 'match',
+                            'guard' => $settings['networkRouting'][$interface]['blocked'] ?? false
+                        ];
+                    }
+                    continue;
+                }
                 foreach ($routing['smartInterfaces'] as $interface) {
                     $key = $id . ':' . $interface;
                     $guard = ($loaded[Policy::marker('service_guard', $key)]['action'] ?? '') === 'block';
@@ -160,14 +176,22 @@ class ServiceController extends ApiControllerBase
             $acl = new ACL();
             $canManage = self::nativeWritesAvailable() && is_string($username) &&
                 $acl->isPageAccessible($username, '/api/blankvpn/service/assign');
-            $mullvadUser = $canManage ? $this->mullvadUser() : null;
+            $accountUser = $canManage ? $this->accountUser() : null;
+            $providers = new VpnProviders();
+            $savedProviders = [];
+            foreach (VpnProviders::LOGIN_PROVIDERS as $provider) {
+                $savedProviders[$provider] = $accountUser !== null && $providers->hasSaved($provider, $accountUser);
+            }
             return $discovery + [
                 'profiles' => array_values($profiles),
                 'proxyCores' => ProxyRuntime::capabilities(),
                 'canManageCores' => self::nativeWritesAvailable() && is_string($username) &&
                     $acl->isPageAccessible($username, '/api/blankvpn/core/status'),
                 'mullvadSignedIn' => $this->mullvadToken() !== null,
-                'mullvadLoginSaved' => $mullvadUser !== null && (new Mullvad())->hasSavedAccount($mullvadUser),
+                'mullvadLoginSaved' => $accountUser !== null && (new Mullvad())->hasSavedAccount($accountUser),
+                'vpnProviders' => VpnProviders::CATALOG,
+                'providerAccounts' => $savedProviders,
+                'nativeGateways' => $canManage ? array_values(NativeVpn::gateways()) : [],
                 'assignments' => array_values($assignments),
                 'settings' => $settings,
                 'activeSmartInterfaces' => $routing['smartInterfaces'],
@@ -293,7 +317,7 @@ class ServiceController extends ApiControllerBase
     public function accountAction()
     {
         return $this->respond(fn () => Operations::exclusive(function () {
-            $user = $this->mullvadUser();
+            $user = $this->accountUser();
             $save = $this->flag('saveLogin');
             if ($save && $user === null) {
                 throw new \DomainException('Use a WebGUI login to save a Mullvad account.');
@@ -312,7 +336,7 @@ class ServiceController extends ApiControllerBase
     public function restoreMullvadAction()
     {
         return $this->respond(fn () => Operations::exclusive(function () {
-            $user = $this->mullvadUser();
+            $user = $this->accountUser();
             $mullvad = new Mullvad();
             $account = $user === null ? null : $mullvad->savedAccount($user);
             if ($account === null) {
@@ -338,7 +362,7 @@ class ServiceController extends ApiControllerBase
     public function logoutMullvadAction()
     {
         return $this->respond(fn () => Operations::exclusive(function () {
-            $user = $this->mullvadUser();
+            $user = $this->accountUser();
             if ($user !== null) {
                 (new Mullvad())->saveAccount($user, null);
                 $this->session->remove(self::MULLVAD_SESSION);
@@ -347,7 +371,7 @@ class ServiceController extends ApiControllerBase
         }), true, true, true);
     }
 
-    private function mullvadUser(): ?string
+    private function accountUser(): ?string
     {
         if ($this->isExternalClient() || $this->request->getScheme() !== 'https') {
             return null;
@@ -365,7 +389,7 @@ class ServiceController extends ApiControllerBase
 
     private function mullvadToken(): ?string
     {
-        $user = $this->mullvadUser();
+        $user = $this->accountUser();
         if ($user === null) {
             return null;
         }
@@ -383,7 +407,7 @@ class ServiceController extends ApiControllerBase
             $token = $account === '' ? $this->mullvadToken() : null;
             $mullvad = new Mullvad();
             if ($account === '' && $token === null) {
-                $user = $this->mullvadUser();
+                $user = $this->accountUser();
                 $saved = $user === null ? null : $mullvad->savedAccount($user);
                 if ($saved === null) {
                     throw new \DomainException('Sign in to Mullvad before adding an exit.');
@@ -502,6 +526,96 @@ class ServiceController extends ApiControllerBase
         throw new \DomainException('Choose a currently available Mullvad WireGuard relay.');
     }
 
+    public function providerLoginAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $provider = VpnProviders::validate($this->input('provider', 32), true);
+            $user = $this->requireProviderUser();
+            $credentials = [
+                'username' => trim($this->input('username', 32)),
+                'secret' => $provider === 'pia' ? $this->input('secret', 512) : trim($this->input('secret', 512))
+            ];
+            $providers = new VpnProviders();
+            $providers->authenticate($provider, $credentials);
+            $providers->save($provider, $user, $credentials);
+            return ['saved' => true];
+        }), true, true, true);
+    }
+
+    public function providerLogoutAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $provider = VpnProviders::validate($this->input('provider', 32), true);
+            (new VpnProviders())->save($provider, $this->requireProviderUser(), null);
+            return [];
+        }), true, true, true);
+    }
+
+    private function requireProviderUser(): string
+    {
+        $user = $this->accountUser();
+        if ($user === null) {
+            throw new \DomainException('Sign in to the OPNsense WebGUI over HTTPS to manage VPN accounts.');
+        }
+        return $user;
+    }
+
+    private function providerAccount(VpnProviders $providers, string $provider): array
+    {
+        $credentials = $providers->saved($provider, $this->requireProviderUser());
+        if ($credentials === null) {
+            throw new \DomainException('Sign in and save your login before choosing a server.');
+        }
+        return $providers->authenticate($provider, $credentials);
+    }
+
+    public function providerServersAction()
+    {
+        return $this->respond(function () {
+            $provider = VpnProviders::validate($this->input('provider', 32), true);
+            $providers = new VpnProviders();
+            $servers = $providers->servers($provider, $this->providerAccount($providers, $provider),
+                trim($this->input('country', 8)));
+            $choices = [];
+            foreach ($servers as $id => $server) {
+                $choices[] = ['id' => $id, 'name' => $server['name']];
+            }
+            return ['servers' => $choices];
+        }, true, true, true);
+    }
+
+    public function addProviderExitAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $provider = VpnProviders::validate($this->input('provider', 32), true);
+            $id = $this->input('server', 96);
+            $model = new BlankVpn();
+            foreach (Policy::profiles($model) as $profile) {
+                if (($profile['provider'] ?? '') !== $provider || empty($profile['providerLocation'])) {
+                    continue;
+                }
+                if ($profile['providerLocation'] === $id) {
+                    return ['profile' => $profile['id'], 'message' => 'This server is already saved.'];
+                }
+                if ($provider === 'nord') {
+                    throw new \DomainException('NordLynx uses a fixed tunnel address. Remove the saved NordVPN tunnel before adding a different server.');
+                }
+            }
+            $providers = new VpnProviders();
+            $auth = $this->providerAccount($providers, $provider);
+            $servers = $providers->servers($provider, $auth, trim($this->input('country', 8)));
+            $server = $servers[$id] ?? null;
+            if ($server === null) {
+                throw new \DomainException('Refresh the provider server list and choose an available server.');
+            }
+            $name = $this->name($server['name']);
+            $dnsPort = Resolver::freePort(Policy::routes($model));
+            WireGuard::preflight($server['ipv4'] ?? null);
+            [$identity, $relay] = $providers->configuration($provider, $auth, $id, $server);
+            return $this->addProfile($name, '', $identity, $relay, $dnsPort, $provider, $id);
+        }), true, true, true);
+    }
+
     public function importProfileAction()
     {
         return $this->respond(fn () => Operations::exclusive(function () {
@@ -511,13 +625,21 @@ class ServiceController extends ApiControllerBase
             $identity = $config;
             $identity['publicKey'] = $mullvad->derivePublicKey($config['privateKey']);
             $dnsPort = Resolver::freePort(Policy::routes(new BlankVpn()));
-            return $this->addProfile($this->name(), '', $identity, $config, $dnsPort);
+            $provider = VpnProviders::validate($this->input('provider', 32, 'other'));
+            return $this->addProfile($this->name(), '', $identity, $config, $dnsPort, $provider);
         }), true, true, true);
     }
 
-    private function addProfile(string $name, string $relayId, array $identity, array $relay, int $dnsPort): array
-    {
-        $result = Operations::change(function (BlankVpn $model) use ($name, $relayId, $identity, $relay, $dnsPort) {
+    private function addProfile(
+        string $name,
+        string $relayId,
+        array $identity,
+        array $relay,
+        int $dnsPort,
+        string $provider = '',
+        string $location = ''
+    ): array {
+        $result = Operations::change(function (BlankVpn $model) use ($name, $relayId, $identity, $relay, $dnsPort, $provider, $location) {
             $node = $model->profiles->profile->add();
             $id = (string)$node->getAttribute('uuid');
             $source = explode('/', $identity['address'] ?? '')[0];
@@ -528,6 +650,13 @@ class ServiceController extends ApiControllerBase
             }
             $ownership = WireGuard::create($id, $identity, $relay);
             $ownership['dnsPort'] = $dnsPort;
+            if ($provider !== '') {
+                $ownership['provider'] = $provider;
+            }
+            if ($location !== '') {
+                $ownership['providerLocation'] = $location;
+                $ownership['providerServer'] = $relay['name'];
+            }
             if (isset($identity['accountBinding'])) {
                 $ownership['accountBinding'] = $identity['accountBinding'];
             }
@@ -544,6 +673,7 @@ class ServiceController extends ApiControllerBase
     {
         return $this->respond(fn () => Operations::exclusive(function () {
             $name = $this->name();
+            $provider = VpnProviders::validate($this->input('provider', 32, 'other'));
             $id = $this->input('gateway', 64);
             $dns = trim($this->input('dns', 64));
             $gateway = NativeVpn::gateways()[$id] ?? null;
@@ -552,7 +682,7 @@ class ServiceController extends ApiControllerBase
                 in_array($dns, ['0.0.0.0', '255.255.255.255'], true)) {
                 throw new \DomainException('Choose a configured tunnel gateway and enter its IPv4 DNS resolver.');
             }
-            return Operations::change(function (BlankVpn $model) use ($name, $id, $dns, $gateway) {
+            return Operations::change(function (BlankVpn $model) use ($name, $id, $dns, $gateway, $provider) {
                 foreach (Policy::routes($model) as $existing) {
                     if (($existing['interface'] ?? '') === $gateway['interface']) {
                         throw new \DomainException('This tunnel interface already has an exit.');
@@ -561,6 +691,7 @@ class ServiceController extends ApiControllerBase
                 $port = Resolver::freePort(Policy::routes($model));
                 $node = $model->nativeRoutes->route->add();
                 $node->name = $name;
+                $node->provider = $provider;
                 $node->gatewayId = $id;
                 $node->gatewayName = $gateway['gateway'];
                 $node->device = $gateway['interface'];
@@ -1102,31 +1233,58 @@ class ServiceController extends ApiControllerBase
             $id = $this->input('id', 64);
             $name = $this->name();
             $domains = SmartRouting::domains($this->input('domains', SmartRouting::MAX_DOMAIN_BYTES));
-            $profileId = $this->input('profile', 80);
-            return Operations::change(function (BlankVpn $model) use ($id, $name, $domains, $profileId) {
-                $services = SmartRouting::services($model);
-                if ($id !== '' && !isset($services[$id])) {
-                    throw new \DomainException('This Multi-Path list no longer exists.');
-                }
-                if ($id === '' && count($services) >= SmartRouting::MAX_SERVICES) {
-                    throw new \DomainException('Remove an existing service before adding another.');
-                }
-                if ($profileId !== '') {
+            return $this->saveDomainList($id, $this->input('profile', 80), $name, $domains);
+        }), true, true);
+    }
+
+    public function setServiceDestinationAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $id = $this->input('id', 64);
+            if ($id === '') {
+                throw new \DomainException('Choose a saved Multi-Path list.');
+            }
+            return $this->saveDomainList($id, $this->input('profile', 80));
+        }), true, true);
+    }
+
+    private function saveDomainList(string $id, string $profileId, ?string $name = null, ?array $domains = null): array
+    {
+        return Operations::change(function (BlankVpn $model) use ($id, $name, $domains, $profileId) {
+            $services = SmartRouting::services($model);
+            $previous = $services[$id] ?? null;
+            if ($id !== '' && $previous === null) {
+                throw new \DomainException('This Multi-Path list no longer exists.');
+            }
+            if ($id === '' && count($services) >= SmartRouting::MAX_SERVICES) {
+                throw new \DomainException('Remove an existing service before adding another.');
+            }
+            $domains ??= $previous['domains'];
+            if ($profileId !== '') {
+                $bypass = $profileId === SmartRouting::BYPASS;
+                $sameMode = array_filter(SmartRouting::boundServices($services), static fn (array $service): bool =>
+                    ($service['profile'] === SmartRouting::BYPASS) === $bypass);
+                SmartRouting::checkOverlap($sameMode, $id, $domains);
+                if (!$bypass) {
                     $profileId = $this->resolveProxyChoice($model, $profileId);
-                    SmartRouting::checkOverlap(SmartRouting::boundServices($services), $id, $domains);
                     $profile = Policy::routes($model)[$profileId] ?? [];
                     if ($profile === [] || !SmartRouting::canResolve($profile) || !self::routeConfigured($profile)) {
-                        throw new \DomainException('Select a configured VPN or proxy exit with DNS support.');
+                        throw new \DomainException('Select a configured VPN or proxy server with DNS support.');
                     }
                 }
-                $node = $id === '' ? $model->services->service->add() : $model->services->service->getChild($id);
+            }
+            $node = $id === '' ? $model->services->service->add() : $model->services->service->getChild($id);
+            if ($name !== null) {
                 $node->name = $name;
                 $node->domains = implode(',', $domains);
-                $node->profile = $profileId;
-                return ['reload' => Policy::settings($model)['enabled'] &&
-                    ($profileId !== '' || ($services[$id]['profile'] ?? '') !== '')];
-            });
-        }), true, true);
+            }
+            $node->profile = $profileId;
+            $settings = Policy::effectiveRouting($model);
+            $current = ['profile' => $profileId, 'domains' => $domains];
+            $changed = $profileId !== ($previous['profile'] ?? '') || $domains !== ($previous['domains'] ?? []);
+            $active = SmartRouting::active($settings, array_filter([$previous, $current]));
+            return ['reload' => $changed && $active];
+        });
     }
 
     public function removeServiceAction()
@@ -1138,7 +1296,7 @@ class ServiceController extends ApiControllerBase
                 if ($service === null || !$model->services->service->del($id)) {
                     throw new \DomainException('This Multi-Path list no longer exists.');
                 }
-                return ['reload' => Policy::settings($model)['enabled'] && $service['profile'] !== ''];
+                return ['reload' => SmartRouting::active(Policy::effectiveRouting($model), [$service])];
             });
         }), true, true);
     }

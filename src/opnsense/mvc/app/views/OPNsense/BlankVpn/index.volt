@@ -28,8 +28,19 @@
     </div>
     <ul id="bv-warnings" class="alert alert-warning bv-warnings" hidden></ul>
 
-    <section id="bv-tunnels" data-bv-panel="vpns" aria-labelledby="bv-vpn-title">
+    <section id="bv-tunnels" data-bv-panel="vpns" aria-labelledby="bv-vpn-page-title">
         <section class="bv-panel" data-manage-only>
+            <h2 id="bv-vpn-page-title">VPN Login</h2>
+            <form id="bv-provider-picker" class="bv-inline-form">
+                <label>VPN service
+                    <select id="bv-provider" class="form-control" required>
+                        <option value="mullvad">Mullvad</option>
+                    </select>
+                </label>
+                <button type="submit" class="btn btn-primary">Apply</button>
+            </form>
+        </section>
+        <section class="bv-panel" id="bv-mullvad-provider" data-manage-only>
             <div class="bv-heading">
                 <h2 id="bv-vpn-title">Mullvad VPN</h2>
                 <div class="bv-actions">
@@ -49,7 +60,7 @@
                         maxlength="23" placeholder="16-digit account number" required>
                     <button id="bv-inspect-account" type="submit" class="btn btn-primary">Sign in</button>
                 </div>
-                <label class="bv-check bv-save-login"><input id="bv-save-login" type="checkbox"> Save login on this router</label>
+                <label class="bv-check bv-save-login"><input id="bv-save-login" type="checkbox" checked> Save login on this router</label>
             </form>
             <div id="bv-account-status" class="bv-account-status" role="status" aria-live="polite"></div>
 
@@ -79,6 +90,78 @@
                 </div>
             </form>
         </section>
+        <section id="bv-provider-panel" class="bv-panel" data-manage-only hidden>
+            <div class="bv-heading">
+                <h2 id="bv-provider-title"></h2>
+                <button id="bv-provider-logout" type="button" class="btn btn-default" hidden>Sign out</button>
+            </div>
+            <p><a id="bv-provider-guide" target="_blank" rel="noopener noreferrer">Provider setup guide</a></p>
+            <p id="bv-provider-status" role="status"></p>
+            <form id="bv-provider-login" hidden>
+                <div class="bv-fields">
+                    <label id="bv-provider-user-field">PIA username
+                        <input id="bv-provider-user" type="text" maxlength="32" autocomplete="off" class="form-control">
+                    </label>
+                    <label><span id="bv-provider-secret-label">Access token</span>
+                        <input id="bv-provider-secret" type="password" maxlength="512" autocomplete="off" class="form-control" required>
+                    </label>
+                </div>
+                <button type="submit" class="btn btn-primary">Sign in and save</button>
+            </form>
+            <form id="bv-provider-server-form" hidden>
+                <div class="bv-fields">
+                    <label id="bv-provider-country-field">Country code
+                        <input id="bv-provider-country" type="text" maxlength="2" pattern="[A-Za-z]{2}" placeholder="Optional, e.g. JP" class="form-control">
+                    </label>
+                    <label>Server
+                        <select id="bv-provider-server" class="form-control" required></select>
+                    </label>
+                    <label>Tunnel name
+                        <input id="bv-provider-name" type="text" maxlength="64" placeholder="Defaults to server name" class="form-control">
+                    </label>
+                </div>
+                <div class="bv-actions">
+                    <button id="bv-provider-reload" type="button" class="btn btn-default">Load servers</button>
+                    <button id="bv-provider-save" type="submit" class="btn btn-primary" disabled>Save server</button>
+                </div>
+                <p id="bv-provider-server-status" class="text-muted" role="status"></p>
+            </form>
+            <details id="bv-provider-manual">
+                <summary>Use a VPN configuration</summary>
+                <form id="bv-provider-import">
+                    <div class="bv-fields">
+                        <label>Tunnel name
+                            <input id="bv-import-name" type="text" maxlength="64" class="form-control" required>
+                        </label>
+                        <label>WireGuard file
+                            <input id="bv-import-file" type="file" accept=".conf,.txt" class="form-control">
+                        </label>
+                        <label>IPv4 DNS override
+                            <input id="bv-import-dns" type="text" maxlength="128" class="form-control">
+                        </label>
+                    </div>
+                    <label>WireGuard configuration
+                        <textarea id="bv-import-config" maxlength="16384" rows="5" spellcheck="false" class="form-control bv-config-text" required></textarea>
+                    </label>
+                    <button type="submit" class="btn btn-primary">Import WireGuard</button>
+                </form>
+                <form id="bv-provider-native">
+                    <p class="text-muted">For OpenVPN or an existing WireGuard tunnel, configure it in OPNsense and assign it an IPv4 gateway.</p>
+                    <div class="bv-fields">
+                        <label>Tunnel name
+                            <input id="bv-native-name" type="text" maxlength="64" class="form-control" required>
+                        </label>
+                        <label>OPNsense VPN gateway
+                            <select id="bv-native-gateway" class="form-control" required></select>
+                        </label>
+                        <label>Tunnel IPv4 DNS
+                            <input id="bv-native-dns" type="text" maxlength="64" class="form-control" required>
+                        </label>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Add tunnel</button>
+                </form>
+            </details>
+        </section>
         <section class="bv-panel" aria-label="Saved VPN tunnels">
             <h2>VPN tunnels</h2>
             <div class="bv-scroll">
@@ -86,7 +169,7 @@
                     <thead>
                         <tr>
                             <th scope="col">Profile</th>
-                            <th scope="col">Server</th>
+                            <th scope="col">VPN service and server</th>
                             <th scope="col">Tunnel</th>
                             <th scope="col">Latest handshake</th>
                             <th scope="col">Observed status</th>
@@ -370,13 +453,13 @@
                 <label>List name
                     <input id="bv-service-name" class="form-control" type="text" maxlength="64" required>
                 </label>
-                <label>Route through
+                <label>Destination
                     <select id="bv-service-profile" class="form-control"></select>
                 </label>
             </div>
             <label>Domains
                 <textarea id="bv-service-domains" class="form-control bv-config-text" rows="7" maxlength="131072"
-                    placeholder="netflix.com&#10;*.nflxvideo.net" spellcheck="false" required></textarea>
+                    placeholder="netflix.com&#10;*.nflxvideo.net&#10;*.cn" spellcheck="false" required></textarea>
             </label>
             <div class="bv-actions bv-file-actions">
                 <label>Import or replace from file
@@ -385,7 +468,7 @@
                 <button id="bv-download-domains" type="button" class="btn btn-default" disabled>Download list</button>
             </div>
             <p id="bv-domain-file-status" class="text-muted" role="status"></p>
-            <p class="text-muted">Enter domains one per line or separated by commas. A domain includes its subdomains.
+            <p class="text-muted">Enter domains one per line or separated by commas. A domain includes its subdomains. Use .cn or *.cn for every domain ending in .cn.
                 Save a list now and choose a server when it’s ready.</p>
             <div class="bv-actions">
                 <button id="bv-save-service" type="submit" class="btn btn-primary">Save list</button>

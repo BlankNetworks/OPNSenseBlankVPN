@@ -42,8 +42,8 @@ final class ProxyRuntime
     public static function assignedRoutes(BlankVpn $model): array
     {
         $settings = Policy::effectiveRouting($model);
-        $services = SmartRouting::boundServices(SmartRouting::services($model));
-        $selected = SmartRouting::active($settings, $services) ? array_column($services, 'profile') : [];
+        $services = SmartRouting::activeServices($settings, SmartRouting::services($model));
+        $selected = array_column($services, 'profile');
         if ($settings['coverage'] === 'network') {
             if ($settings['networkMode'] === 'full') {
                 $selected[] = $settings['networkProfile'];

@@ -75,15 +75,28 @@ Open the **Tailscale Settings** tab to see the router’s Tailscale address, its
 
 Choose **Tailscale address** and save to use the router’s MagicDNS hostname and add it to the OPNsense WebGUI’s allowed hostnames. The dashboard also shows the direct Tailscale IP. The package detects and allows the MagicDNS hostname during an upgrade when Tailscale access was already selected. Use the WebGUI’s existing HTTPS certificate settings. The `blankvpn.local` name uses link-local Bonjour for home access. [MagicDNS](https://tailscale.com/docs/features/magicdns)
 
-## Enable a Mullvad server
+## VPN Login
+
+Choose a service and select **Apply** to open its setup. For account-based services, sign in over HTTPS and save a server. Your saved login belongs to your WebGUI user and stays on the router when you choose a different service or upgrade the plug-in. **Sign out** removes the saved login for that service. Saved tunnels stay available until you remove them. Credentials are kept in private router files outside the OPNsense configuration export. Provider tokens can expire or be revoked.
+
+| Service | Setup in Blank VPN |
+| --- | --- |
+| AzireVPN | Use an [AzireVPN API token](https://www.azirevpn.com/docs/api/tokens) with access to your account and IP allocations. Load locations and save a WireGuard server. |
+| Mullvad | Use your account number and select a server. |
+| NordVPN | Generate a [NordVPN router login token](https://support.nordvpn.com/hc/en-us/articles/45535038276753-How-to-generate-a-NordVPN-login-token-to-connect-to-a-VPN-server-on-a-router). Load NordLynx recommendations, optionally using a two-letter country code. The fixed tunnel address allows one Blank VPN-managed NordLynx tunnel at a time. |
+| Private Internet Access | Use your PIA username and password, then choose a region. Blank VPN generates a local WireGuard key and registers it with the selected region. PIA can expire the registration after inactivity or server restart. Re-add the tunnel if needed. [PIA manual connections](https://github.com/pia-foss/manual-connections) |
+| AirVPN, hide.me, IVPN, OVPN, Proton VPN, Windscribe | Generate a compatible WireGuard profile in the provider portal, then use **Import WireGuard**. You can also attach an existing OPNsense VPN gateway. |
+| ExpressVPN, VyprVPN, Other VPN | Attach a compatible OpenVPN or WireGuard tunnel that is configured in OPNsense and has an assigned IPv4 gateway. Use the provider setup guide in the picker. |
+
+VPN and proxy servers appear together in **Network Settings**, grouped alphabetically by service or proxy core. Devices can use different servers at the same time.
+
+### Enable a Mullvad server
 
 1. Open **VPN Login**, enter your Mullvad account number, and sign in. Select **Save login on this router** to restore sign-in in future WebGUI sessions. The router stores the account number in a private file scoped to your WebGUI user, outside the OPNsense configuration export.
 2. Pick a country, city, and server, then choose **Use server**. The tunnel is available for routing immediately. Disable an unused Mullvad server to pause its tunnel and keep its registration. For the first tunnel on the account, Blank VPN generates a local WireGuard key and registers its public key with Mullvad.
 3. To change locations, select a new server. Blank VPN reuses the router’s registration. Blank VPN automatically reuses an available registration from a tunnel with no routing assignments. Free a tunnel first if all existing tunnels are assigned.
 
 The router retains the registration key in private storage across upgrades and tunnel removal. Existing Mullvad tunnels from earlier releases stay available. Mullvad allows up to five registered devices per account. [Mullvad device limits](https://mullvad.net/en/help/using-mullvad-vpn-app#too-many-devices)
-
-VPN Login offers Mullvad. Existing VPN tunnels saved with earlier releases remain available for routing. Use HTTPS to open the dashboard before signing in.
 
 ### Test servers
 
@@ -138,9 +151,13 @@ Test the public IPv4 from the peer, verify local management access, then test wi
 
 ## Route Netflix or another service
 
-1. Open **Multi-Path Settings**. Choose the Netflix preset, paste your own domains, or load a plain-text or comma-separated file. Each list accepts up to 1,000 unique domains and 128 KiB of input. Enter domains on separate lines or separated by commas. Lines may include `#` comments. Both `netflix.com` and `*.netflix.com` cover the apex and its subdomains.
+1. Open **Multi-Path Settings**. Choose the Netflix preset, paste your own domains, or load a plain-text or comma-separated file. Each list accepts up to 1,000 unique domains and 128 KiB of input. Enter domains on separate lines or separated by commas. Lines may include `#` comments. Both `netflix.com` and `*.netflix.com` cover the apex and its subdomains. Use `.cn` or `*.cn` to match the entire `.cn` top-level domain, including `example.cn` and `service.example.com.cn`.
 2. Save the list with an exit selected, or leave it unassigned and edit it later. An unassigned list adds no DNS or firewall rules. Edit any list to replace the domains from a file, change its exit, or download the editor contents as a text file.
 3. Choose **Multi-Path** under **Whole-Network coverage** on the **Network Settings** page, or enable Multi-Path for selected interfaces under **More routing options** and assign the Multi-Path mode to devices. Use ordinary DNS on the managed interface. Restart the test application and refresh its DNS cache. Check the learned address count and confirm the expected path from the client.
+
+Use the **Destination** dropdown beside a saved list and choose **Save** to switch servers without editing its domains. Reopen the application or start a new connection and refresh its DNS cache to verify the change.
+
+Choose **Bypass (regular internet)** for domains that should follow the normal OPNsense policy while **Whole-Network coverage → Use one VPN or proxy** is enabled. Bypass uses the native resolver and takes effect when DNS learns the destination IP. The Whole-Network Kill Switch also covers bypassed destinations if the tunnel goes offline.
 
 Multi-Path forwards matching DNS through the chosen tunnel and uses the regular resolver for other names. Learned IPv4 destinations use the VPN and learned IPv6 destinations are blocked. When the exit is unavailable, known destinations are blocked. Multi-Path classifies DNS-observed IPs. Shared IPs, existing connections, encrypted DNS, HTTPS record address hints, and endpoints obtained without an observed DNS lookup can affect which connections match. If two services learn the same destination IP, the first saved service rule has precedence. Learned entries are aged out after about a day and relearned from DNS. Mullvad exit IPs may be blocked by Netflix. [Mullvad Netflix guidance](https://mullvad.net/en/help/watching-netflix-with-split-tunneling)
 

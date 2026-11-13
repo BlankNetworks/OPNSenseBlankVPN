@@ -1,6 +1,6 @@
 <model>
     <mount>//OPNsense/BlankVpn</mount>
-    <version>1.9.0</version>
+    <version>1.10.0</version>
     <description>Blank VPN configuration and native object ownership</description>
     <items>
         <settings>
@@ -33,6 +33,7 @@
         <nativeRoutes>
             <route type="ArrayField">
                 <name type="TextField"><Required>Y</Required></name>
+                <provider type="TextField"/>
                 <gatewayId type="TextField"><Required>Y</Required></gatewayId>
                 <gatewayName type="TextField"><Required>Y</Required></gatewayName>
                 <logicalInterface type="TextField"><Required>Y</Required></logicalInterface>

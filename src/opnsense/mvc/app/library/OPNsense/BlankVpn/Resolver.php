@@ -33,8 +33,7 @@ final class Resolver
     public static function reconcile(BlankVpn $model): void
     {
         $settings = Policy::effectiveRouting($model);
-        $services = SmartRouting::boundServices(SmartRouting::services($model));
-        $smart = SmartRouting::active($settings, $services);
+        $services = SmartRouting::activeServices($settings, SmartRouting::services($model));
         $wanted = [];
         if ($settings['enabled']) {
             $hostname = $settings['hostname'];
@@ -60,8 +59,15 @@ final class Resolver
                 $upstreams = array_map(static fn ($ip) => "server={$ip}@{$source}", SmartRouting::profileDns($profile));
                 $wanted[$port] = self::configuration($port, $hostname, $host, $upstreams);
             }
-            if ($smart) {
-                $upstreams = ['server=127.0.0.1#53', ...SmartRouting::dnsDirectives($services, $profiles)];
+            if ($services !== []) {
+                $default = 'server=127.0.0.1#53';
+                if (SmartRouting::usesBypass($settings)) {
+                    $profile = $profiles[$settings['networkProfile']] ?? [];
+                    // Use the same tunnel resolver as Whole-Network coverage for all other queries.
+                    $dnsPort = (int)($profile['dnsPort'] ?? 0);
+                    $default = isset($wanted[$dnsPort]) ? 'server=127.0.0.1#' . $dnsPort : '';
+                }
+                $upstreams = [...($default === '' ? [] : [$default]), ...SmartRouting::dnsDirectives($services, $profiles)];
                 $wanted[SmartRouting::PORT] = self::configuration(SmartRouting::PORT, $hostname, $host, $upstreams, true);
             }
         }

@@ -152,7 +152,13 @@ namespace {
     rejectRouting(fn () => SmartRouting::domains(implode("\n", [...$largeList, 'extra.example.com'])));
     checkRouting(SmartRouting::matches('a.b.netflix.com', 'netflix.com'), 'Match multiple subdomain levels.');
     checkRouting(!SmartRouting::matches('fakenetflix.com', 'netflix.com'), 'Require a DNS label boundary.');
-    foreach (['com', 'http://netflix.com', '*foo.netflix.com', '127.0.0.1', 'opnsense.home.arpa', 'x.local'] as $invalid) {
+    $china = SmartRouting::domains(".CN, *.cn.\n.cn");
+    checkRouting($china === ['.cn'] && SmartRouting::domains(implode("\n", $china)) === $china,
+        'Top-level suffixes must deduplicate and survive saving and reloading.');
+    checkRouting(SmartRouting::matches('sub.example.cn', '.cn') &&
+        !SmartRouting::matches('example.cn.com', '.cn') && !SmartRouting::matches('examplecn', '.cn'),
+        'Match only the final DNS label for a top-level suffix.');
+    foreach (['com', '.arpa', '*.local', '*.localhost', '*.*.cn', 'http://netflix.com', '*foo.netflix.com', '127.0.0.1', 'opnsense.home.arpa', 'x.local'] as $invalid) {
         rejectRouting(fn () => SmartRouting::domains($invalid));
     }
     $service = ['id' => 'streaming', 'name' => 'Netflix', 'profile' => 'jp', 'domains' => $domains];
@@ -163,6 +169,13 @@ namespace {
     rejectRouting(fn () => SmartRouting::checkOverlap(
         ['child' => array_replace($service, ['domains' => ['a.netflix.com']])], '', ['netflix.com']
     ));
+
+    $chinaService = ['china' => array_replace($service, ['id' => 'china', 'domains' => $china])];
+    rejectRouting(fn () => SmartRouting::checkOverlap($chinaService, '', ['example.cn']));
+    rejectRouting(fn () => SmartRouting::checkOverlap(
+        ['child' => array_replace($service, ['domains' => ['example.cn']])], '', $china
+    ));
+    SmartRouting::checkOverlap($chinaService, '', ['example.cn.com']);
 
     $table = SmartRouting::table($service);
     checkRouting(strlen($table) <= 31, 'PF table name must fit the native limit.');
@@ -183,6 +196,9 @@ namespace {
     checkRouting(!Firewall::probePathInstalled($profiles['jp'], $loaded), 'A manual exit test requires a fallback guard.');
     $loaded[$probe . '_block'] = ['action' => 'block', 'source' => '10.64.0.9'];
     checkRouting(Firewall::probePathInstalled($profiles['jp'], $loaded), 'A protected source may test its configured exit.');
+    checkRouting(SmartRouting::dnsDirectives($chinaService, $profiles) === [
+        'ipset=/cn/' . SmartRouting::table($chinaService['china']), 'server=/cn/10.64.0.1@10.64.0.9'
+    ], 'Compile a top-level suffix to label-boundary DNS learning and tunnel forwarding.');
     $directives = SmartRouting::dnsDirectives($services, $profiles);
     checkRouting(in_array('ipset=/netflix.com/' . $table, $directives, true), 'Learn from apex and wildcard DNS.');
     checkRouting(in_array('server=/nflxvideo.net/10.64.0.1@10.64.0.9', $directives, true), 'Send matched DNS through the chosen tunnel source.');
@@ -226,6 +242,30 @@ namespace {
         isset($wholeDown->rules[Policy::marker('kill', 'network:lan')],
             $wholeDown->rules[Policy::marker('kill_v6', 'network:lan')]) && $wholeDown->nat === [],
         'A VPN outage under Whole-Network coverage blocks both address families without WAN fallback.');
+    $bypassList = ['china' => array_replace($chinaService['china'], ['profile' => SmartRouting::BYPASS])];
+    $bypassTable = SmartRouting::bypassTable($bypassList);
+    checkRouting(SmartRouting::activeServices($networkSettings, $bypassList + $services) === $bypassList &&
+        SmartRouting::activeServices($settings, $bypassList + $services) === $services,
+        'Only bypass lists are active under one-server network coverage.');
+    checkRouting(SmartRouting::dnsDirectives($bypassList, $profiles) === [
+        'ipset=/cn/' . $bypassTable, 'server=/cn/127.0.0.1#53'
+    ], 'Learn bypass destinations from the native resolver.');
+    $withBypass = new Plugin();
+    $network->invoke(null, $withBypass, $networkSettings, $interfaces, $profiles, [], false, $bypassTable);
+    $tag = $withBypass->rules[Policy::marker('bypass', 'network:lan')];
+    $vpn = $withBypass->rules[Policy::marker('device', 'network:lan')];
+    $guard = $withBypass->rules[Policy::marker('kill', 'network:lan')];
+    checkRouting($tag['type'] === 'match' && !$tag['quick'] && $tag['priority'] < $vpn['priority'] &&
+        $tag['to'] === '<' . $bypassTable . '>' && $tag['to_not'] && $tag['tag'] === $vpn['tagged'] &&
+        $tag['tag'] === $guard['tagged'] && count($withBypass->dns) === 2 &&
+        $withBypass->dns[0]['local-port'] === (string)SmartRouting::PORT,
+        'Bypass traffic follows native policy and both DNS families use the split resolver.');
+    $withBypassDown = new Plugin();
+    $network->invoke(null, $withBypassDown, $networkSettings, $interfaces, $profiles,
+        ['jp' => ['reachable' => false]], false, $bypassTable);
+    checkRouting(!isset($withBypassDown->rules[Policy::marker('bypass', 'network:lan')]) &&
+        !isset($withBypassDown->rules[Policy::marker('kill', 'network:lan')]['tagged']) &&
+        $withBypassDown->dns === [], 'An outage installs a kill switch that covers previously bypassed destinations.');
     $wholeFallback = new Plugin();
     $network->invoke(null, $wholeFallback, $networkSettings + ['networkKillSwitch' => false],
         $interfaces, $profiles, ['jp' => ['reachable' => false]]);

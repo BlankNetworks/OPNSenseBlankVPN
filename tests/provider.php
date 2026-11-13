@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/Mullvad.php';
+require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/VpnProviders.php';
 
 use OPNsense\BlankVpn\Mullvad;
+use OPNsense\BlankVpn\VpnProviders;
 
 final class FixtureMullvad extends Mullvad
 {
@@ -99,6 +101,28 @@ function expectFailure(callable $operation, string $message): void
     }
     throw new RuntimeException('Expected error: ' . $message);
 }
+
+$fixtureKey = base64_encode(str_repeat('k', 32));
+$azire = VpnProviders::azireServers(['locations' => [
+    ['name' => 'se-sto', 'pool' => 'se-sto.azirevpn.net', 'city' => 'Stockholm', 'country' => 'Sweden', 'pubkey' => $fixtureKey],
+    ['name' => 'malformed', 'pool' => 'azirevpn.net.invalid', 'pubkey' => $fixtureKey]
+]]);
+check(array_keys($azire) === ['se-sto'] && $azire['se-sto']['port'] === 51820, 'AzireVPN locations must use provider endpoints.');
+$nord = VpnProviders::nordServers([
+    ['hostname' => 'jp100.nordvpn.com', 'station' => '8.8.4.4', 'status' => 'online', 'name' => 'Japan #100',
+        'technologies' => [['id' => 35, 'metadata' => [['name' => 'public_key', 'value' => $fixtureKey]]]]],
+    ['hostname' => 'jp101.nordvpn.com', 'station' => '10.0.0.1', 'status' => 'online']
+]);
+check(array_keys($nord) === ['jp100.nordvpn.com'] && $nord['jp100.nordvpn.com']['publicKey'] === $fixtureKey,
+    'NordLynx recommendations must include a usable WireGuard public key and public endpoint.');
+$pia = VpnProviders::piaServers(['regions' => [
+    ['id' => 'us_chicago', 'name' => 'Chicago', 'country' => 'US', 'servers' => [
+        'wg' => [['cn' => 'invalid.example', 'ip' => '8.8.8.8'], ['cn' => 'chicago001', 'ip' => '8.8.4.4']]
+    ]]
+]]);
+check(array_keys($pia) === ['us_chicago'] && $pia['us_chicago']['cn'] === 'chicago001',
+    'PIA regions must use the certificate name of a listed WireGuard endpoint.');
+expectFailure(fn () => VpnProviders::validate('express', true), 'supported VPN service');
 
 $directory = sys_get_temp_dir() . '/blank-vpn-test-' . bin2hex(random_bytes(8));
 $provider = new FixtureMullvad($directory);

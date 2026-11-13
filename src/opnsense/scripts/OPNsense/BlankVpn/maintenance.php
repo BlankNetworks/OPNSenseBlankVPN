@@ -41,7 +41,9 @@ try {
             echo "ok\n";
             break;
         case 'smart_status':
-            echo json_encode((object)SmartRouting::countLearned(SmartRouting::services(new BlankVpn())), JSON_THROW_ON_ERROR), "\n";
+            $model = new BlankVpn();
+            echo json_encode((object)SmartRouting::countLearned(Policy::effectiveRouting($model),
+                SmartRouting::services($model)), JSON_THROW_ON_ERROR), "\n";
             break;
         case 'reset_ip':
             $ip = $argv[2] ?? '';
@@ -98,9 +100,7 @@ try {
                 Resolver::reconcile($model);
                 if (gmdate('i') === '00') {
                     $services = SmartRouting::services($model);
-                    if (SmartRouting::active($settings, $services)) {
-                        SmartRouting::expire($services);
-                    }
+                    SmartRouting::expire($settings, $services);
                     try {
                         (new Mullvad())->relays();
                     } catch (Throwable) {
@@ -170,13 +170,21 @@ try {
                         Operations::resetOutageStates($settings, $assignments, $beforeOutage, $after);
                     }
                     $segments = [];
-                    if ($settings['coverage'] === 'network' && $settings['networkMode'] === 'full') {
+                    $bypassOutages = [];
+                    if (SmartRouting::usesBypass($settings)) {
                         foreach ($settings['interfaces'] as $interface) {
                             $marker = Policy::marker('device', 'network:' . $interface);
-                            if (($loaded[$marker] ?? null) !== ($after[$marker] ?? null)) {
+                            $bypassMarker = Policy::marker('bypass', 'network:' . $interface);
+                            $hadBypass = ($loaded[$bypassMarker]['action'] ?? '') === 'match';
+                            if ($settings['networkKillSwitch'] && $hadBypass && empty($after[$marker]['gateway'])) {
+                                $bypassOutages[] = $interface;
+                            } elseif (($loaded[$marker] ?? null) !== ($after[$marker] ?? null)) {
                                 $segments[] = $interface;
                             }
                         }
+                    }
+                    foreach (Policy::segmentNetworks($bypassOutages) as $network) {
+                        Operations::resetKillSwitch($network);
                     }
                     if ($segments !== []) {
                         try {

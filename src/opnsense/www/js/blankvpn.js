@@ -10,6 +10,8 @@
 
         const modes = {full: 'Use one VPN or proxy', multi: 'Multi-Path', disabled: 'Off', blocked: 'Blocked'};
         const insecureWebGui = window.location.protocol === 'http:';
+        const bypassDestination = 'bypass';
+        const serviceOrder = new Intl.Collator(undefined, {sensitivity: 'base', numeric: true});
         const maxDomainBytes = 131072;
         const state = {
             profiles: [],
@@ -24,6 +26,12 @@
             proxyCores: {},
             canManageCores: false,
             section: 'vpns',
+            provider: 'mullvad',
+            vpnProviders: {},
+            providerAccounts: {},
+            nativeGateways: [],
+            providerLocations: new Map(),
+            serviceDestinations: new Map(),
             mullvadSignedIn: false,
             presets: {},
             editingService: null,
@@ -83,8 +91,8 @@
 
         async function api(action, payload, path = '', controller = 'service') {
             const method = payload === undefined ? 'GET' : 'POST';
-            if (insecureWebGui && ['addProxyNode', 'addSubscription', 'importProxies'].includes(action)) {
-                throw new Error('Open the OPNsense WebGUI over HTTPS before submitting proxy settings.');
+            if (insecureWebGui && ['addProxyNode', 'addSubscription', 'importProxies', 'providerLogin', 'importProfile'].includes(action)) {
+                throw new Error('Open the OPNsense WebGUI over HTTPS before submitting credentials or configuration files.');
             }
             const request = {
                 url: '/api/blankvpn/' + controller + '/' + action + path,
@@ -238,9 +246,99 @@
             select.value = choices.some((choice) => choice.value === previous) ? previous : '';
         }
 
+        function providerName(profile) {
+            if (profile.kind === 'proxy') {
+                const core = {mihomo: 'Mihomo', xray: 'Xray', 'sing-box': 'sing-box'}[profile.core];
+                return core ? core + ' proxies' : 'Proxy servers';
+            }
+            return state.vpnProviders[profile.provider]?.name || (profile.relay ? 'Mullvad' : 'Other VPN');
+        }
+
+        function compareServers(a, b) {
+            return serviceOrder.compare(providerName(a), providerName(b))
+                || serviceOrder.compare(a.name || a.id, b.name || b.id);
+        }
+
         function exitChoice(profile) {
-            return {value: profile.id, label: profile.name || profile.relay || profile.id,
-                group: profile.kind === 'proxy' ? 'Proxy servers' : 'VPN tunnels'};
+            return {value: profile.id, label: profile.name || profile.relay || profile.id, group: providerName(profile)};
+        }
+
+        function renderProvider() {
+            const provider = state.provider;
+            const details = state.vpnProviders[provider];
+            const mullvad = provider === 'mullvad';
+            const signedIn = state.providerAccounts[provider] === true && !insecureWebGui;
+            const supportedLogin = Boolean(details?.login);
+            const password = details?.login === 'password';
+            const nodes = byId('provider-panel');
+            byId('mullvad-provider').hidden = !mullvad;
+            nodes.hidden = mullvad || !details;
+            if (nodes.hidden) {
+                return;
+            }
+            byId('provider-title').textContent = details.name;
+            const guide = byId('provider-guide');
+            guide.parentElement.hidden = !details.guide;
+            guide.href = details.guide || '#';
+            byId('provider-login').hidden = signedIn || insecureWebGui || !supportedLogin;
+            byId('provider-user-field').hidden = !password;
+            byId('provider-user').required = password;
+            byId('provider-secret-label').textContent = password ? 'PIA password'
+                : provider === 'azire' ? 'AzireVPN API token' : 'NordVPN router login token';
+            byId('provider-status').textContent = supportedLogin
+                ? insecureWebGui ? 'Open the OPNsense WebGUI over HTTPS to sign in.'
+                    : signedIn ? 'Login saved on this router.' : 'Sign in to load the provider’s WireGuard servers.'
+                : 'Import a WireGuard profile or add a VPN tunnel already configured in OPNsense.';
+            byId('provider-logout').hidden = !signedIn;
+            byId('provider-server-form').hidden = !signedIn;
+            byId('provider-country-field').hidden = provider !== 'nord';
+            byId('provider-country').disabled = provider !== 'nord';
+            byId('provider-import').hidden = insecureWebGui || ['express', 'vypr'].includes(provider);
+            const saved = new Set(state.profiles.filter((item) => item.provider === provider).map((item) => item.providerLocation));
+            const current = state.providerLocations.get(provider);
+            const country = byId('provider-country').disabled ? '' : byId('provider-country').value.trim().toUpperCase();
+            const choices = current?.country === country ? current.servers.map((server) => ({
+                value: server.id, label: server.name + (saved.has(server.id) ? ' (saved)' : '')
+            })) : [];
+            options(byId('provider-server'), choices, choices.length ? 'Choose a server' : 'Load servers');
+            byId('provider-save').disabled = !byId('provider-server').value || saved.has(byId('provider-server').value);
+            options(byId('native-gateway'), state.nativeGateways.map((item) => ({
+                value: item.id, label: item.gateway + ' · ' + item.protocol
+            })), 'Choose a tunnel gateway');
+        }
+
+        async function loadProviderServers() {
+            const provider = state.provider;
+            if (provider === 'mullvad' || !state.providerAccounts[provider] || insecureWebGui) {
+                return;
+            }
+            const field = byId('provider-country');
+            if (!field.reportValidity()) {
+                return;
+            }
+            const country = field.disabled ? '' : field.value.trim().toUpperCase();
+            const reload = byId('provider-reload');
+            if (reload.disabled) {
+                return;
+            }
+            const status = byId('provider-server-status');
+            reload.disabled = true;
+            status.textContent = 'Loading servers…';
+            try {
+                const result = await api('providerServers', {provider, country});
+                const servers = array(result.servers);
+                state.providerLocations.set(provider, {country, servers});
+                if (provider === state.provider) {
+                    status.textContent = servers.length + ' servers available.';
+                    renderProvider();
+                }
+            } catch (error) {
+                if (provider === state.provider) {
+                    status.textContent = errorMessage(error, 'The server list could not be loaded.');
+                }
+            } finally {
+                reload.disabled = false;
+            }
         }
 
         function showSection(section) {
@@ -270,7 +368,8 @@
             const profile = state.profiles.find((item) => item.id === id);
             const proxy = typeof id === 'string' && id.startsWith('proxy-')
                 ? state.proxyNodes.find((item) => 'proxy-' + item.id === id) : null;
-            return profile?.name || profile?.relay || proxy?.name || (id ? 'Unavailable server' : 'Normal internet');
+            return id === bypassDestination ? 'Bypass (regular internet)'
+                : profile?.name || profile?.relay || proxy?.name || (id ? 'Unavailable server' : 'Normal internet');
         }
 
         function networkName(id) {
@@ -404,7 +503,7 @@
 
         function renderProfiles() {
             const body = byId('profile-list');
-            const vpns = state.profiles.filter((profile) => profile.kind !== 'proxy');
+            const vpns = state.profiles.filter((profile) => profile.kind !== 'proxy').sort(compareServers);
             if (!vpns.length) {
                 empty(body, 'No VPN tunnels have been added.');
             } else {
@@ -417,7 +516,7 @@
                     const services = state.services.filter((service) => service.profile === profile.id).length;
                     cell(row, profile.name || profile.relay, '', used + ' device assignment' + (used === 1 ? '' : 's')
                         + ' · ' + services + ' service' + (services === 1 ? '' : 's'));
-                    cell(row, profile.relay || profile.gateway || profile.protocol || 'Imported WireGuard', '', profile.protocol);
+                    cell(row, providerName(profile), '', profile.relay || profile.providerServer || profile.gateway || profile.protocol || 'Imported WireGuard');
                     cell(row, profile.interface, '', profile.ipv6 ? 'IPv6 configured' : '');
                     cell(row, date(profile.handshake ?? profile.latestHandshake));
                     const received = formatBytes(profile.receivedBytes ?? profile.received);
@@ -566,7 +665,7 @@
         function routingServers() {
             const activeNodes = new Set(state.profiles.map((profile) => profile.node).filter(Boolean));
             return [...state.profiles.filter((profile) => !profile.disabled), ...state.proxyNodes.filter((node) => !node.disabled && !activeNodes.has(node.id))
-                .map((node) => ({...node, id: 'proxy-' + node.id, kind: 'proxy'}))];
+                .map((node) => ({...node, id: 'proxy-' + node.id, kind: 'proxy'}))].sort(compareServers);
         }
 
         function updateCoverage() {
@@ -675,14 +774,29 @@
                 : 'dns-sd -P "Blank VPN" _https._tcp local ' + port + ' blankvpn.local ' + address;
         }
 
+        function domainDestinations(current) {
+            const choices = [
+                {value: bypassDestination, label: 'Bypass (regular internet)'},
+                ...routableExits().map(exitChoice)
+            ];
+            if (current && !choices.some((choice) => choice.value === current)) {
+                choices.push({value: current, label: 'Unavailable server'});
+            }
+            return choices;
+        }
+
         function renderServices() {
             const interfaces = state.activeSmartInterfaces;
-            const active = state.settings?.enabled && interfaces.length && state.services.some((service) => service.profile);
-            byId('smart-status').textContent = active
-                ? 'Routing matched DNS traffic on ' + interfaces.map(networkName).join(', ') + '.'
-                : 'Saved lists start routing after you choose a server and enable Multi-Path.';
-            byId('use-lan').hidden = !state.availableInterfaces.some((item) => item.id === 'lan')
-                || interfaces.includes('lan') || list(state.settings?.strictInterfaces).includes('lan');
+            const settings = state.settings;
+            const bypass = settings?.coverage === 'network' && settings.networkMode === 'full';
+            const active = settings?.enabled && interfaces.length
+                && state.services.some((service) => service.profile && service.profile !== bypassDestination);
+            byId('smart-status').textContent = bypass
+                ? 'Bypass lists use regular internet under Whole-Network coverage. The Kill Switch still applies if the server goes offline.'
+                : active ? 'Routing matched DNS traffic on ' + interfaces.map(networkName).join(', ') + '.'
+                    : 'Choose a server and enable Multi-Path to use these lists. Use Bypass with Whole-Network coverage through one VPN or proxy.';
+            byId('use-lan').hidden = bypass || !state.availableInterfaces.some((item) => item.id === 'lan')
+                || interfaces.includes('lan') || list(settings?.strictInterfaces).includes('lan');
             const body = byId('service-list');
             if (state.services.length === 0) {
                 empty(body, 'No saved domain lists.', 4);
@@ -691,11 +805,52 @@
                 for (const service of state.services) {
                     const row = body.insertRow();
                     const domains = list(service.domains);
+                    const saved = service.profile || '';
                     cell(row, service.name, '', domains.length + (domains.length === 1 ? ' domain' : ' domains'));
-                    cell(row, service.profile ? profileName(service.profile) : 'Unassigned');
+                    const destination = row.insertCell();
+                    if (state.canManage) {
+                        const form = document.createElement('form');
+                        form.className = 'bv-inline-form';
+                        const select = document.createElement('select');
+                        select.className = 'form-control';
+                        select.setAttribute('aria-label', 'Destination for ' + service.name);
+                        const current = state.serviceDestinations.get(service.id) ?? saved;
+                        options(select, domainDestinations(current), 'Leave unassigned', current);
+                        const save = document.createElement('button');
+                        save.type = 'submit';
+                        save.className = 'btn btn-default btn-sm';
+                        save.textContent = 'Save';
+                        save.setAttribute('aria-label', 'Save destination for ' + service.name);
+                        save.disabled = select.value === saved;
+                        select.addEventListener('change', () => {
+                            save.disabled = select.value === saved;
+                            if (save.disabled) {
+                                state.serviceDestinations.delete(service.id);
+                            } else {
+                                state.serviceDestinations.set(service.id, select.value);
+                            }
+                        });
+                        form.addEventListener('submit', (event) => {
+                            event.preventDefault();
+                            if (select.value !== saved) {
+                                const profile = select.value;
+                                void mutate(save, () => api('setServiceDestination', {id: service.id, profile}),
+                                    'Destination saved. Open a new connection to use the updated route.', () => {
+                                        state.serviceDestinations.delete(service.id);
+                                    }).then(() => {
+                                        save.disabled = select.value === saved;
+                                    });
+                            }
+                        });
+                        form.append(select, save);
+                        destination.append(form);
+                    } else {
+                        destination.textContent = saved ? profileName(saved) : 'Unassigned';
+                    }
                     const status = Object.entries(service.routing || {}).map(([id, rule]) =>
-                        networkName(id) + ' · ' + (rule.gateway || (rule.guard ? 'Tunnel unavailable' : 'Inactive')));
-                    cell(row, service.profile ? (status.join(' · ') || 'Inactive') : 'Saved', '',
+                        networkName(id) + ' · ' + (rule.bypass ? 'Regular internet' : rule.gateway ||
+                            (rule.guard ? 'Tunnel unavailable' : 'Inactive')));
+                    cell(row, saved ? (status.join(' · ') || 'Inactive') : 'Saved', '',
                         Number.isInteger(service.learned) ? service.learned + ' learned addresses' : '');
                     const actions = row.insertCell();
                     if (state.canManage) {
@@ -703,7 +858,8 @@
                         actions.append(button('Remove', (event) => {
                             if (window.confirm('Remove the Multi-Path list for ' + service.name + '?')) {
                                 void mutate(event.currentTarget, () => api('removeService', {id: service.id}),
-                                    'Service removed.', () => {
+                                    'Domain list removed.', () => {
+                                        state.serviceDestinations.delete(service.id);
                                         if (state.editingService === service.id) {
                                             editService();
                                         }
@@ -715,11 +871,7 @@
             }
 
             const select = byId('service-profile');
-            const choices = routableExits().map(exitChoice);
-            if (select.value && !choices.some((choice) => choice.value === select.value)) {
-                choices.push({value: select.value, label: 'Unavailable server'});
-            }
-            options(select, choices, 'Leave unassigned');
+            options(select, domainDestinations(select.value), 'Leave unassigned');
             options(byId('service-preset'), Object.keys(state.presets).map((name) => ({value: name, label: name})),
                 'Custom list');
         }
@@ -956,6 +1108,13 @@
                 state.canManageCores = data.canManageCores === true;
                 byId('core-manager').hidden = !state.canManageCores;
                 state.presets = data.servicePresets || {};
+                state.vpnProviders = data.vpnProviders || {mullvad: {name: 'Mullvad'}};
+                state.providerAccounts = data.providerAccounts || {};
+                state.nativeGateways = array(data.nativeGateways);
+                const providers = Object.entries(state.vpnProviders).map(([value, details]) => ({value, label: details.name}))
+                    .sort((a, b) => serviceOrder.compare(a.label, b.label));
+                options(byId('provider'), providers, 'Choose a VPN service', byId('provider').value || state.provider);
+                renderProvider();
                 state.settings = data.settings;
                 state.canManage = data.canManage !== false;
                 state.activeSmartInterfaces = list(data.activeSmartInterfaces || data.settings?.smartInterfaces);
@@ -1323,7 +1482,7 @@
 
         function restoreSavedLogin() {
             if (state.section === 'vpns' && state.canManage && state.mullvadLoginSaved && !state.mullvadSignedIn
-                && !state.signingIn && !state.restoreAttempted) {
+                && state.provider === 'mullvad' && !state.signingIn && !state.restoreAttempted) {
                 void inspectAccount(true);
             }
         }
@@ -1547,6 +1706,104 @@
             byId('proxy-http').hidden = false;
         }
         setMullvadSignedIn(false);
+        byId('provider-picker').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const provider = byId('provider').value;
+            if (state.busy || !state.vpnProviders[provider]) {
+                return;
+            }
+            if (provider !== state.provider) {
+                state.provider = provider;
+                for (const id of ['provider-login', 'provider-server-form', 'provider-import', 'provider-native']) {
+                    byId(id).reset();
+                }
+                byId('provider-country').value = state.providerLocations.get(provider)?.country || '';
+                byId('provider-server-status').textContent = '';
+                byId('provider-manual').open = !state.vpnProviders[provider].login;
+                byId('account').value = '';
+            }
+            renderProvider();
+            if (provider === 'mullvad') {
+                restoreSavedLogin();
+            } else if (!state.providerLocations.has(provider)) {
+                void loadProviderServers();
+            }
+        });
+        byId('provider-login').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const provider = state.provider;
+            const secret = byId('provider-secret');
+            const payload = {provider, username: byId('provider-user').value.trim(), secret: secret.value};
+            if (state.busy || insecureWebGui) {
+                return;
+            }
+            secret.value = '';
+            void mutate(event.submitter, () => api('providerLogin', payload), 'VPN login saved.', () => {
+                state.providerAccounts[provider] = true;
+                state.providerLocations.delete(provider);
+                byId('provider-login').reset();
+                renderProvider();
+                void loadProviderServers();
+            });
+        });
+        byId('provider-logout').addEventListener('click', (event) => {
+            const provider = state.provider;
+            void mutate(event.currentTarget, () => api('providerLogout', {provider}), 'Signed out. Saved tunnels can still be used.', () => {
+                state.providerAccounts[provider] = false;
+                state.providerLocations.delete(provider);
+                byId('provider-server-status').textContent = '';
+                renderProvider();
+            });
+        });
+        byId('provider-reload').addEventListener('click', () => void loadProviderServers());
+        byId('provider-country').addEventListener('input', renderProvider);
+        byId('provider-server').addEventListener('change', renderProvider);
+        byId('provider-server-form').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const provider = state.provider;
+            const payload = {
+                provider, server: byId('provider-server').value, name: byId('provider-name').value.trim(),
+                country: byId('provider-country').disabled ? '' : byId('provider-country').value.trim().toUpperCase()
+            };
+            void mutate(event.submitter, () => api('addProviderExit', payload), 'VPN server saved.', () => {
+                byId('provider-name').value = '';
+                byId('provider-server').value = '';
+            }).then(renderProvider);
+        });
+        byId('import-file').addEventListener('change', async () => {
+            const input = byId('import-file');
+            const file = input.files[0];
+            const provider = state.provider;
+            if (!file) {
+                return;
+            }
+            if (file.size > 16384) {
+                notice('Choose a WireGuard configuration under 16 KiB.', 'danger');
+                return;
+            }
+            try {
+                const config = await file.text();
+                if (state.provider === provider && input.files[0] === file) {
+                    byId('import-config').value = config;
+                }
+            } catch (error) {
+                notice(errorMessage(error, 'The configuration file could not be read.'), 'danger');
+            }
+        });
+        byId('provider-import').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const payload = {provider: state.provider, name: byId('import-name').value.trim(),
+                dns: byId('import-dns').value.trim(), config: byId('import-config').value};
+            void mutate(event.submitter, () => api('importProfile', payload), 'WireGuard tunnel saved.',
+                () => byId('provider-import').reset());
+        });
+        byId('provider-native').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const payload = {provider: state.provider, name: byId('native-name').value.trim(),
+                dns: byId('native-dns').value.trim(), gateway: byId('native-gateway').value};
+            void mutate(event.submitter, () => api('addNativeExit', payload), 'OPNsense VPN tunnel added.',
+                () => byId('provider-native').reset());
+        });
         byId('refresh-relays').addEventListener('click', () => void loadRelays(true));
         byId('country').addEventListener('change', renderRelays);
         byId('city').addEventListener('change', renderRelays);
@@ -1562,7 +1819,7 @@
                 state.loginRevision++;
                 state.mullvadLoginSaved = false;
                 state.restoreAttempted = false;
-                byId('save-login').checked = false;
+                byId('save-login').checked = true;
                 setMullvadSignedIn(false);
                 byId('account-status').textContent = '';
             });
@@ -1620,8 +1877,11 @@
                 domains: byId('service-domains').value.trim()
             };
             const message = payload.profile ? 'Domain list saved with ' + profileName(payload.profile) + '.'
-                : 'Domain list saved. Choose a server when ready.';
-            void mutate(event.submitter, () => api('saveService', payload), message, () => editService());
+                : 'Domain list saved. Choose a destination when ready.';
+            void mutate(event.submitter, () => api('saveService', payload), message, () => {
+                state.serviceDestinations.delete(payload.id);
+                editService();
+            });
         });
         byId('service-file').addEventListener('change', async (event) => {
             const input = event.currentTarget;

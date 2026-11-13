@@ -1,6 +1,5 @@
-- Tailscale setup shows the saved Disable SNAT state and explains what is blocking per-device routing.
-- The underlined Tailscale device list includes an option to look up a missing peer by its Tailscale IPv4 address and a reminder to check Disable SNAT.
-- Mullvad uses individual server selection. Previously configured tunnels stay available.
-- Saved Tailscale rules can be disabled and enabled without deleting their settings.
-- Ping on LAN and Tailscale rules checks the selected VPN or proxy and reports matching firewall traffic.
-- The red Disable VPN button is next to the routing status in Network Settings.
+- VPN Login adds a service picker and independent saved sign-ins for AzireVPN, Mullvad, NordVPN, and Private Internet Access.
+- Import compatible WireGuard profiles or attach OPNsense VPN gateways for additional providers. Routing menus group VPN and proxy servers alphabetically by service.
+- Multi-Path accepts top-level domain suffixes such as .cn and *.cn. Each saved list has its own Destination dropdown and Save button.
+- Bypass sends DNS-learned destinations through the regular OPNsense policy under Whole-Network coverage through one VPN or proxy. The Kill Switch also covers bypass destinations during an outage.
+- Provider sign-in and routing changes were exercised with fixtures. Live paid-account onboarding and forwarding still need validation on OPNsense.

@@ -58,7 +58,7 @@ final class NativeVpn
             $address = $configured ? self::sourceAddress($row['device'], $interfaces) : '';
             $routes[$id] = [
                 'id' => $id, 'kind' => 'native', 'name' => $row['name'], 'protocol' => $row['protocol'],
-                'gateway' => $row['gatewayName'], 'interface' => $row['device'],
+                'provider' => $row['provider'] ?? '', 'gateway' => $row['gatewayName'], 'interface' => $row['device'],
                 'logicalInterface' => $row['logicalInterface'], 'configured' => $configured,
                 'address' => $address, 'dnsPort' => (int)$row['dnsPort'],
                 'dns' => [$row['dns']]

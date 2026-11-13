@@ -184,6 +184,23 @@
     align-items: center;
 }
 
+#bv-provider-picker {
+    align-items: end;
+}
+
+#bv-provider-picker label {
+    margin-bottom: 0;
+}
+
+#bv-provider-manual form {
+    margin-top: 1rem;
+}
+
+#bv-service-list select {
+    width: auto;
+    max-width: 100%;
+}
+
 .blankvpn .bv-inline-form input {
     flex: 0 1 16rem;
     width: 100%;
