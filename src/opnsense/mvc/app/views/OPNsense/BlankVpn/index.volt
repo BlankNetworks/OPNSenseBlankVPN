@@ -83,30 +83,25 @@
             </form>
             <details id="bv-mullvad-batches" class="bv-advanced" hidden>
                 <summary>Manage server batches</summary>
-                <p class="text-muted">Save a city, country, or worldwide list, then choose the server to use.</p>
+                <p class="text-muted">Add every server in a city, country, or worldwide batch to VPN tunnels.</p>
                 <label>Batch to add or remove
                     <select id="bv-batch-scope" class="form-control" aria-describedby="bv-batch-status"></select>
                 </label>
                 <div class="bv-actions">
-                    <button id="bv-save-batch" type="button" class="btn btn-primary">Save and show servers</button>
+                    <button id="bv-save-batch" type="button" class="btn btn-primary">Add to VPN</button>
                     <button id="bv-remove-batch" type="button" class="btn btn-default" hidden>Remove batch</button>
-                    <button id="bv-browse-batch" type="button" class="btn btn-default" disabled>Browse servers</button>
+                    <button id="bv-browse-batch" type="button" class="btn btn-default" disabled>View in VPN tunnels</button>
                     <p id="bv-batch-status" class="text-muted" role="status"></p>
-                </div>
-                <div id="bv-batch-servers" hidden>
-                    <h3 id="bv-batch-title" tabindex="-1"></h3>
-                    <div class="bv-scroll bv-batch-table">
-                        <table class="table bv-table">
-                            <thead><tr><th scope="col">Server</th><th scope="col">Location</th><th scope="col">Actions</th></tr></thead>
-                            <tbody id="bv-batch-server-list"></tbody>
-                        </table>
-                    </div>
                 </div>
             </details>
         </section>
         <section class="bv-panel" aria-label="Saved VPN tunnels">
-            <h2>VPN tunnels</h2>
-                <div class="bv-scroll">
+            <h2 id="bv-vpn-tunnels-title" tabindex="-1">VPN tunnels</h2>
+            <label id="bv-tunnel-search-field" hidden>Find a VPN server
+                <input id="bv-tunnel-search" class="form-control" type="search" autocomplete="off">
+            </label>
+            <p id="bv-batch-servers-note" class="text-muted" hidden>Test checks reachability from the router. Use activates a server for routing.</p>
+            <div class="bv-scroll bv-vpn-table">
                 <table class="table bv-table bv-profiles">
                     <thead>
                         <tr>
@@ -311,8 +306,8 @@
                     <tbody id="bv-device-list" role="rowgroup"></tbody>
                 </table>
             </div>
-            <div id="bv-tailnet-devices" class="bv-advanced">
-                <h3>Tailscale devices</h3>
+            <details id="bv-tailnet-devices" class="bv-advanced">
+                <summary>Tailscale devices <span id="bv-tailnet-count" class="text-muted"></span></summary>
                 <p id="bv-tailnet-routing-hint" class="text-muted"></p>
                 <div class="bv-scroll">
                     <table class="table bv-table bv-devices" role="table">
@@ -321,7 +316,7 @@
                         <tbody id="bv-tailnet-device-list" role="rowgroup"></tbody>
                     </table>
                 </div>
-            </div>
+            </details>
         </section>
 
         <section id="bv-assignment" class="bv-panel" aria-labelledby="bv-assignment-title" hidden>
@@ -335,11 +330,11 @@
                     <label>Address source
                         <select id="bv-device-kind" class="form-control">
                             <option value="lan">LAN DHCP reservation</option>
-                            <option value="tailnet">Tailscale peer on a routed link</option>
+                            <option value="tailnet">Tailscale peer</option>
                         </select>
                     </label>
                     <label>IPv4 address <input id="bv-ip" type="text" class="form-control" autocomplete="off" spellcheck="false" required></label>
-                    <label>Interface
+                    <label id="bv-assignment-interface-field">Interface
                         <select id="bv-interface" class="form-control" required></select>
                     </label>
                     <label id="bv-mac-field">MAC address <input id="bv-mac" type="text" class="form-control" autocomplete="off" spellcheck="false" required></label>
@@ -366,11 +361,6 @@
                 </label>
                 <p id="bv-identity" class="text-muted"></p>
                 <p id="bv-route-note" class="text-muted"></p>
-                <label class="bv-check">
-                    <input id="bv-switch-now" type="checkbox">
-                    Reconnect affected internet sessions for this device
-                </label>
-                <p class="text-muted">Reconnecting may interrupt downloads, streams, or calls.</p>
                 <div class="bv-actions">
                     <button id="bv-save-device" type="submit" class="btn btn-primary">Save device rule</button>
                     <button id="bv-remove-assignment" type="button" class="btn btn-default" hidden>Remove assignment</button>
@@ -469,15 +459,19 @@
                     <p>Run this in Terminal on a Mac on the same home network. Keep it running to make the name available to Bonjour clients.</p>
                     <p><code id="bv-bonjour-command"></code></p>
                 </details>
-                <details class="bv-advanced" id="bv-tailnet-routing">
-                    <summary>Route Tailscale devices through Blank VPN</summary>
-                    <p>Use a Linux Tailscale exit node in kernel mode. Connect it to OPNsense on a dedicated Ethernet or VLAN interface and preserve each peer’s source IP. Enable that interface in Network Settings, then select it below. On each peer, select the Linux gateway as its exit node.</p>
-                    <p class="text-muted">The built-in OPNsense exit node forwards internet traffic under the router’s address. Per-device rules need a link that carries each peer’s original IP.</p>
-                    <fieldset class="bv-interface-group">
-                        <legend>Interfaces carrying Tailscale device traffic</legend>
-                        <div id="bv-tailnet-interfaces" class="bv-interface-list"></div>
-                    </fieldset>
-                </details>
+                <section class="bv-advanced" aria-labelledby="bv-tailnet-routing-title">
+                    <h3 id="bv-tailnet-routing-title">Route Tailscale devices through Blank VPN</h3>
+                    <p id="bv-native-tailnet-status" role="status"></p>
+                    <p>In OPNsense Tailscale settings, enable <strong>Advertise Exit Node</strong> and the advanced <strong>Disable SNAT</strong> option. Apply from a local connection because Tailscale will restart. Approve the exit node in Tailscale, then select OPNsense as the exit node on each device.</p>
+                    <details class="bv-advanced" id="bv-tailnet-routing">
+                        <summary>Use a separate Tailscale gateway</summary>
+                        <p>For an existing source-preserving gateway, select its dedicated Ethernet or VLAN link here.</p>
+                        <fieldset class="bv-interface-group">
+                            <legend>Interfaces carrying Tailscale device traffic</legend>
+                            <div id="bv-tailnet-interfaces" class="bv-interface-list"></div>
+                        </fieldset>
+                    </details>
+                </section>
                 <div class="bv-actions">
                     <button type="submit" class="btn btn-primary">Save Tailscale settings</button>
                     <button type="button" id="bv-add-tailnet-device" class="btn btn-default" hidden>Add Tailscale device rule</button>

@@ -38,7 +38,6 @@
             canManage: true,
             editing: null,
             reserveIp: false,
-            visibleBatch: '',
             busy: false,
             dashboardRequest: null,
             settingsDirty: false,
@@ -46,7 +45,6 @@
             signingIn: false,
             mullvadLoginSaved: false,
             restoreAttempted: false,
-            testingRelay: false,
             tailscaleDirty: false,
             loginRevision: 0,
             activeSmartInterfaces: []
@@ -277,6 +275,9 @@
         }
 
         function networkName(id) {
+            if (id === 'tailscale0') {
+                return 'OPNsense Tailscale exit node';
+            }
             const entry = state.availableInterfaces.find((item) => item.id === id);
             if (!entry) {
                 return shown(id);
@@ -293,6 +294,7 @@
             byId('device-guide').hidden = wholeNetwork;
             const managed = list(state.settings?.interfaces);
             const transit = list(state.settings?.tailscaleInterfaces);
+            const nativeTailnet = state.settings?.tailscaleNativeReady === true;
             const seen = new Set();
             const rows = [];
             for (const device of [...state.devices, ...state.tailnetDevices]) {
@@ -321,15 +323,16 @@
                 const ip = device?.reservationIpv4 || device?.ipv4 || assignment?.ip || '';
                 const ipv6 = list(device?.ipv6 || assignment?.ipv6);
                 const routableV6 = ipv6.filter(address => !address.toLowerCase().startsWith('fe80:'));
-                const interfaceId = assignment?.interface || device?.interface || (transit.length === 1 ? transit[0] : '');
+                const interfaceId = assignment?.interface || device?.interface ||
+                    (tailnet && nativeTailnet ? 'tailscale0' : (tailnet && transit.length === 1 ? transit[0] : ''));
                 const reserved = tailnet ? Boolean(ip && ipv6.length) : device?.stable === true;
                 const reserveIp = !tailnet && !reserved && Boolean(device?.leaseProvider);
-                const canUseInterface = tailnet ? transit.length > 0 : managed.includes(interfaceId);
+                const canUseInterface = tailnet ? nativeTailnet || transit.length > 0 : managed.includes(interfaceId);
                 const blocked = assignment?.killSwitchActive === true;
                 const status = assignment
                     ? (wholeNetwork ? 'Paused by Whole-Network coverage' : !state.settings?.enabled
                         ? 'Saved · Routing off' : assignment.appliedRoute || 'Rule saved')
-                    : !canUseInterface ? (tailnet ? 'Transit link needed' : 'Interface outside coverage')
+                    : !canUseInterface ? (tailnet ? 'Exit node setup needed' : 'Interface outside coverage')
                         : !reserved && !reserveIp ? (tailnet ? 'Both Tailscale addresses needed' : 'DHCP reservation needed')
                             : reserveIp ? 'Current lease can be reserved' : 'Ready to assign';
                 const addresses = [...new Set([ip, ...list(device?.ipv4Addresses), ...ipv6].filter(Boolean))];
@@ -365,9 +368,11 @@
             if (!tailnetBody.rows.length) {
                 empty(tailnetBody, 'No Tailscale peers found.', 6);
             }
-            byId('tailnet-routing-hint').textContent = transit.length ? '' :
-                'Per-device routing needs a Linux Tailscale exit node and a transit link. See Tailscale Settings.';
-            byId('tailnet-routing-hint').hidden = transit.length > 0;
+            const online = state.tailnetDevices.filter(device => device.online).length;
+            byId('tailnet-count').textContent = state.tailnetDevices.length ? ' · ' + online + ' online' : '';
+            byId('tailnet-routing-hint').textContent = nativeTailnet ? 'Uses the OPNsense exit node.'
+                : transit.length ? 'Uses the configured gateway link.'
+                    : 'Enable Advertise Exit Node and Disable SNAT in OPNsense Tailscale settings, then refresh.';
             const count = wholeNetwork ? 0 : state.devices.length + state.tailnetDevices.length;
             const counts = [];
             if (!wholeNetwork) {
@@ -380,11 +385,24 @@
         function renderProfiles() {
             const body = byId('profile-list');
             const vpns = state.profiles.filter((profile) => profile.kind !== 'proxy');
-            if (!vpns.length) {
-                empty(body, 'No VPN tunnels have been added.');
+            const saved = savedBatchScopes();
+            const configured = new Set(vpns.map(profile => profile.relay).filter(Boolean));
+            const batch = saved.length ? state.relays.filter(relay =>
+                !configured.has(relay.id) && saved.some(scope => batchIncludes(relay, scope))) : [];
+            const search = byId('tunnel-search');
+            byId('tunnel-search-field').hidden = !saved.length;
+            byId('batch-servers-note').hidden = !saved.length;
+            const query = saved.length ? search.value.trim().toLowerCase() : '';
+            const matches = (...fields) => !query || fields.filter(Boolean).join(' ').toLowerCase().includes(query);
+            const tunnels = vpns.filter(profile => matches(profile.name, profile.relay, profile.interface));
+            const relays = batch.filter(relay => matches(relay.id, relay.hostname, relay.city, relay.country));
+            if (!tunnels.length && !relays.length) {
+                empty(body, query ? 'No servers match your search.'
+                    : saved.length ? (state.catalogLoaded ? 'No saved Mullvad servers are in the current catalog.'
+                        : 'Loading saved Mullvad servers…') : 'No VPN tunnels have been added.', 6);
             } else {
                 body.replaceChildren();
-                for (const profile of vpns) {
+                for (const profile of tunnels) {
                     const row = body.insertRow();
                     const used = state.assignments.filter((assignment) =>
                         [assignment.profile, assignment.backup].includes(profile.id)).length;
@@ -430,6 +448,24 @@
                         }
                         actions.append(remove);
                     }
+                }
+            }
+
+            for (const relay of relays) {
+                const row = body.insertRow();
+                const name = relay.hostname || relay.id;
+                cell(row, name);
+                cell(row, [relay.city, relay.country].filter(Boolean).join(', '));
+                cell(row, '—');
+                cell(row, '—');
+                cell(row, relay.active === false ? 'Unavailable' : 'Ready to activate');
+                const actions = row.insertCell();
+                if (state.canManage) {
+                    appendConnectionTest(actions, 'testRelay', relay.id, name, '', relay.active === false);
+                    const use = button('Use', (event) => void mutate(event.currentTarget,
+                        () => api('register', {relay: relay.id}), 'Enabled ' + name + '.'), 'Use ' + name);
+                    use.disabled = !state.mullvadSignedIn || relay.active === false;
+                    actions.append(use);
                 }
             }
 
@@ -597,6 +633,9 @@
             byId('native-tailscale').hidden = !settings.tailscaleInstalled;
             const selected = list(settings.tailscaleInterfaces);
             byId('add-tailnet-device').hidden = settings.coverage === 'network' || selected.length === 0;
+            byId('native-tailnet-status').textContent = settings.tailscaleNativeReady
+                ? 'Ready. Select a peer under Network Settings → Tailscale devices.'
+                : 'Setup needed. Update Tailscale to 1.104.2 or newer and apply the settings below.';
             if (!state.tailscaleDirty) {
                 byId('hostname').value = settings.hostname || 'blankvpn.home.arpa';
                 byId('dashboard-bind').value = settings.dashboardBind || 'lan';
@@ -958,9 +997,14 @@
                     state.editing = null;
                 }
                 state.availableInterfaces = array(data.settings?.availableInterfaces || data.availableInterfaces);
+                if (!byId('assignment').hidden && byId('device-kind').value === 'tailnet') {
+                    renderAssignmentInterfaces();
+                }
                 renderProfiles();
                 if (state.catalogLoaded) {
                     renderRelays();
+                } else if (savedBatchScopes().length && state.canManage) {
+                    void loadRelays();
                 }
                 renderServices();
                 renderProxyCatalog();
@@ -987,6 +1031,12 @@
             const primary = full ? byId('profile').value : '';
             const failover = byId('failure');
             const tailnet = byId('device-kind').value === 'tailnet';
+            const interfaceField = byId('interface');
+            const automatic = tailnet && (interfaceField.value === 'tailscale0' ||
+                list(state.settings?.tailscaleInterfaces).length === 0);
+            byId('assignment-interface-field').hidden = automatic;
+            interfaceField.required = !automatic;
+            byId('save-device').disabled = automatic && !state.settings?.tailscaleNativeReady;
             byId('mac-field').hidden = tailnet;
             byId('mac').required = !tailnet;
             byId('ipv6').required = tailnet;
@@ -1007,7 +1057,8 @@
             const interfaceId = byId('interface').value.trim();
             const notes = [];
             if (tailnet) {
-                notes.push('Use the peer IPv4 and IPv6 addresses seen on your source-preserving transit interface.');
+                notes.push(automatic ? 'Traffic uses this rule when the device selects OPNsense as its exit node.'
+                    : 'Use the peer addresses seen on the configured gateway link.');
             }
             if (mode === 'multi') {
                 notes.push('Matched domains use their assigned servers. Other traffic uses regular internet.');
@@ -1038,11 +1089,15 @@
             const choices = availablePorts().filter((port) => managed.includes(port.id)
                 && (peer ? tailnet.includes(port.id) : !tailnet.includes(port.id)))
                 .map((port) => ({value: port.id, label: networkName(port.id)}));
+            if (peer && (state.settings?.tailscaleNativeReady || previous === 'tailscale0')) {
+                choices.unshift({value: 'tailscale0', label: networkName('tailscale0')});
+            }
             if (state.editing && previous && !choices.some((choice) => choice.value === previous)) {
                 choices.push({value: previous, label: networkName(previous)});
             }
             options(byId('interface'), choices, choices.length ? 'Choose an interface' : 'Enable an interface first',
-                previous || (choices.length === 1 ? choices[0].value : ''));
+                previous || (peer && state.settings?.tailscaleNativeReady ? 'tailscale0'
+                    : (choices.length === 1 ? choices[0].value : '')));
         }
 
         function openAssignment(assignment = null, kind = 'lan', discovered = null) {
@@ -1076,11 +1131,10 @@
             byId('failure').value = assignment?.failure === 'backup' ? 'backup' : 'wan';
             byId('device-kill').checked = ['full', 'multi'].includes(assignment?.mode)
                 ? (assignment.killSwitch ?? assignment.failure === 'block') : true;
-            byId('switch-now').checked = false;
             updateFailure();
             byId('backup').value = assignment?.backup || '';
             byId('identity').textContent = discovered && !discovered.canUseInterface
-                ? (kind === 'tailnet' ? 'Choose a source-preserving transit link in Tailscale Settings, then refresh.'
+                ? (kind === 'tailnet' ? 'Finish OPNsense exit node setup in Tailscale Settings, then refresh.'
                     : 'Select this interface under Routing coverage and save, then refresh.')
                 : state.reserveIp ? 'Save this device’s current address as a DHCP reservation and apply the rule.'
                 : discovered && !discovered.reserved
@@ -1139,9 +1193,13 @@
             return !country || country === 'all' || (relay.countryCode === country && (!city || relay.cityCode === city));
         }
 
-        function renderMullvadBatches() {
+        function savedBatchScopes() {
             const {worldwide, countries, cities = []} = state.mullvadBatches;
-            const saved = [...(worldwide ? ['all'] : []), ...countries, ...cities];
+            return [...(worldwide ? ['all'] : []), ...countries, ...cities];
+        }
+
+        function renderMullvadBatches() {
+            const saved = savedBatchScopes();
             const labels = new Map([['all', 'Worldwide · all servers']]);
             const counts = new Map();
             for (const relay of state.relays) {
@@ -1192,56 +1250,24 @@
             }
             const [country, city = ''] = scope === 'all' ? [''] : scope.split(':');
             await mutate(control, () => api('saveMullvadBatch', {country, city, action}),
-                action === 'add' ? 'Mullvad batch saved.' : 'Mullvad batch removed.', (result) => {
+                action === 'add' ? 'Batch added to VPN tunnels.' : 'Mullvad batch removed.', (result) => {
                     state.mullvadBatches = result.batches;
                     renderMullvadBatches();
                     if (action === 'add') {
-                        browseMullvadBatch();
-                    } else {
-                        if (state.visibleBatch === scope) {
-                            state.visibleBatch = '';
-                        }
-                        renderRelays();
+                        viewMullvadBatch();
                     }
                 });
             renderBatchChoice();
         }
 
-        function browseMullvadBatch() {
-            state.visibleBatch = byId('batch-scope').value;
-            byId('relay-list').value = state.visibleBatch;
+        function viewMullvadBatch() {
+            byId('relay-list').value = byId('batch-scope').value;
             byId('country').value = '';
             byId('city').value = '';
             byId('relay').value = '';
+            byId('tunnel-search').value = '';
             renderRelays();
-            byId('batch-title').focus();
-        }
-
-        function renderBatchServers() {
-            const batch = state.visibleBatch;
-            const panel = byId('batch-servers');
-            panel.hidden = !batch;
-            if (!batch) {
-                return;
-            }
-            const relays = state.relays.filter((relay) => batchIncludes(relay, batch));
-            byId('batch-title').textContent = relays.length + (relays.length === 1 ? ' saved server' : ' saved servers');
-            const body = byId('batch-server-list');
-            body.replaceChildren();
-            if (!relays.length) {
-                empty(body, 'Refresh the Mullvad server catalog to load this batch.', 3);
-            }
-            for (const relay of relays) {
-                const row = body.insertRow();
-                const enabled = state.profiles.some(profile => profile.relay === relay.id && !profile.disabled);
-                cell(row, relay.hostname || relay.id, '', relay.active === false ? 'Unavailable' : enabled ? 'Enabled' : '');
-                cell(row, [relay.city, relay.country].filter(Boolean).join(', '));
-                const use = button('Use', (event) => void mutate(event.currentTarget,
-                    () => api('register', {relay: relay.id}), 'Enabled ' + relay.id + '.'),
-                    'Use ' + (relay.hostname || relay.id));
-                use.disabled = !state.mullvadSignedIn || relay.active === false || enabled;
-                row.insertCell().append(use);
-            }
+            byId('vpn-tunnels-title').focus();
         }
 
         function renderRelays() {
@@ -1272,7 +1298,7 @@
                 byId('relay').value = '';
             }
             renderRelayChoice();
-            renderBatchServers();
+            renderProfiles();
         }
 
         function renderRelayChoice() {
@@ -1288,30 +1314,18 @@
             const enabled = relay && state.profiles.some((profile) => profile.relay === relay.id && !profile.disabled);
             register.textContent = enabled ? 'Enabled' : 'Use server';
             register.disabled ||= Boolean(enabled);
-            byId('test-relay').disabled = !relay || !state.mullvadSignedIn || state.testingRelay;
+            byId('test-relay').disabled = !relay || !state.mullvadSignedIn ||
+                state.tests.get('relay:' + relay.id)?.kind === 'pending';
         }
 
         async function pingRelay() {
             const relay = byId('relay').value;
             const key = 'relay:' + relay;
-            state.testingRelay = true;
-            state.tests.set(key, {kind: 'pending', text: 'Pinging from OPNsense…'});
-            renderRelayChoice();
-            try {
-                const result = await api('testRelay', {relay});
-                state.tests.set(key, result.replied
-                    ? {kind: 'pass', text: 'ICMP reply · ' + result.milliseconds + ' ms'}
-                    : {kind: 'fail', text: 'No ICMP reply. The WireGuard service may still be available.'});
-            } catch (error) {
-                state.tests.set(key, {kind: 'fail', text: errorMessage(error, 'Could not ping this server.')});
-            } finally {
-                state.testingRelay = false;
-                renderRelayChoice();
-            }
+            await testConnection('testRelay', relay, key, false);
         }
 
         function appendConnectionTest(actions, action, id, name, nodeId = '', disabled = false) {
-            const key = nodeId ? 'proxy:' + nodeId : 'exit:' + id;
+            const key = action === 'testRelay' ? 'relay:' + id : nodeId ? 'proxy:' + nodeId : 'exit:' + id;
             const status = document.createElement('small');
             status.className = 'bv-test-result';
             status.setAttribute('role', 'status');
@@ -1345,11 +1359,18 @@
             if (proxy) {
                 state.proxyTestRunning = true;
             }
-            state.tests.set(key, {kind: 'pending', text: 'Testing HTTPS…'});
+            const relay = action === 'testRelay';
+            state.tests.set(key, {kind: 'pending', text: relay ? 'Pinging from OPNsense…' : 'Testing HTTPS…'});
             refreshConnectionTests();
+            if (relay) {
+                renderRelayChoice();
+            }
             try {
-                const result = await api(action, {id});
-                state.tests.set(key, result.reachable === true
+                const result = await api(action, relay ? {relay: id} : {id});
+                state.tests.set(key, relay ? (result.replied
+                    ? {kind: 'pass', text: 'ICMP reply · ' + result.milliseconds + ' ms'}
+                    : {kind: 'fail', text: 'No ICMP reply. The WireGuard service may still be available.'})
+                    : result.reachable === true
                     ? {kind: 'pass', text: 'HTTPS passed · ' + result.milliseconds + ' ms'}
                     : {kind: 'fail', text: result.detail || 'The HTTPS test did not complete.'});
             } catch (error) {
@@ -1359,6 +1380,9 @@
                     state.proxyTestRunning = false;
                 }
                 refreshConnectionTests();
+                if (relay) {
+                    renderRelayChoice();
+                }
             }
         }
 
@@ -1373,6 +1397,9 @@
                 ? (signedIn ? 'Sign out and forget login' : 'Forget saved login') : 'Sign out';
             renderRelayChoice();
             renderBatchChoice();
+            if (savedBatchScopes().length && state.catalogLoaded) {
+                renderProfiles();
+            }
             if (signedIn && !state.catalogLoaded) {
                 void loadRelays();
             }
@@ -1573,8 +1600,7 @@
                 profile: byId('profile').value,
                 backup: byId('backup').required ? byId('backup').value : '',
                 killSwitch: !byId('device-kill').disabled && byId('device-kill').checked,
-                failure: byId('device-kill').checked || byId('mode').value !== 'full' ? 'block' : byId('failure').value,
-                switchNow: byId('switch-now').checked
+                failure: byId('device-kill').checked || byId('mode').value !== 'full' ? 'block' : byId('failure').value
             };
             void mutate(event.submitter, () => api('assign', payload), 'Device assignment saved.', () => {
                 byId('assignment').hidden = true;
@@ -1611,7 +1637,8 @@
         byId('batch-scope').addEventListener('change', renderBatchChoice);
         byId('save-batch').addEventListener('click', (event) => void saveMullvadBatch(event.currentTarget, 'add'));
         byId('remove-batch').addEventListener('click', (event) => void saveMullvadBatch(event.currentTarget, 'remove'));
-        byId('browse-batch').addEventListener('click', browseMullvadBatch);
+        byId('browse-batch').addEventListener('click', viewMullvadBatch);
+        byId('tunnel-search').addEventListener('input', renderProfiles);
         byId('country').addEventListener('change', renderRelays);
         byId('city').addEventListener('change', renderRelays);
         byId('relay').addEventListener('change', renderRelayChoice);

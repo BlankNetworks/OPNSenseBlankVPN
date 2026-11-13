@@ -46,7 +46,9 @@ class ServiceController extends ApiControllerBase
             $lanInterfaces = array_diff($settings['interfaces'] ?: ['lan'], $settings['tailscaleInterfaces']);
             $discovery['devices'] = array_values(array_filter($discovery['devices'],
                 static fn (array $device): bool => in_array($device['interface'], $lanInterfaces, true)));
-            $discovery['tailnetDevices'] = $settings['tailscaleInstalled'] ? $diagnostics->tailnetDevices() : [];
+            $tailnet = $settings['tailscaleInstalled'] ? $diagnostics->tailnetStatus() : [];
+            $settings['tailscaleNativeReady'] = $diagnostics->nativeTailnetReady($tailnet);
+            $discovery['tailnetDevices'] = Diagnostics::tailnetPeers($tailnet);
             $runtime = $profiles === [] ? [] : WireGuard::runtimeRecords();
             $health = Firewall::health();
             $loaded = $settings['enabled'] ? Firewall::loadedRules() : [];
@@ -120,7 +122,8 @@ class ServiceController extends ApiControllerBase
                     'device' => $row['interface'] . '/' . (($row['kind'] ?? '') === 'tailnet' ? $row['ip'] : $row['mac']),
                     'verified' => false,
                     'killSwitchActive' => $guard && $rule === null && $row['killSwitch'],
-                    'appliedRoute' => $loaded === null ? 'Firewall status unavailable' : $applied
+                    'appliedRoute' => $row['interface'] === Policy::TAILSCALE_DEVICE && !$settings['tailscaleNativeReady']
+                        ? 'Exit node setup needed' : ($loaded === null ? 'Firewall status unavailable' : $applied)
                 ];
             }
             $settings['networkRouting'] = [];
@@ -681,7 +684,7 @@ class ServiceController extends ApiControllerBase
             if (array_intersect($strict, $smart)) {
                 throw new \DomainException('Use Multi-Path on a selected interface with normal internet as its default.');
             }
-            if ($enabled && $interfaces === []) {
+            if ($enabled && $interfaces === [] && ($coverage !== 'device' || !Policy::nativeTailnetConfigured())) {
                 throw new \DomainException('Choose a LAN or VLAN for Blank VPN to manage.');
             }
             if ($enabled) {
@@ -722,18 +725,20 @@ class ServiceController extends ApiControllerBase
                 }
                 $reset = [];
                 foreach (Policy::assignments($model) as $row) {
-                    if (!in_array($row['interface'], $interfaces, true)) {
+                    $nativeTailnet = ($row['kind'] ?? '') === 'tailnet' && $row['interface'] === Policy::TAILSCALE_DEVICE;
+                    if (!$nativeTailnet && !in_array($row['interface'], $interfaces, true)) {
                         throw new \DomainException('Remove saved assignments before removing their managed interface.');
                     }
                     $mode = Policy::mode($row);
-                    if (($row['kind'] ?? '') === 'tailnet' && !in_array($row['interface'], $tailscale, true)) {
+                    if (($row['kind'] ?? '') === 'tailnet' && $row['interface'] !== Policy::TAILSCALE_DEVICE &&
+                        !in_array($row['interface'], $tailscale, true)) {
                         throw new \DomainException('Remove the saved Tailscale assignments before removing their transit interface.');
                     }
                     if ($mode === 'multi' && in_array($row['interface'], $strict, true)) {
                         throw new \DomainException('Remove Multi-Path device rules before enabling Block devices without a rule on their interface.');
                     }
                     if ($enabled && $coverage === 'device' && (!$before['enabled'] || $before['coverage'] !== 'device') &&
-                        ($mode === 'blocked' ||
+                        ($nativeTailnet || $mode === 'blocked' ||
                         ($mode === 'full' && $row['failure'] !== 'wan') || Policy::killSwitch($row))) {
                         $reset[] = $row['ip'];
                         if (!empty($row['ipv6'])) {
@@ -808,7 +813,8 @@ class ServiceController extends ApiControllerBase
                 $before = Policy::settings($model);
                 $this->validateTransitInterfaces($tailscale, $before['interfaces'], $before['strictInterfaces']);
                 foreach (Policy::assignments($model) as $row) {
-                    if (($row['kind'] ?? '') === 'tailnet' && !in_array($row['interface'], $tailscale, true)) {
+                    if (($row['kind'] ?? '') === 'tailnet' && $row['interface'] !== Policy::TAILSCALE_DEVICE &&
+                        !in_array($row['interface'], $tailscale, true)) {
                         throw new \DomainException('Remove the saved Tailscale device rules before unchecking their interface.');
                     }
                 }
@@ -859,6 +865,10 @@ class ServiceController extends ApiControllerBase
             $kind = $this->input('kind', 12, 'lan');
             $ipv6 = Policy::ipv6Address(trim($this->input('ipv6', 45)));
             $interface = $this->input('interface', 20);
+            if ($kind === 'tailnet' && $interface === '') {
+                $interface = Policy::TAILSCALE_DEVICE;
+            }
+            $nativeTailnet = $kind === 'tailnet' && $interface === Policy::TAILSCALE_DEVICE;
             $label = trim($this->input('label', 120));
             $profile = $this->input('profile', 80);
             $backup = $this->input('backup', 80);
@@ -878,13 +888,26 @@ class ServiceController extends ApiControllerBase
             }
             if (
                 !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ||
-                ($kind === 'lan' && !Policy::validMac($mac)) || !Policy::interfaceId($interface) || !Policy::failure($failure) ||
+                ($kind === 'lan' && !Policy::validMac($mac)) ||
+                (!$nativeTailnet && !Policy::interfaceId($interface)) || !Policy::failure($failure) ||
                 !preg_match('/^[^\p{C}<>]{0,100}$/uD', $label)
             ) {
                 throw new \DomainException('Choose a valid reserved IPv4 device, interface and routing policy.');
             }
             if ($kind === 'tailnet' && (!Policy::tailnetAddress($ip) || !Policy::tailnetAddress($ipv6, true))) {
                 throw new \DomainException('Enter both the Tailscale IPv4 and IPv6 addresses for this peer.');
+            }
+            if ($nativeTailnet) {
+                $diagnostics = new Diagnostics();
+                $status = $diagnostics->tailnetStatus();
+                if (!$diagnostics->nativeTailnetReady($status)) {
+                    throw new \DomainException('Enable Advertise Exit Node and Disable SNAT in OPNsense Tailscale settings, then refresh.');
+                }
+                $matches = array_filter(Diagnostics::tailnetPeers($status), static fn (array $peer): bool =>
+                    $peer['ipv4'] === $ip && in_array($ipv6, $peer['ipv6'], true));
+                if ($matches === []) {
+                    throw new \DomainException('Refresh the device list and choose a peer on this tailnet.');
+                }
             }
             $provider = '';
             if ($kind === 'lan') {
@@ -899,13 +922,13 @@ class ServiceController extends ApiControllerBase
                 }
             }
             $result = Operations::change(function (BlankVpn $model) use (
-                $ip, $ipv6, $mac, $kind, $mode, $interface, $label, $profile, $backup, $failure, $killSwitch, $provider
+                $ip, $ipv6, $mac, $kind, $mode, $interface, $label, $profile, $backup, $failure, $killSwitch, $provider, $nativeTailnet
             ) {
                 $settings = Policy::settings($model);
-                if (!in_array($interface, $settings['interfaces'], true)) {
+                if (!$nativeTailnet && !in_array($interface, $settings['interfaces'], true)) {
                     throw new \DomainException('Add this device’s LAN or VLAN under Routing settings before saving the policy.');
                 }
-                if ($kind === 'tailnet' && (!in_array($interface, $settings['tailscaleInterfaces'], true) ||
+                if ($kind === 'tailnet' && !$nativeTailnet && (!in_array($interface, $settings['tailscaleInterfaces'], true) ||
                     !Policy::tailnetInterface($interface))) {
                     throw new \DomainException('Select a configured Tailscale transit interface that preserves peer addresses.');
                 }
@@ -991,8 +1014,17 @@ class ServiceController extends ApiControllerBase
                     throw new \DomainException('This device policy no longer exists.');
                 }
                 $model->assignments->assignment->del($id);
-                return ['ip' => $row['ip'], 'reload' => Policy::settings($model)['enabled']];
+                $settings = Policy::settings($model);
+                $nativeTailnet = $row['interface'] === Policy::TAILSCALE_DEVICE;
+                return [
+                    'ip' => $row['ip'], 'reload' => $settings['enabled'],
+                    'killSwitchReset' => $settings['enabled'] && $nativeTailnet
+                        ? array_values(array_filter([$row['ip'], $row['ipv6'] ?? ''])) : []
+                ];
             });
+            if ($result['killSwitchReset'] !== []) {
+                return ['killSwitchReset' => true];
+            }
             if ($result['reload']) {
                 try {
                     return ['reconnected' => Operations::switchDevice($result['ip'], Policy::settings(new BlankVpn()))];

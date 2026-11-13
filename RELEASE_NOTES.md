@@ -1,4 +1,4 @@
-- LAN discovery shows current IPv4 neighbors. Saved rules stay visible for offline devices. Tailscale peers have a separate list with online and offline status.
-- Reserve a verified Kea or Dnsmasq DHCP lease and save its device routing rule in one step.
-- Removed the Connections panel and Mullvad tunnel selector. Mullvad reuses an available unassigned tunnel automatically.
-- Saving a Mullvad batch opens the server list with a Use button for each available relay.
+- Added per-peer routing through the OPNsense Tailscale exit node in kernel mode. Blank VPN selects `tailscale0` automatically.
+- Made the Network Settings Tailscale device list collapsible.
+- Removed the Reconnect checkbox. Active device rule changes already reset the affected states.
+- Added Mullvad batches directly to VPN tunnels with search and per-server tests.

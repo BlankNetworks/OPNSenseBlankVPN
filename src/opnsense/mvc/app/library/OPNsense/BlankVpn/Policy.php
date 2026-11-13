@@ -8,6 +8,9 @@ use OPNsense\Core\Config;
 final class Policy
 {
     public const PRIORITY = 9000;
+    public const TAILSCALE_DEVICE = 'tailscale0';
+    public const TAILSCALE_V4 = '100.64.0.0/10';
+    public const TAILSCALE_V6 = 'fd7a:115c:a1e0::/48';
     public const LOCAL_TABLE = 'blankvpn_local';
     public const STATE_DIR = '/var/db/blank-vpn';
     public const PROBE_IP = '1.1.1.1';
@@ -44,8 +47,12 @@ final class Policy
         if ($settings['coverage'] !== 'device') {
             return $settings;
         }
+        $assignments = self::assignments($model);
+        if (in_array(self::TAILSCALE_DEVICE, array_column($assignments, 'interface'), true)) {
+            $settings['interfaces'][] = self::TAILSCALE_DEVICE;
+        }
         $deviceOnly = [];
-        foreach (self::assignments($model) as $row) {
+        foreach ($assignments as $row) {
             $interface = $row['interface'];
             if (self::mode($row) === 'multi' && in_array($interface, $settings['interfaces'], true) &&
                 !in_array($interface, $settings['strictInterfaces'], true) &&
@@ -116,7 +123,15 @@ final class Policy
 
     public static function tailnetAddress(string $address, bool $ipv6 = false): bool
     {
-        return self::contains($ipv6 ? 'fd7a:115c:a1e0::/48' : '100.64.0.0/10', $address);
+        return self::contains($ipv6 ? self::TAILSCALE_V6 : self::TAILSCALE_V4, $address);
+    }
+
+    public static function nativeTailnetConfigured(): bool
+    {
+        $config = Config::getInstance()->object()->OPNsense->tailscale->settings ?? null;
+        return (string)($config->enabled ?? '') === '1' &&
+            (string)($config->advertiseExitNode ?? '') === '1' &&
+            (string)($config->disableSNAT ?? '') === '1';
     }
 
     public static function tailnetInterface(string $interface): bool
@@ -263,6 +278,9 @@ final class Policy
             if (self::cidr($network) === $network) {
                 $networks[] = $network;
             }
+        }
+        if (in_array(self::TAILSCALE_DEVICE, $settings['interfaces'], true)) {
+            array_push($networks, self::TAILSCALE_V4, self::TAILSCALE_V6, '100.100.100.100/32');
         }
         $runtime = null;
         foreach (Config::getInstance()->object()->interfaces->children() as $id => $node) {

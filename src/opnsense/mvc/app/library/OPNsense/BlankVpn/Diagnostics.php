@@ -152,11 +152,38 @@ final class Diagnostics
         return $snapshot;
     }
 
-    public function tailnetDevices(): array
+    public function tailnetStatus(): array
     {
         $output = Resolver::command(['/usr/bin/timeout', '2', '/usr/local/bin/tailscale', 'status', '--json'], false);
         $status = json_decode($output, true);
-        return is_array($status) ? self::tailnetPeers($status) : [];
+        return is_array($status) ? $status : [];
+    }
+
+    public function nativeTailnetReady(array $status): bool
+    {
+        if (!Policy::nativeTailnetConfigured() || ($status['BackendState'] ?? '') !== 'Running' ||
+            ($status['TUN'] ?? false) !== true ||
+            !preg_match('/^([0-9]+\.[0-9]+\.[0-9]+)(?:[+-][^\s]+)?$/D', $status['Version'] ?? '', $match) ||
+            version_compare($match[1], '1.104.2', '<')) {
+            return false;
+        }
+        $pid = trim(Resolver::command(['/usr/bin/pgrep', '-x', 'tailscaled'], false));
+        if (!ctype_digit($pid) || (int)$pid < 2) {
+            return false;
+        }
+        $process = Resolver::command(['/bin/ps', '-eww', '-p', $pid, '-o', 'command='], false);
+        if (!preg_match('/(?:^|\s)TS_DEBUG_NETSTACK_SUBNETS=(?:0|false)(?:\s|$)/D', $process)) {
+            return false;
+        }
+        $addresses = $this->read('interface list ifconfig')[Policy::TAILSCALE_DEVICE]['ipv4'] ?? [];
+        $own = $status['TailscaleIPs'] ?? [];
+        foreach ($addresses as $row) {
+            $ip = $row['ipaddr'] ?? '';
+            if (Policy::tailnetAddress($ip) && in_array($ip, $own, true)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static function tailnetPeers(array $status): array

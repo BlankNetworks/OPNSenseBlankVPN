@@ -277,6 +277,32 @@ namespace {
     $compileDevice->invoke(null, $down, $settings, $interfaces, ['device-a' => $assignment], $profiles, ['jp' => ['reachable' => false]], $diag);
     checkRouting(isset($down->rules[Policy::marker('kill', 'device-a')]) &&
         !isset($down->rules[Policy::marker('device', 'device-a')]), 'Down exit must remove the pass and preserve the IPv4 guard.');
+    $config = \OPNsense\Core\Config::$fixture;
+    $native = $config->addChild('OPNsense')->addChild('tailscale')->addChild('settings');
+    $native->addChild('enabled', '1');
+    $native->addChild('advertiseExitNode', '1');
+    $native->addChild('disableSNAT', '1');
+    $tailnet = array_replace($assignment, [
+        'kind' => 'tailnet', 'interface' => Policy::TAILSCALE_DEVICE, 'ip' => '100.101.102.103',
+        'ipv6' => 'fd7a:115c:a1e0::103', 'mac' => ''
+    ]);
+    $tailnetSettings = array_replace($settings, ['interfaces' => [Policy::TAILSCALE_DEVICE], 'tailscaleInterfaces' => []]);
+    $tailnetInterfaces = [Policy::TAILSCALE_DEVICE => ['if' => Policy::TAILSCALE_DEVICE]];
+    $nativePeer = new Plugin();
+    $compileDevice->invoke(null, $nativePeer, $tailnetSettings, $tailnetInterfaces,
+        ['native-peer' => $tailnet], $profiles, [], $diag);
+    $tailnetPass = $nativePeer->rules[Policy::marker('device', 'native-peer')];
+    checkRouting($tailnetPass['interface'] === Policy::TAILSCALE_DEVICE && $tailnetPass['from'] === $tailnet['ip'] &&
+        $tailnetPass['gateway'] === 'VPN' && $nativePeer->nat[0]['from'] === $tailnet['ip'] &&
+        $nativePeer->rules[Policy::marker('kill_v6', 'native-peer')]['from'] === $tailnet['ipv6'],
+        'A native peer routes through its VPN and blocks IPv6 with a kill switch.');
+    $native->disableSNAT = '0';
+    $userspace = new Plugin();
+    $compileDevice->invoke(null, $userspace, $tailnetSettings, $tailnetInterfaces,
+        ['native-peer' => $tailnet], $profiles, [], $diag);
+    checkRouting(!isset($userspace->rules[Policy::marker('device', 'native-peer')]) &&
+        isset($userspace->rules[Policy::marker('kill', 'native-peer')]),
+        'Userspace mode cannot install the native per-peer VPN pass.');
     $multiAssignment = array_replace($assignment, [
         'mode' => 'multi', 'profile' => '', 'killSwitch' => '1', 'ipv6' => '2001:db8::23'
     ]);

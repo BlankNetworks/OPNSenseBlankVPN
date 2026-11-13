@@ -87,7 +87,7 @@ VPN Login offers Mullvad. Existing VPN tunnels saved with earlier releases remai
 
 ### Add server batches
 
-In **VPN Login**, open **Manage server batches** and choose a city, country, or **Worldwide · all servers**. Click **Save and show servers** to open the batch list. Click **Use** next to a relay to put it in **VPN tunnels**. Use **Browse servers** to reopen a saved batch and **Refresh servers** to refresh the catalog. Each batch shares the existing catalog and uses zero device slots.
+In **VPN Login**, open **Manage server batches** and choose a city, country, or **Worldwide · all servers**. Click **Add to VPN**. Every server in the batch appears under **VPN tunnels**, where you can search by hostname or location and click **Test** for an ICMP reachability check from the router. Click **Use** to activate the chosen server for routing. An active tunnel's **Test** runs HTTPS through the tunnel. Saved batches share the catalog and use zero additional Mullvad device slots.
 
 ### Test servers
 
@@ -132,9 +132,11 @@ You can run multiple provider exits together, with up to 32 VPN profiles and eig
 
 ### Assign a Tailscale peer
 
-The standard OPNsense FreeBSD Tailscale exit node uses userspace forwarding. PF sees the router’s connection after Tailscale has translated it, so it cannot enforce a per-peer internet policy there. Tailscale peers appear in a separate list with online and offline status. Accessing the dashboard only requires a permitted connection to the OPNsense Tailscale address. [Tailscale forwarding modes](https://tailscale.com/docs/reference/kernel-vs-userspace-routers)
+From the LAN or console, open **VPN → Tailscale → Settings**. Use Tailscale 1.104.2 or newer. Enable **Advertise Exit Node** and the advanced **Disable SNAT** setting, then apply. OPNsense uses that setting to pass decrypted traffic into the FreeBSD kernel on `tailscale0` with the peer's original address. Applying the change restarts Tailscale. Approve OPNsense as an exit node in Tailscale admin and select it as the exit node on the client. [OPNsense Tailscale configuration](https://github.com/opnsense/plugins/blob/26.7.9/security/tailscale/src/opnsense/service/templates/OPNsense/Tailscale/rc.conf.d) · [Tailscale exit node setup](https://tailscale.com/docs/features/exit-nodes/how-to/setup)
 
-To apply per-peer policy, use a Linux Tailscale exit gateway in kernel forwarding mode on a dedicated OPNsense Ethernet or VLAN link. Select that Linux gateway as the exit node on each peer. Configure the gateway so it preserves peer source addresses on traffic sent to OPNsense. Set return routes for those addresses through the Linux gateway and verify both address families with an OPNsense capture. Advertise and approve the home subnets for remote LAN access. In Blank VPN select **Only devices I choose**, enable the dedicated port under **Network Settings → Interface**, then select the port under **Tailscale Settings → Route Tailscale devices through Blank VPN**. Press **Refresh** in **Network Settings**, then select the peer to fill in its Tailscale IPv4 and IPv6 addresses. [Tailscale forwarding modes](https://tailscale.com/docs/reference/kernel-vs-userspace-routers) · [Tailscale subnet routing](https://tailscale.com/docs/features/subnet-routers)
+In Blank VPN open **Tailscale Settings** to check readiness. Then open **Network Settings → Only Devices I choose**, save and enable routing, expand **Tailscale devices**, and select the peer. Blank VPN fills both addresses and automatically uses the OPNsense Tailscale interface. For an existing gateway on Ethernet or VLAN, select its link under **Tailscale Settings → Use a separate Tailscale gateway**. Access to the dashboard still follows the OPNsense firewall and Tailscale grants.
+
+Test the public IPv4 from the peer, verify local management access, then test with the VPN disconnected and Kill Switch on. The routed mode supports IPv4 VPN egress and blocks public IPv6 for a protected one-server rule. Multi-Path learning requires DNS queries visible to the OPNsense packet filter. Tailscale can forward DNS internally through its exit-node resolver, so confirm DNS classification on the client before relying on it. [Tailscale DNS preferences](https://tailscale.com/docs/features/client/manage-preferences)
 
 ## Route Netflix or another service
 

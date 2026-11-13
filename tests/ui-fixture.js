@@ -182,22 +182,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'saveMullvadBatch' && x.data.country === 'ca' && x.data.action === 'add') &&
         bv('relay-list').value === 'ca' && bv('relay').options.length === 3 && bv('relay').options[2].disabled,
         'saved country batch should select all relays for that country, including unavailable ones');
-    assert(!bv('batch-servers').hidden && bv('batch-server-list').textContent.includes('ca-test-wg-002') &&
-        bv('batch-server-list').querySelector('[aria-label="Use ca-test-wg-002"]').disabled,
-        'Saving a batch must show an actionable list and mark unavailable relays.');
+    assert(bv('profile-list').textContent.includes('ca-test-wg-002') &&
+        bv('profile-list').querySelector('[aria-label="Use ca-test-wg-002"]').disabled &&
+        bv('profile-list').querySelector('[aria-label="Test ca-test-wg-002"]').disabled &&
+        bv('profile-list').rows.length === 2,
+        'Adding a batch must list relays in VPN tunnels, deduplicate configured relays and mark unavailable relays.');
     bv('batch-scope').value = 'all';
     bv('batch-scope').dispatchEvent(new Event('change'));
     bv('save-batch').click();
     await wait();
     assert(requests.some(x => x.action === 'saveMullvadBatch' && x.data.country === '' && x.data.action === 'add') &&
         bv('relay-list').value === 'all' && bv('relay').options.length === 4 &&
-        !requests.some(x => x.action === 'register'), 'adding the worldwide batch should save every relay without activating an exit');
+        bv('profile-list').rows.length === 3 &&
+        !requests.some(x => x.action === 'register'), 'adding the worldwide batch lists every relay without activating a tunnel');
+    bv('profile-list').querySelector('[aria-label="Test jp-test-wg-001"]').click();
+    await wait();
+    assert(bv('profile-list').querySelector('[data-test-result="relay:jp-test-wg-001"]').textContent.includes('12.345 ms') &&
+        requests.some(x => x.action === 'testRelay' && x.data.relay === 'jp-test-wg-001'),
+        'Batch servers must support a per-row test before tunnel activation.');
+    bv('tunnel-search').value = 'Japan';
+    bv('tunnel-search').dispatchEvent(new Event('input'));
+    assert(bv('profile-list').rows.length === 1 && bv('profile-list').textContent.includes('jp-test-wg-001'),
+        'VPN tunnel search must filter the batch by location.');
+    bv('tunnel-search').value = '';
+    bv('tunnel-search').dispatchEvent(new Event('input'));
     bv('relay-list').value = 'ca';
     bv('relay-list').dispatchEvent(new Event('change'));
     bv('remove-batch').click();
     await wait();
     assert(requests.some(x => x.action === 'saveMullvadBatch' && x.data.country === '' && x.data.action === 'remove') &&
-        bv('relay-list').value === 'ca' && bv('relay-list').options.length === 2, 'removing worldwide should leave the country batch selected');
+        bv('relay-list').value === 'ca' && bv('relay-list').options.length === 2 &&
+        !bv('profile-list').textContent.includes('jp-test-wg-001'), 'removing worldwide leaves only the saved country batch');
     bv('refresh').click();
     await wait();
     assert(bv('relay-list').value === 'ca' && bv('relay').options.length === 3, 'saved batch was lost on dashboard refresh');
@@ -246,7 +261,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001' &&
         !Object.hasOwn(x.data, 'account')), 'registration payload failed');
     const uses = requests.filter(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001').length;
-    bv('batch-server-list').querySelector('[aria-label="Use jp-test-wg-001"]').click();
+    bv('profile-list').querySelector('[aria-label="Use jp-test-wg-001"]').click();
     await wait();
     assert(requests.filter(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001').length === uses + 1,
         'Use must select the listed relay through the normal registration action.');
@@ -417,10 +432,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'assign' && x.data.ip === '10.0.0.30' &&
         x.data.reserveIp && x.data.profile === 'proxy-proxy-1' && x.data.killSwitch), 'New proxies must be ready to assign without a separate enable action.');
+    assert(bv('tailnet-devices').tagName === 'DETAILS' && !bv('tailnet-devices').open &&
+        bv('tailnet-count').textContent.includes('1 online'), 'Tailscale list must be collapsible.');
+    bv('tailnet-devices').open = true;
     bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
     assert(bv('ip').value === '100.101.102.104' && bv('ipv6').value === 'fd7a:115c:a1e0::104' &&
-        bv('interface').value === 'opt2' && bv('device-kind').value === 'tailnet', 'Tailscale peer rule must fill both addresses.');
+        bv('interface').value === 'opt2' && bv('device-kind').value === 'tailnet', 'Existing gateway link rules must remain available.');
     bv('close-assignment').click();
+    reply.dashboard.settings.tailscaleInterfaces = [];
+    bv('refresh').click();
+    await wait();
+    bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
+    assert(bv('assignment-interface-field').hidden && bv('save-device').disabled &&
+        bv('identity').textContent.includes('OPNsense exit node setup'), 'Unconfigured exit node must give an actionable message.');
+    bv('close-assignment').click();
+    reply.dashboard.settings.tailscaleNativeReady = true;
+    bv('refresh').click();
+    await wait();
+    bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
+    assert(bv('assignment-interface-field').hidden && !bv('interface').required &&
+        bv('interface').value === 'tailscale0' && !bv('switch-now'),
+        'Native peer rules must select the Tailscale interface automatically without a reconnect toggle.');
+    bv('profile').value = 'vpn1';
+    bv('assign-form').requestSubmit(bv('save-device'));
+    await wait();
+    assert(requests.some(x => x.action === 'assign' && x.data.kind === 'tailnet' && x.data.interface === 'tailscale0' &&
+        x.data.ip === '100.101.102.104' && x.data.profile === 'vpn1' && !Object.hasOwn(x.data, 'switchNow')),
+        'Selecting a native exit peer must submit both the interface and the chosen VPN server.');
     bv('coverage').value = 'network';
     bv('network-mode').value = 'full';
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));

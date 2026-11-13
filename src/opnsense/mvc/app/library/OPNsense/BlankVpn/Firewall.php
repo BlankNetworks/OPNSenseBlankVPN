@@ -13,6 +13,20 @@ final class Firewall
         $model = new BlankVpn();
         $settings = Policy::effectiveRouting($model);
         $profiles = Policy::routes($model);
+        $interfaces = iterator_to_array($firewall->getInterfaceMapping());
+        if ((string)(Config::getInstance()->object()->OPNsense->tailscale->settings->enabled ?? '') === '1') {
+            // Keep Tailscale's native NAT anchor after OPNsense and VPN source NAT rules.
+            $firewall->registerAnchor('tailscale', 'nat');
+            $firewall->registerAnchor('tailscale');
+        }
+        if (in_array(Policy::TAILSCALE_DEVICE, $settings['interfaces'], true)) {
+            $interface = Policy::TAILSCALE_DEVICE;
+            $interfaces[$interface] = [
+                'if' => $interface, 'ifconfig' => $firewall->getIfconfigDetails()[$interface] ?? [],
+                'descr' => 'Tailscale', 'virtual' => true
+            ];
+            $firewall->setInterfaceMapping($interfaces);
+        }
         $proxyGateways = [];
         $pausedCore = $settings['enabled'] ? ProxyCores::pausedCore() : null;
         foreach ($profiles as &$profile) {
@@ -45,8 +59,6 @@ final class Firewall
         $firewall->setGatewayGroups($proxyGateways);
         $health = self::health();
         $diagnostics = new Diagnostics();
-        $interfaces = iterator_to_array($firewall->getInterfaceMapping());
-
         $services = SmartRouting::boundServices(SmartRouting::services($model));
         $multiOutage = self::multiPathOutage($firewall, $services, $profiles, $health);
         $assignments = [];
@@ -149,6 +161,9 @@ final class Firewall
             $mode = Policy::mode($row);
             $ipv6 = filter_var($row['ipv6'] ?? '', FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ?: '';
             $reserved = self::hasAssignmentIdentity($settings, $row, $diagnostics);
+            if ($reserved && $interface === Policy::TAILSCALE_DEVICE && $mode !== 'blocked') {
+                self::registerTailnetInternet($firewall, $id, $ip, $ipv6);
+            }
             $killSwitch = Policy::killSwitch($row);
             if ($mode === 'multi') {
                 if ($killSwitch && ($multiOutage || !$reserved ||
@@ -229,12 +244,25 @@ final class Firewall
         }
     }
 
+    private static function registerTailnetInternet(Plugin $firewall, string $id, string $ip, string $ipv6): void
+    {
+        foreach (['inet' => $ip, 'inet6' => $ipv6] as $family => $source) {
+            $firewall->registerFilterRule(490000, [
+                'type' => 'pass', 'direction' => 'in', 'interface' => Policy::TAILSCALE_DEVICE,
+                'ipprotocol' => $family, 'from' => $source, 'to' => '<' . Policy::LOCAL_TABLE . '>',
+                'to_not' => true, 'quick' => false, 'statetype' => 'keep', 'disablereplyto' => true,
+                'label' => Policy::marker('tailnet_internet', $id . ':' . $family)
+            ]);
+        }
+    }
+
     private static function hasAssignmentIdentity(array $settings, array $row, Diagnostics $diagnostics): bool
     {
         if (($row['kind'] ?? '') === 'tailnet') {
-            return in_array($row['interface'], $settings['tailscaleInterfaces'] ?? [], true) &&
-                Policy::tailnetInterface($row['interface']) &&
-                Policy::tailnetAddress($row['ip']) && Policy::tailnetAddress($row['ipv6'] ?? '', true);
+            $interface = $row['interface'];
+            $valid = $interface === Policy::TAILSCALE_DEVICE ? Policy::nativeTailnetConfigured() :
+                in_array($interface, $settings['tailscaleInterfaces'] ?? [], true) && Policy::tailnetInterface($interface);
+            return $valid && Policy::tailnetAddress($row['ip']) && Policy::tailnetAddress($row['ipv6'] ?? '', true);
         }
         return $diagnostics->hasReservation($row['interface'], $row['ip'], $row['mac']);
     }
@@ -302,8 +330,8 @@ final class Firewall
         }
         foreach ($settings['smartInterfaces'] as $interface) {
             if (
-                !Policy::interfaceId($interface) || empty($interfaces[$interface]['if']) ||
-                in_array($interface, $settings['strictInterfaces'], true)
+                (!Policy::interfaceId($interface) && $interface !== Policy::TAILSCALE_DEVICE) ||
+                empty($interfaces[$interface]['if']) || in_array($interface, $settings['strictInterfaces'], true)
             ) {
                 continue;
             }
@@ -367,7 +395,8 @@ final class Firewall
                         'skip_rules_gw_down' => true, 'statetype' => 'keep',
                         'label' => Policy::marker('service', $id)
                     ] + self::stateOptions($profile) + $base);
-                    self::registerClientNat($firewall, $profile, $interface, $table, 61);
+                    $source = $interface === Policy::TAILSCALE_DEVICE ? Policy::TAILSCALE_V4 : $interface;
+                    self::registerClientNat($firewall, $profile, $source, $table, 61);
                 }
                 // A learned destination never takes the native route when its selected tunnel is unavailable.
                 // IPv6 for learned destinations is blocked until VPN egress supports it.

@@ -77,7 +77,8 @@ try {
                         }
                     }
                 }
-                if ($settings['enabled'] || Policy::profiles($model) !== [] || NativeVpn::routes($model) !== []) {
+                if ($settings['enabled'] || Policy::profiles($model) !== [] || NativeVpn::routes($model) !== [] ||
+                    (string)(\OPNsense\Core\Config::getInstance()->object()->OPNsense->tailscale->settings->enabled ?? '') === '1') {
                     Operations::sync($model);
                 }
             });
