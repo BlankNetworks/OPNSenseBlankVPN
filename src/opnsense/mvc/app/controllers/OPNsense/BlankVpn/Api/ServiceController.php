@@ -1149,7 +1149,7 @@ class ServiceController extends ApiControllerBase
                 return ['ok' => false, 'error' => $error->getMessage()];
             }
             syslog(LOG_WARNING, 'Blank VPN operation did not complete.');
-        } catch (\Throwable) {
+        } catch (\Throwable $error) {
             $reference = gmdate('His') . '-' . getmypid();
             syslog(LOG_ERR, 'Blank VPN ' . $reference . ' ' . get_class($error) . ' at ' .
                 basename($error->getFile()) . ':' . $error->getLine());
