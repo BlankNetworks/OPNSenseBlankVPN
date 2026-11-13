@@ -279,7 +279,7 @@ final class Policy
                 $networks[] = $network;
             }
         }
-        if (in_array(self::TAILSCALE_DEVICE, $settings['interfaces'], true)) {
+        if (in_array(self::TAILSCALE_DEVICE, $settings['interfaces'] ?? [], true)) {
             array_push($networks, self::TAILSCALE_V4, self::TAILSCALE_V6, '100.100.100.100/32');
         }
         $runtime = null;
