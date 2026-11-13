@@ -254,6 +254,7 @@ def verify(path, metadata, scripts, files):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version=VERSION)
     parser.add_argument("--cross", action="store_true", help="Produce the native pkg format on a non-OPNsense host")
     parser.add_argument("--arch", choices=LEGACY_ARCHES, help="Target FreeBSD package architecture")
     parser.add_argument("--output", type=Path, default=ROOT / "dist", help="Output directory")

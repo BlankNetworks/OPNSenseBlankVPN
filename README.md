@@ -1,4 +1,4 @@
-# Blank VPN 0.8.9
+# Blank VPN
 
 Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Multi-Path keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
@@ -13,9 +13,34 @@ Blank VPN targets OPNsense Community Edition 26.7.x with the FreeBSD 15 package 
 
 OPNsense officially distributes x86-64 images. For NanoPi R4S/R4SE and R5S, start with a board-compatible community OPNsense 26.7 image and check its device notes. Other ARM64 boards need their own working OPNsense image. OpenWrt, Linux firmware, and 32-bit ARM require a different package and runtime. Live OPNsense routing still needs lab verification. [Official hardware support](https://docs.opnsense.org/manual/hardware.html) · [Community NanoPi images](https://github.com/matheusber/opnsense/releases) · [Validation](VALIDATION.md)
 
-## Download
+<a id="lab-installation"></a>
 
-Run `pkg config ABI` on the router, then download the matching package and its SHA-256 file from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). The full prerelease package includes the proxy runtimes and Clash YAML parser.
+## Install or upgrade
+
+Use an existing SSH connection or choose **8) Shell** on the local console. For SSH, run `ssh USER@ROUTER` from your computer using your configured SSH account and the router’s LAN address or hostname. Run the install commands from a root shell on the router. Check the edition, version series, and package ABI first. [OPNsense console and SSH](https://docs.opnsense.org/manual/install.html)
+
+```sh
+opnsense-version -n
+opnsense-version -a
+pkg config ABI
+```
+
+Choose a release that matches the edition, series, and ABI shown above under [Compatibility](#compatibility). Save an OPNsense configuration backup under **System → Configuration → Backups** before installing or upgrading. Keep console access available when testing routing.
+
+### Download on your computer
+
+1. Open [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases) and choose a published **Blank VPN** release. Its install section lists both architectures and links to each `.pkg` and its `.pkg.sha256` file.
+2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense. The release page gives the exact filenames and copy command.
+3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
+
+### Download from the router over SSH or console
+
+1. Open the same release and find **Download and install on the router** for your architecture.
+2. Run its commands **one line at a time** in the router's root shell. They fetch the package from the pinned release URL, verify its SHA-256, and install it. The commands work in the OPNsense default shell.
+
+For an upgrade, follow either path over the existing installation. Verify with `pkg info os-blank-vpn` and open **VPN → Blank VPN → Dashboard** in your existing HTTPS WebGUI. New installations start with routing disabled. The release package includes the proxy runtimes and Clash YAML parser. It declares its OPNsense, Dnsmasq, PHP cURL, and Python dependencies.
+
+For delegated access, assign **VPN: Blank VPN: View devices and connections** or **VPN: Blank VPN: Manage tunnels and policy routing** in the OPNsense user manager.
 
 ## Build
 
@@ -34,19 +59,7 @@ python3 build/package.py --cross --arch aarch64
 
 The package and SHA-256 file are written to `dist/`. To reproduce the bundled release on a Linux development host with Go, run `sh build/prepare-release.sh /tmp/blankvpn-runtime amd64`, followed by `python3 build/package.py --cross --arch amd64 --runtime-dir /tmp/blankvpn-runtime`. For ARM64, use `aarch64` for both commands.
 
-## Lab installation
-
-1. Use a matching OPNsense CE 26.7 VM or spare router with console access. Attach a WAN, a management network and a test client LAN or VLAN. Back up the lab configuration under **System → Configuration → Backups**.
-2. Confirm `opnsense-version -v` reports 26.7.x, `opnsense-version -n` reports `opnsense`, and `pkg config ABI` matches the chosen architecture.
-3. Transfer the matching package and its SHA-256 file to the router. Run these commands one line at a time as root from the same directory. For ARM64, replace `amd64` with `aarch64`.
-
-   ```sh
-   sha256sum -c os-blank-vpn-0.8.9-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.9-amd64.pkg
-   pkg info os-blank-vpn
-   ```
-
-4. The package declares its OPNsense, Dnsmasq, PHP cURL, and Python dependencies. It loads the FreeBSD TUN driver when needed. Sign in using the current WebGUI HTTPS address and open **VPN → Blank VPN → Dashboard** or `/ui/blankvpn/index`. Routing starts disabled. The installer registers the dashboard, model, firewall hook, and local maintenance entry.
-5. For delegated access, assign **VPN: Blank VPN: View devices and connections** or **VPN: Blank VPN: Manage tunnels and policy routing** in the native user manager. Confirm ACL behavior before delegating either permission.
+To publish a new version, update `VERSION` in [build/package.py](build/package.py) and record the changes in [RELEASE_NOTES.md](RELEASE_NOTES.md). A push to `main` with `[publish release]` in the head commit message builds and verifies both packages. The workflow uses that version and the verified asset checksums to generate the install commands on the release page.
 
 ## Open the dashboard
 
@@ -141,7 +154,7 @@ Tunnel health is polled. Multi-Path blocks regular internet once the outage is d
 
 ## Upgrade, rollback and removal
 
-- **Upgrade** in a validated lab first. Export the OPNsense configuration, retain the previous package, and verify the new checksum. Use `pkg add -f ./os-blank-vpn-NEW.pkg`. Confirm ACLs, the active PF rules, DNS, and both tested exit paths after the upgrade.
+- **Upgrade** in a validated lab first. Export the OPNsense configuration, retain the previous package, and verify the new checksum. Use the verified upgrade commands in [Install or upgrade](#install-or-upgrade). Confirm ACLs, the active PF rules, DNS, and both tested exit paths after the upgrade.
 - **Roll back routing** by disabling Blank VPN from the independent management connection. Review native policy after reload. Existing traffic states can remain until expiry or a targeted state reset. Use the console and OPNsense configuration history if the dashboard is inaccessible.
 - **Restore a prior build** with the corresponding configuration backup and previous package. Test the backup restoration and confirm that the plug-in and native object versions agree before enabling routing again.
 - **Remove** service rules, device assignments, and profiles after disabling routing. Use `pkg -o DEVELOPER_MODE=true delete os-blank-vpn` so the package checks for remaining managed state. Verify that ordinary firewall routing works and remove manually created DNS, alternate-hostname, and landing-page entries if they are no longer needed. Mullvad devices remain registered until you remove them from your account.
