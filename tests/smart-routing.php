@@ -277,8 +277,8 @@ namespace {
     $compileDevice->invoke(null, $down, $settings, $interfaces, ['device-a' => $assignment], $profiles, ['jp' => ['reachable' => false]], $diag);
     checkRouting(isset($down->rules[Policy::marker('kill', 'device-a')]) &&
         !isset($down->rules[Policy::marker('device', 'device-a')]), 'Down exit must remove the pass and preserve the IPv4 guard.');
-    $config = \OPNsense\Core\Config::$fixture;
-    $native = $config->addChild('OPNsense')->addChild('tailscale')->addChild('settings');
+    \OPNsense\Core\Config::$fixture = new SimpleXMLElement('<opnsense/>');
+    $native = \OPNsense\Core\Config::$fixture->addChild('OPNsense')->addChild('tailscale')->addChild('settings');
     $native->addChild('enabled', '1');
     $native->addChild('advertiseExitNode', '1');
     $native->addChild('disableSNAT', '1');
@@ -303,6 +303,7 @@ namespace {
     checkRouting(!isset($userspace->rules[Policy::marker('device', 'native-peer')]) &&
         isset($userspace->rules[Policy::marker('kill', 'native-peer')]),
         'Userspace mode cannot install the native per-peer VPN pass.');
+    \OPNsense\Core\Config::$fixture = null;
     $multiAssignment = array_replace($assignment, [
         'mode' => 'multi', 'profile' => '', 'killSwitch' => '1', 'ipv6' => '2001:db8::23'
     ]);
