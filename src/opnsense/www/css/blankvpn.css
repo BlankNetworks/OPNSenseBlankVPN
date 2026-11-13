@@ -13,6 +13,7 @@
     --bv-highlight-ink: #173866;
     --bv-error: #fff0f1;
     --bv-error-ink: #8e273c;
+    --bv-error-line: #a84156;
     --bv-pass-ink: #145a35;
     --bv-shadow: 0 1px 3px #17273c0d;
     max-width: 1250px;
@@ -40,6 +41,7 @@
     --bv-highlight-ink: #dce9ff;
     --bv-error: #402632;
     --bv-error-ink: #ffd3dd;
+    --bv-error-line: #ed8aa1;
     --bv-pass-ink: #a6e6bc;
     --bv-shadow: 0 1px 3px #0003;
 }
@@ -60,6 +62,7 @@
         --bv-highlight-ink: #dce9ff;
         --bv-error: #402632;
         --bv-error-ink: #ffd3dd;
+        --bv-error-line: #ed8aa1;
         --bv-pass-ink: #a6e6bc;
         --bv-shadow: 0 1px 3px #0003;
     }
@@ -317,9 +320,23 @@
     color: var(--bv-ink);
 }
 
-.blankvpn #bv-message[data-kind="danger"] {
+.blankvpn #bv-message[data-kind="danger"],
+.blankvpn .bv-test-result[data-result="fail"] {
+    border: 1px solid var(--bv-error-line);
+    border-inline-start-width: .3rem;
     background: var(--bv-error);
     color: var(--bv-error-ink);
+}
+
+.blankvpn #bv-message-title {
+    display: block;
+    margin-bottom: .2rem;
+    font-weight: 700;
+}
+
+.blankvpn #bv-message-detail {
+    overflow-wrap: anywhere;
+    line-height: 1.5;
 }
 
 .blankvpn .bv-scroll {
@@ -490,5 +507,16 @@
 }
 
 .blankvpn .bv-test-result[data-result="fail"] {
-    color: var(--bv-error-ink);
+    display: block;
+    margin: .4rem 0;
+    padding: .35rem .55rem;
+    border-radius: .35rem;
+    font-size: .92em;
+    line-height: 1.4;
+}
+
+.blankvpn .bv-test-result[data-result="fail"]::before {
+    content: "Test failed";
+    display: block;
+    font-weight: 700;
 }

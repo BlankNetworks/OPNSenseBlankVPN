@@ -289,6 +289,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     assert([...bv('proxy-list').querySelectorAll('button')].map(button => button.textContent).join(',') === 'Test,Edit,Enable,Remove',
         'proxy row actions must use simple labels');
+    const failedTest = bv('proxy-list').querySelector('[data-result="fail"]');
+    assert(getComputedStyle(failedTest).backgroundColor === 'rgb(255, 240, 241)' &&
+        getComputedStyle(failedTest, '::before').content.includes('Test failed'), 'Failed test row lost its warning treatment');
     bv('proxy-list').querySelector('[aria-label="Edit name for Example proxy"]').click();
     const proxyName = bv('proxy-list').querySelector('.bv-name-editor');
     proxyName.querySelector('input').value = 'SOCKS5 office';
@@ -374,9 +377,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     settingsError = 'LAN needs a Static IPv4 address on the router.';
     bv('settings-form').requestSubmit(bv('save-routing'));
     await wait();
-    assert(bv('message').textContent === settingsError && bv('message').dataset.kind === 'danger' &&
-        getComputedStyle(bv('message')).color === 'rgb(142, 39, 60)' &&
-        bv('network-profile').value === 'proxy1' && reply.dashboard.settings.coverage === 'device',
+    assert(bv('message-detail').textContent === settingsError && !bv('message-title').hidden &&
+        bv('message').dataset.kind === 'danger' && getComputedStyle(bv('message')).color === 'rgb(142, 39, 60)' &&
+        parseFloat(getComputedStyle(bv('message')).borderLeftWidth) > 1, 'Day error style is unreadable');
+    assert(bv('network-profile').value === 'proxy1' && reply.dashboard.settings.coverage === 'device',
         'Rejected proxy routing must retain the selection, report a readable error, and preserve saved routing.');
     bv('appearance').value = 'night';
     bv('appearance').dispatchEvent(new Event('change'));

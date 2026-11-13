@@ -128,7 +128,8 @@
         function notice(text, type = 'info') {
             const status = byId('message');
             status.dataset.kind = type;
-            status.textContent = text;
+            byId('message-title').hidden = type !== 'danger';
+            byId('message-detail').textContent = text;
             status.hidden = !text;
         }
 
