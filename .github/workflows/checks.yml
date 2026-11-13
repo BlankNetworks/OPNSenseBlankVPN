@@ -64,7 +64,7 @@ jobs:
           python3 build/package.py --cross --arch "$ARCH" --runtime-dir "$RUNNER_TEMP/blankvpn-runtime"
           cp "$RUNNER_TEMP/blankvpn-runtime/bin/sing-box" "dist/sing-box-$ARCH"
           cd dist
-          sha256sum -c "os-blank-vpn-0.8.7-$ARCH.pkg.sha256"
+          sha256sum -c "os-blank-vpn-0.8.8-$ARCH.pkg.sha256"
       - name: Verify package and cores in FreeBSD 15.1
         uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
         env:
@@ -75,7 +75,7 @@ jobs:
           envs: PACKAGE_ARCH
           copyback: false
           prepare: env ASSUME_ALWAYS_YES=yes pkg bootstrap
-          run: sh tests/freebsd-package.sh "dist/os-blank-vpn-0.8.7-$PACKAGE_ARCH.pkg" "$PACKAGE_ARCH"
+          run: sh tests/freebsd-package.sh "dist/os-blank-vpn-0.8.8-$PACKAGE_ARCH.pkg" "$PACKAGE_ARCH"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: blank-vpn-release-${{ matrix.arch }}
@@ -104,15 +104,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          tag=v0.8.7
+          tag=v0.8.8
           for arch in amd64 aarch64; do
-            (cd dist && sha256sum -c "os-blank-vpn-0.8.7-$arch.pkg.sha256")
+            (cd dist && sha256sum -c "os-blank-vpn-0.8.8-$arch.pkg.sha256")
           done
           if gh release view "$tag" >/dev/null 2>&1; then
             test "$(gh release view "$tag" --json isDraft,targetCommitish --jq '.isDraft and (.targetCommitish == env.GITHUB_SHA)')" = true
           else
             gh release create "$tag" --draft --prerelease --target "$GITHUB_SHA" \
-              --title "Blank VPN 0.8.7 for OPNsense CE 26.7" --notes-file RELEASE_NOTES.md
+              --title "Blank VPN 0.8.8 for OPNsense CE 26.7" --notes-file RELEASE_NOTES.md
           fi
           gh release upload "$tag" dist/*.pkg dist/*.pkg.sha256 --clobber
           gh release edit "$tag" --draft=false

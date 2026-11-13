@@ -317,7 +317,7 @@
     color: var(--bv-ink);
 }
 
-.blankvpn #bv-message.alert-danger {
+.blankvpn #bv-message[data-kind="danger"] {
     background: var(--bv-error);
     color: var(--bv-error-ink);
 }

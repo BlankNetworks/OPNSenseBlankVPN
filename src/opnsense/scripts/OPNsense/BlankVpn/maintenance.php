@@ -116,7 +116,9 @@ try {
                 $old = Firewall::health();
                 $routes = Policy::routes($model);
                 $health = array_intersect_key($old, $routes);
-                $changed = $runningProxies !== $previousProxies;
+                $changed = $runningProxies !== $previousProxies ||
+                    @file_get_contents(Policy::STATE_DIR . '/local-networks') !==
+                        implode("\n", Policy::localNetworks($settings)) . "\n";
                 foreach ($routes as $id => $profile) {
                     if (($profile['kind'] ?? '') === 'proxy') {
                         if ($profile['slot'] % 4 !== (int)gmdate('i') % 4 && in_array($id, $runningProxies, true)) {

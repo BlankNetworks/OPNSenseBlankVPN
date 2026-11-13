@@ -3,8 +3,23 @@
 declare(strict_types=1);
 
 namespace OPNsense\Core {
+    final class Backend
+    {
+        public static array $interfaces = [];
+
+        public function configdRun(string $action, bool $async, int $timeout): string
+        {
+            if ($action !== 'interface list ifconfig') {
+                throw new \RuntimeException('Unexpected interface query.');
+            }
+            return json_encode(self::$interfaces, JSON_THROW_ON_ERROR);
+        }
+    }
+
     final class Config
     {
+        public static ?\SimpleXMLElement $fixture = null;
+
         public static function getInstance(): self
         {
             return new self();
@@ -12,7 +27,7 @@ namespace OPNsense\Core {
 
         public function object(): object
         {
-            return (object)['system' => (object)[]];
+            return self::$fixture ?? (object)['system' => (object)[]];
         }
     }
 }
@@ -96,6 +111,37 @@ namespace {
         }
         throw new RuntimeException('Expected invalid domain input to be rejected.');
     }
+
+    \OPNsense\Core\Config::$fixture = new SimpleXMLElement(<<<'XML'
+        <opnsense><interfaces>
+          <lan><enable>1</enable><if>igc1</if><ipaddr>192.168.2.1</ipaddr><subnet>24</subnet><ipaddrv6>track6</ipaddrv6></lan>
+          <opt1><enable>1</enable><if>vlan1</if><ipaddr>10.12.0.1</ipaddr><subnet>24</subnet><ipaddrv6>2001:db8:99::1</ipaddrv6><subnetv6>64</subnetv6></opt1>
+          <opt2><enable>1</enable><if>igc2</if><ipaddr>dhcp</ipaddr><ipaddrv6>none</ipaddrv6></opt2>
+          <wan><enable>1</enable><if>igc0</if><ipaddr>dhcp</ipaddr><ipaddrv6>dhcp6</ipaddrv6></wan>
+        </interfaces></opnsense>
+        XML);
+    \OPNsense\Core\Backend::$interfaces = [
+        'igc1' => ['ipv6' => [
+            ['ipaddr' => 'fe80::1%igc1', 'subnetbits' => 64],
+            ['ipaddr' => '2001:db8:12::1', 'subnetbits' => 64],
+            ['ipaddr' => '2001:db8:12::2', 'subnetbits' => 64]
+        ]],
+        'igc0' => ['ipv6' => [['ipaddr' => '2001:db8:ffff::1', 'subnetbits' => 64]]]
+    ];
+    checkRouting(Policy::segmentNetworks(['lan', 'opt1']) === [
+        '192.168.2.0/24', '2001:db8:12::/64', '10.12.0.0/24', '2001:db8:99::/64'
+    ], 'Session resets must include the current tracked IPv6 prefix and static prefixes.');
+    $local = Policy::localNetworks(['localNetworks' => []]);
+    checkRouting(in_array('2001:db8:12::/64', $local, true) &&
+        !in_array('2001:db8:ffff::/64', $local, true), 'Keep the tracked LAN prefix local and exclude WAN IPv6.');
+    rejectRouting(fn () => Policy::segmentNetworks(['opt2']));
+    \OPNsense\Core\Config::$fixture->interfaces->lan->ipaddrv6 = 'idassoc6';
+    \OPNsense\Core\Backend::$interfaces['igc1']['ipv6'] = [];
+    checkRouting(Policy::segmentNetworks(['lan']) === ['192.168.2.0/24'],
+        'A tracked LAN without a delegated prefix must still be usable for IPv4.');
+    unset(\OPNsense\Core\Backend::$interfaces['igc1']);
+    rejectRouting(fn () => Policy::segmentNetworks(['lan']));
+    \OPNsense\Core\Config::$fixture = null;
 
     $domains = SmartRouting::domains("NETFLIX.com, *.netflix.com.\n*.nflxvideo.net");
     checkRouting($domains === ['netflix.com', 'nflxvideo.net'], 'Normalize suffixes and deduplicate the apex.');

@@ -109,6 +109,17 @@ namespace OPNsense\BlankVpn {
         }
     }
 
+    final class ProxyRuntime
+    {
+        public static function testNode(string $id): array
+        {
+            if ($id === 'unexpected') {
+                throw new \Error('Fixture detail that must stay server-side.');
+            }
+            throw new \RuntimeException('Proxy connection timed out.');
+        }
+    }
+
     final class Mullvad
     {
         public static int $calls = 0;
@@ -185,5 +196,11 @@ namespace {
         'The ping must use a catalog IP and report its latency.');
     $unknown = new ServiceController('https', ['relay' => '127.0.0.1']);
     checkWebGui(!$unknown->testRelayAction()['ok'], 'The relay test must reject caller-supplied destinations.');
+    $failedProxy = (new ServiceController('https', ['id' => 'offline']))->testProxyNodeAction();
+    checkWebGui($failedProxy === ['ok' => false, 'error' => 'Proxy connection timed out.'],
+        'An expected proxy failure must be returned to the server row.');
+    $unexpected = (new ServiceController('https', ['id' => 'unexpected']))->testProxyNodeAction();
+    checkWebGui($unexpected['ok'] === false && str_contains($unexpected['error'], 'Log reference') &&
+        !str_contains($unexpected['error'], 'Fixture detail'), 'Unexpected proxy errors must return a reference without crashing.');
     echo "OPNsense WebGUI request and Mullvad session fixtures passed.\n";
 }

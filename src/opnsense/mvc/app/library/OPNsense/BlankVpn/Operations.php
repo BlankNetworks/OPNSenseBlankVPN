@@ -53,6 +53,9 @@ final class Operations
             if (!empty($result['reload'])) {
                 self::sync($model);
             }
+            if (isset($result['networkProxy'])) {
+                self::verifyNetworkProxy($result['networkProxy'], $result['settings']);
+            }
             if (!empty($result['resetSegments'])) {
                 self::resetSegments($result['resetSegments'], $result['settings']);
             }
@@ -78,6 +81,26 @@ final class Operations
         }
 
         return $result;
+    }
+
+    private static function verifyNetworkProxy(array $proxy, array $settings): void
+    {
+        if (!ProxyRuntime::ready($proxy)) {
+            $status = ProxyRuntime::lastStatus();
+            throw new \RuntimeException($status['errors'][$proxy['id']] ?? 'The selected proxy tunnel did not start.');
+        }
+        $loaded = Firewall::loadedRules();
+        $routing = Policy::routingSettings($settings);
+        foreach ($routing['interfaces'] as $interface) {
+            $id = 'network:' . $interface;
+            if (($loaded[Policy::marker('device', $id)]['gateway'] ?? null) !== $proxy['interface']) {
+                throw new \RuntimeException('The selected proxy is unavailable for routing. Test the server in Proxies and try again.');
+            }
+            if (($loaded[Policy::marker('kill_v6', $id)]['action'] ?? null) !== 'block' ||
+                ($routing['networkKillSwitch'] && ($loaded[Policy::marker('kill', $id)]['action'] ?? null) !== 'block')) {
+                throw new \RuntimeException('OPNsense did not load the internet blocking rules for the selected proxy.');
+            }
+        }
     }
 
     private static function rollback(string $original, string $expected): void

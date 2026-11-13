@@ -22,7 +22,7 @@
         <button type="button" data-bv-section="tailscale" aria-controls="bv-tailscale-page" aria-pressed="false">Tailscale</button>
     </nav>
 
-    <div id="bv-message" class="alert" role="status" aria-live="polite" hidden></div>
+    <div id="bv-message" role="status" aria-live="polite" hidden></div>
     <ul id="bv-warnings" class="alert alert-warning bv-warnings" hidden></ul>
 
     <section id="bv-tunnels" data-bv-panel="vpns" aria-labelledby="bv-vpn-title">

@@ -127,7 +127,7 @@
 
         function notice(text, type = 'info') {
             const status = byId('message');
-            status.className = 'alert alert-' + type;
+            status.dataset.kind = type;
             status.textContent = text;
             status.hidden = !text;
         }

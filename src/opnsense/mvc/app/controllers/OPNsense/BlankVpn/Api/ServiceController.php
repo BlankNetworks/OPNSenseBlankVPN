@@ -615,6 +615,7 @@ class ServiceController extends ApiControllerBase
                 $hostname, $bind, $coverage, $networkMode, $networkProfile, $networkKillSwitch
             ) {
                 $before = Policy::settings($model);
+                $route = [];
                 if ($coverage === 'network') {
                     $segments = array_values(array_diff($interfaces, $tailscale));
                     if ($enabled && $networkMode !== 'disabled') {
@@ -626,7 +627,7 @@ class ServiceController extends ApiControllerBase
                     if ($enabled && $networkMode === 'full') {
                         $route = Policy::routes($model)[$networkProfile] ?? [];
                         if ($route === [] || !SmartRouting::canResolve($route) || !self::routeConfigured($route)) {
-                            throw new \DomainException('Choose a configured VPN or proxy exit with DNS for Whole-Network coverage.');
+                            throw new \DomainException('Choose a configured VPN tunnel or an enabled proxy with DNS for Whole-Network coverage.');
                         }
                     }
                 }
@@ -685,6 +686,8 @@ class ServiceController extends ApiControllerBase
                         $newStrict, $networkChanged ? [...$oldNetwork, ...$newNetwork] : []
                     ))),
                     'killSwitchReset' => array_values(array_unique($reset)),
+                    'networkProxy' => $newNetwork !== [] && $networkMode === 'full' &&
+                        ($route['kind'] ?? '') === 'proxy' ? $route : null,
                     'settings' => $after
                 ];
             });
@@ -1142,13 +1145,13 @@ class ServiceController extends ApiControllerBase
         } catch (\DomainException | \InvalidArgumentException $error) {
             return ['ok' => false, 'error' => $error->getMessage()];
         } catch (\RuntimeException $error) {
-            if ($allowRuntimeMessage && $error::class === \RuntimeException::class) {
+            if ($allowRuntimeMessage && get_class($error) === \RuntimeException::class) {
                 return ['ok' => false, 'error' => $error->getMessage()];
             }
             syslog(LOG_WARNING, 'Blank VPN operation did not complete.');
         } catch (\Throwable) {
             $reference = gmdate('His') . '-' . getmypid();
-            syslog(LOG_ERR, 'Blank VPN ' . $reference . ' ' . $error::class . ' at ' .
+            syslog(LOG_ERR, 'Blank VPN ' . $reference . ' ' . get_class($error) . ' at ' .
                 basename($error->getFile()) . ':' . $error->getLine());
             return ['ok' => false, 'error' => 'Blank VPN encountered an unexpected error. Log reference ' . $reference . '.'];
         }

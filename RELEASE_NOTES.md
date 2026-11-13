@@ -1,4 +1,4 @@
-# Blank VPN 0.8.7
+# Blank VPN 0.8.8
 
 This lab prerelease targets OPNsense Community Edition 26.7 with the FreeBSD 15 package ABI.
 
@@ -8,8 +8,8 @@ This lab prerelease targets OPNsense Community Edition 26.7 with the FreeBSD 15 
 
 Use `pkg config ABI` on the router to choose the matching download.
 
-- Server rows use **Test**, **Edit**, **Enable**, and **Remove**. For an enabled proxy, **Disable** frees its routing slot and keeps the server in the catalog.
-- Proxy tests include a regional HTTPS endpoint and report upstream TCP, SOCKS5 authentication, and TLS failures where available. SOCKS5 links and manual entries support TLS hostname verification and optional UDP.
-- Blank VPN reuses the router’s Mullvad device registration when you switch servers. Existing tunnels are preserved. City, country, and worldwide batches remain available for browsing.
+- Whole-Network coverage accepts LANs with delegated or automatically assigned IPv6 alongside static IPv4. Blank VPN uses current IPv6 prefixes when it resets existing internet sessions.
+- Whole-Network proxy setup checks that the tunnel and firewall rules loaded. If they fail, the save reports the problem and restores the previous configuration.
+- Failed server tests return a message or a log reference. Routing errors remain readable in day and night mode.
 
 Download the `.pkg` and SHA-256 file below. See the [installation instructions](https://github.com/BlankNetworks/OPNSenseBlankVPN#lab-installation) and [third-party source information](https://github.com/BlankNetworks/OPNSenseBlankVPN/blob/main/THIRD_PARTY.md). Live OPNsense forwarding, core rollback, and tunnel-drop behavior still need lab validation.

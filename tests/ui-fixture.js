@@ -1,4 +1,5 @@
 const requests = [];
+let settingsError = null;
 const reply = {
     dashboard: {
         devices: [{ipv4: '10.0.0.20', ipv4Addresses: ['10.0.0.20', '10.0.0.21'], ipv6: ['fd00::20'], mac:'02:00:00:00:00:20', interface:'lan', interfaceName:'LAN', name:'<b>Device</b>', lastSeen:'2026-11-12T13:30:00Z', stable:true}],
@@ -78,6 +79,9 @@ window.jQuery.ajax = async (request) => {
     }
     if (action === 'disable') {
         reply.dashboard.settings.enabled = false;
+    }
+    if (action === 'settings' && settingsError) {
+        return {ok:false, error:settingsError};
     }
     if (action === 'settings' || action === 'tailscaleSettings') {
         Object.assign(reply.dashboard.settings, data);
@@ -362,12 +366,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         'Whole-Network coverage did not show Kill Switch below Interface.');
     assert(!bv('network-profile-field').hidden && bv('coverage-note').textContent.includes('Canada'),
         'network exit selection had no visible effect');
-    bv('settings-form').requestSubmit(bv('settings-form').querySelector('button[type=submit]'));
+    reply.dashboard.profiles.push({id:'proxy1', name:'Chicago proxy', kind:'proxy', node:'proxy-1', interface:'tun200'});
+    bv('refresh').click();
+    await wait();
+    bv('network-profile').value = 'proxy1';
+    bv('network-profile').dispatchEvent(new Event('input', {bubbles:true}));
+    settingsError = 'LAN needs a Static IPv4 address on the router.';
+    bv('settings-form').requestSubmit(bv('save-routing'));
+    await wait();
+    assert(bv('message').textContent === settingsError && bv('message').dataset.kind === 'danger' &&
+        getComputedStyle(bv('message')).color === 'rgb(142, 39, 60)' &&
+        bv('network-profile').value === 'proxy1' && reply.dashboard.settings.coverage === 'device',
+        'Rejected proxy routing must retain the selection, report a readable error, and preserve saved routing.');
+    bv('appearance').value = 'night';
+    bv('appearance').dispatchEvent(new Event('change'));
+    assert(getComputedStyle(bv('message')).color === 'rgb(255, 211, 221)', 'Night error text lost contrast.');
+    bv('appearance').value = 'day';
+    bv('appearance').dispatchEvent(new Event('change'));
+    settingsError = null;
+    bv('settings-form').requestSubmit(bv('save-routing'));
     await wait();
     assert(requests.some(x => x.action === 'settings' && x.data.coverage === 'network' &&
-        x.data.networkMode === 'full' && x.data.networkProfile === 'vpn1' && x.data.networkKillSwitch === true) &&
-        bv('add-device').hidden,
-        'Whole-Network coverage settings did not apply');
+        x.data.networkMode === 'full' && x.data.networkProfile === 'proxy1' && x.data.networkKillSwitch === true) &&
+        bv('add-device').hidden && reply.dashboard.settings.networkProfile === 'proxy1',
+        'Whole-Network proxy coverage settings did not apply.');
     bv('disable-routing').click();
     await wait();
     assert(requests.some(x => x.action === 'disable') && bv('routing-enabled').hidden &&

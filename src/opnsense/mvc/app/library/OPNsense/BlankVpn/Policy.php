@@ -2,6 +2,7 @@
 
 namespace OPNsense\BlankVpn;
 
+use OPNsense\Core\Backend;
 use OPNsense\Core\Config;
 
 final class Policy
@@ -11,6 +12,7 @@ final class Policy
     public const STATE_DIR = '/var/db/blank-vpn';
     public const PROBE_IP = '1.1.1.1';
     private const FAILURE = ['block', 'backup', 'wan'];
+    private const LIVE_IPV6 = ['track6', 'idassoc6', 'dhcp6', 'slaac', 'linklocal'];
 
     public static function fields($node): array
     {
@@ -175,24 +177,63 @@ final class Policy
     {
         $networks = [];
         $config = Config::getInstance()->object();
+        $runtime = null;
         foreach ($interfaces as $interface) {
             $node = $config->interfaces->{$interface};
+            $name = (string)$node->descr ?: strtoupper($interface);
             $ipv4 = self::cidr((string)$node->ipaddr . '/' . (string)$node->subnet);
-            $ipv6 = (string)$node->ipaddrv6;
-            if ($ipv4 === null || str_contains($ipv4, ':') ||
-                !in_array($ipv6, ['', 'none'], true) && !filter_var($ipv6, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-                throw new \DomainException('A managed segment needs static IPv4 and either static IPv6 or no IPv6.');
+            if ($ipv4 === null || str_contains($ipv4, ':')) {
+                throw new \DomainException($name . ' needs a Static IPv4 address on the router. Check Interfaces → Assignments.');
             }
             $networks[] = $ipv4;
-            if (!in_array($ipv6, ['', 'none'], true)) {
-                $network = self::cidr($ipv6 . '/' . (string)$node->subnetv6);
-                if ($network === null) {
-                    throw new \DomainException('The managed segment has an invalid static IPv6 network.');
+            $ipv6 = (string)$node->ipaddrv6;
+            if ($ipv6 === '' || $ipv6 === 'none') {
+                continue;
+            }
+            if (in_array($ipv6, self::LIVE_IPV6, true)) {
+                $runtime ??= self::runtimeInterfaces();
+                $rows = $runtime[(string)$node->if]['ipv6'] ?? null;
+                if (!is_array($rows)) {
+                    throw new \DomainException('Blank VPN could not read the current IPv6 addresses on ' . $name . '. Check that the interface is active and try again.');
                 }
+                array_push($networks, ...self::interfaceIpv6Networks($rows));
+                continue;
+            }
+            $network = self::cidr($ipv6 . '/' . (string)$node->subnetv6);
+            if ($network === null || !str_contains($network, ':')) {
+                throw new \DomainException($name . ' has an unsupported IPv6 mode or invalid IPv6 prefix. Check Interfaces → Assignments.');
+            }
+            $networks[] = $network;
+        }
+        return array_values(array_unique($networks));
+    }
+
+    private static function runtimeInterfaces(): array
+    {
+        $output = (new Backend())->configdRun('interface list ifconfig', false, 5);
+        $interfaces = json_decode((string)$output, true);
+        return is_array($interfaces) ? $interfaces : [];
+    }
+
+    private static function interfaceIpv6Networks(array $rows): array
+    {
+        $networks = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $ip = explode('%', (string)($row['ipaddr'] ?? ''), 2)[0];
+            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ||
+                self::contains('fe80::/10', $ip) || self::contains('ff00::/8', $ip) ||
+                in_array($ip, ['::', '::1'], true)) {
+                continue;
+            }
+            $network = self::cidr($ip . '/' . (string)($row['subnetbits'] ?? ''));
+            if ($network !== null) {
                 $networks[] = $network;
             }
         }
-        return array_values(array_unique($networks));
+        return $networks;
     }
 
     public static function localNetworks(array $settings): array
@@ -203,9 +244,19 @@ final class Policy
                 $networks[] = $network;
             }
         }
-        foreach (Config::getInstance()->object()->interfaces->children() as $node) {
+        $runtime = null;
+        foreach (Config::getInstance()->object()->interfaces->children() as $id => $node) {
             if (!isset($node->enable)) {
                 continue;
+            }
+            $local = self::interfaceId($id) && empty((string)$node->gateway) &&
+                empty((string)$node->gatewayv6) && empty((string)$node->gateway_interface);
+            if ($local && in_array((string)$node->ipaddrv6, self::LIVE_IPV6, true)) {
+                $runtime ??= self::runtimeInterfaces();
+                $rows = $runtime[(string)$node->if]['ipv6'] ?? [];
+                if (is_array($rows)) {
+                    array_push($networks, ...self::interfaceIpv6Networks($rows));
+                }
             }
             foreach ([['ipaddr', 'subnet', 32], ['ipaddrv6', 'subnetv6', 128]] as [$address, $prefix, $max]) {
                 $ip = (string)$node->{$address};
@@ -213,10 +264,7 @@ final class Policy
                     continue;
                 }
                 $networks[] = $ip . '/' . $max;
-                if (
-                    empty((string)$node->gateway) && empty((string)$node->gatewayv6) &&
-                    empty((string)$node->gateway_interface) && self::interfaceId($node->getName())
-                ) {
+                if ($local) {
                     $subnet = self::cidr($ip . '/' . (string)$node->{$prefix});
                     if ($subnet !== null) {
                         $networks[] = $subnet;

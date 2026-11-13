@@ -1,4 +1,4 @@
-# Blank VPN 0.8.7
+# Blank VPN 0.8.8
 
 Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Multi-Path keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
@@ -41,7 +41,7 @@ The package and SHA-256 file are written to `dist/`. To reproduce the bundled re
 3. Transfer the matching package and its SHA-256 file to the router. Run these commands one line at a time as root from the same directory. For ARM64, replace `amd64` with `aarch64`.
 
    ```sh
-   sha256sum -c os-blank-vpn-0.8.7-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.7-amd64.pkg
+   sha256sum -c os-blank-vpn-0.8.8-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.8-amd64.pkg
    pkg info os-blank-vpn
    ```
 
@@ -103,7 +103,7 @@ Core updates, saved Mullvad logins, the private subscription catalog, and recove
 Open **Network**, check the Ethernet ports or VLANs under **Interface**, choose who should use the rules, then click **Save and Enable VPN**. The button turns green once routing is enabled. The main home Ethernet port appears first. Devices need to use OPNsense as their gateway for the policy to apply.
 
 - **Only devices I choose** applies saved policies to individual devices. Select **Add device rule** and enter a reserved IPv4 address.
-- **Whole-Network coverage** uses one mode for the selected LANs and VLANs. Existing device assignments are saved for when you switch back. Check **Kill Switch** below **Interface** to block internet if the selected exit goes offline. One-exit mode routes IPv4 through that exit and blocks internet-bound IPv6 while the exit is in use. Blocked mode denies internet access on both families. Off restores normal routing. Whole-Network coverage requires static IPv4 and static IPv6 or no IPv6 on the managed segments.
+- **Whole-Network coverage** uses one mode for the selected LANs and VLANs. Existing device assignments are saved for when you switch back. Check **Kill Switch** below **Interface** to block internet if the selected exit goes offline. One-exit mode routes IPv4 through that exit and blocks internet-bound IPv6 while the exit is in use. Blocked mode denies internet access on both families. Off restores normal routing. Whole-Network coverage requires a static IPv4 address on each selected router interface. LAN clients can still use DHCP. Blank VPN reads the current LAN IPv6 prefixes for Track Interface, Identity Association, SLAAC, and DHCPv6.
 
 
 | Mode | Internet behavior |
