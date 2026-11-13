@@ -153,7 +153,7 @@
                     <input id="bv-subscription-name" class="form-control" type="text" maxlength="96" required>
                 </label>
                 <label>HTTPS subscription URL
-                    <input id="bv-subscription-url" class="form-control" type="password" maxlength="2048" autocomplete="off" required>
+                    <input id="bv-subscription-url" class="form-control" type="password" maxlength="8192" autocomplete="off" required>
                 </label>
                 <label class="bv-check"><input type="checkbox" id="bv-subscription-auto" checked> Refresh automatically every six hours</label>
                 <button type="submit" class="btn btn-primary">Add subscription</button>

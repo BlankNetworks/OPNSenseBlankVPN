@@ -31,7 +31,7 @@ Juicity, raw legacy V2Fly engine execution, separate Trojan forks, full provider
 
 ## Operations
 
-An HTTPS subscription fetch uses a public resolved address and TLS verification. Imported servers remain inactive until you enable them. Refreshes retain the prior usable list on error and retain enabled node configurations when a provider removes or rotates them. Remove an old exit and enable the new node when you want to adopt changed credentials or transport settings.
+An HTTPS subscription fetch uses pinned public addresses and TLS verification. Each HTTPS redirect is checked before following it. Imported servers can be tested before activation. The test uses a loopback SOCKS listener and leaves device routing off. Refreshes retain the prior usable list on error and retain enabled node configurations when a provider removes or rotates them. Remove an old exit and enable the new node when you want to adopt changed credentials or transport settings.
 
 Proxy transport settings and subscription URLs are saved in the private `/var/db/blank-vpn/proxy-catalog.json` file. Native OPNsense configuration stores the route reference. Back up both when migrating routers, and treat the private catalog as a credential file. The full release installs the pinned cores to `/usr/local/libexec/blankvpn`. The source build also recognizes a root-owned OPNsense sing-box executable at `/usr/local/bin/sing-box`.
 

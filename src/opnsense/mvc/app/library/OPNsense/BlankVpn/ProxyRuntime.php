@@ -11,6 +11,8 @@ final class ProxyRuntime
 {
     public const SLOTS = 8;
     public const FIRST_DNS_PORT = 46660;
+    private const TEST_SLOT = self::SLOTS;
+    private const CONFIG_VERSION = 2;
     private const BIN = [
         'mihomo' => '/usr/local/libexec/blankvpn/mihomo',
         'tun2socks' => '/usr/local/libexec/blankvpn/tun2socks',
@@ -152,8 +154,8 @@ final class ProxyRuntime
                 'dns' => [
                     'enable' => true, 'listen' => '127.0.0.1:' . $route['proxyDns'],
                     'ipv6' => true, 'enhanced-mode' => 'redir-host',
-                    'default-nameserver' => ['127.0.0.1'],
-                    'proxy-server-nameserver' => ['127.0.0.1'],
+                    'default-nameserver' => ['system'],
+                    'proxy-server-nameserver' => ['system'],
                     'nameserver' => ['https://1.1.1.1/dns-query#blankvpn-upstream']
                 ]
             ]
@@ -169,7 +171,7 @@ final class ProxyRuntime
             'bridge' => self::BIN['tun2socks'], 'mihomo' => self::BIN['mihomo'],
             'adapter' => $route['core'] === 'mihomo' ? null : self::base($route['core'])
         ]);
-        if ($recorded !== $paths || ($state['node'] ?? null) !== $route['node'] || ($state['id'] ?? null) !== $route['id'] ||
+        if (($state['configVersion'] ?? 0) !== self::CONFIG_VERSION || $recorded !== $paths || ($state['node'] ?? null) !== $route['node'] || ($state['id'] ?? null) !== $route['id'] ||
             self::pid($slot, 'bridge') === null || self::pid($slot, 'mihomo') === null ||
             ($route['core'] !== 'mihomo' && self::pid($slot, 'adapter') === null)) {
             return false;
@@ -181,6 +183,8 @@ final class ProxyRuntime
 
     public static function reconcile(BlankVpn $model): array
     {
+        // Maintenance holds the operation lock, so this only cleans an interrupted test.
+        self::stop(self::TEST_SLOT);
         $desired = Policy::settings($model)['enabled'] ? array_column(self::routes($model), null, 'slot') : [];
         $catalog = $desired === [] ? [] : ProxyCatalog::read()['nodes'];
         $errors = [];
@@ -221,42 +225,93 @@ final class ProxyRuntime
         return is_array($data) ? $data : ['active' => [], 'errors' => []];
     }
 
+    public static function testNode(string $id, ?array $route = null): array
+    {
+        $node = ProxyCatalog::read()['nodes'][$id] ?? null;
+        if (!is_array($node)) {
+            throw new DomainException('The saved proxy server is missing. Import it again before testing.');
+        }
+        if ($route !== null && self::ready($route)) {
+            return self::probe($route);
+        }
+
+        // Use loopback listeners only, on ports reserved for this serialized test.
+        // No tunnel interface, gateway, or client firewall rule is created.
+        $slot = self::TEST_SLOT;
+        $test = self::route('proxy-test', $slot, $id, $node['name'], $node['core'], $node['protocol']);
+        self::stop($slot);
+        try {
+            self::start($test, $node, true);
+            return self::probeSocks($test['socksPort']);
+        } finally {
+            self::stop($slot);
+        }
+    }
+
     public static function probe(array $route): array
     {
         if (!self::ready($route)) {
-            return ['reachable' => false];
+            return ['reachable' => false, 'detail' => 'The proxy tunnel is not running.'];
+        }
+        return self::probeSocks($route['socksPort']);
+    }
+
+    private static function probeSocks(int $port): array
+    {
+        if (!function_exists('curl_init')) {
+            throw new RuntimeException('The OPNsense PHP cURL extension is unavailable.');
         }
         $curl = curl_init('https://cloudflare-dns.com/dns-query?name=example.com&type=A');
         if ($curl === false) {
-            return ['reachable' => false];
+            throw new RuntimeException('OPNsense could not initialize the proxy connection test.');
         }
-        curl_setopt_array($curl, [
-            CURLOPT_PROXY => 'socks5h://127.0.0.1:' . $route['socksPort'],
+        if (!curl_setopt_array($curl, [
+            CURLOPT_PROXY => 'socks5h://127.0.0.1:' . $port,
             CURLOPT_NOPROXY => '', CURLOPT_PROTOCOLS_STR => 'https', CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_HTTPHEADER => ['Accept: application/dns-json'],
-            CURLOPT_CONNECTTIMEOUT => 3, CURLOPT_TIMEOUT => 4,
+            CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_TIMEOUT => 8,
             CURLOPT_WRITEFUNCTION => static fn ($handle, string $body) => strlen($body)
-        ]);
-        $reachable = curl_exec($curl) !== false && curl_getinfo($curl, CURLINFO_RESPONSE_CODE) === 200;
-        return ['reachable' => $reachable,
+        ])) {
+            throw new RuntimeException('OPNsense could not configure the proxy connection test.');
+        }
+        $transport = curl_exec($curl) !== false;
+        $status = curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+        $reachable = $transport && $status === 200;
+        $detail = match (curl_errno($curl)) {
+            CURLE_OPERATION_TIMEDOUT => 'The proxy connection timed out.',
+            CURLE_PEER_FAILED_VERIFICATION => 'The HTTPS test certificate could not be verified.',
+            default => $transport ? 'The HTTPS test returned HTTP ' . $status . '.'
+                : 'The proxy could not connect to the test destination. Check the server address, credentials, and transport.'
+        };
+        return ['reachable' => $reachable, 'detail' => $reachable ? null : $detail,
             'milliseconds' => $reachable ? round(curl_getinfo($curl, CURLINFO_TOTAL_TIME) * 1000, 1) : null];
     }
 
-    private static function start(array $route, array $node): void
+    public static function prepareTunnelDriver(): void
+    {
+        if (!file_exists('/dev/tun')) {
+            Resolver::command(['/sbin/kldload', '-n', 'if_tuntap'], false);
+        }
+        if (!file_exists('/dev/tun')) {
+            throw new DomainException('The FreeBSD TUN device is unavailable. Check if_tuntap and net.link.tun.devfs_cloning.');
+        }
+    }
+
+    private static function start(array $route, array $node, bool $testOnly = false): void
     {
         self::preflight($node['core']);
         $slot = $route['slot'];
         $interface = $route['interface'];
-        if (!file_exists('/dev/tun')) {
-            throw new DomainException('The FreeBSD if_tun driver must be available to enable a proxy exit.');
-        }
-        if (self::ifconfig($interface) !== '') {
-            throw new DomainException('A non-Blank VPN interface is using this proxy slot.');
-        }
-        foreach (Policy::localNetworks(['localNetworks' => []]) as $network) {
-            if (Policy::contains($network, $route['peer'])) {
-                throw new DomainException('The proxy tunnel address overlaps a local network.');
+        if (!$testOnly) {
+            self::prepareTunnelDriver();
+            if (self::ifconfig($interface) !== '') {
+                throw new DomainException('A non-Blank VPN interface is using this proxy slot.');
+            }
+            foreach (Policy::localNetworks(['localNetworks' => []]) as $network) {
+                if (Policy::contains($network, $route['peer'])) {
+                    throw new DomainException('The proxy tunnel address overlaps a local network.');
+                }
             }
         }
         $paths = self::path($slot);
@@ -269,7 +324,8 @@ final class ProxyRuntime
         $configuration = self::configuration($route, $node);
         $binaries = self::binaries($node['core']);
         self::save($paths . '/owner.json', [
-            'id' => $route['id'], 'node' => $route['node'], 'core' => $node['core'], 'binaries' => $binaries
+            'id' => $route['id'], 'node' => $route['node'], 'core' => $node['core'], 'binaries' => $binaries,
+            'configVersion' => self::CONFIG_VERSION
         ]);
         try {
             if ($configuration['adapter'] !== null) {
@@ -283,6 +339,9 @@ final class ProxyRuntime
             self::save($mihomo, $configuration['mihomo']);
             self::launch($slot, 'mihomo', [$binaries['mihomo'], '-d', $paths, '-f', $mihomo]);
             self::waitForSocket($route['socksPort'], $slot, 'mihomo');
+            if ($testOnly) {
+                return;
+            }
             self::waitForSocket($route['proxyDns'], $slot, 'mihomo', 'udp4');
             self::launch($slot, 'bridge', [
                 $binaries['bridge'], '--device', 'tun://' . $interface,
@@ -304,7 +363,9 @@ final class ProxyRuntime
                 throw new RuntimeException('The proxy tunnel started without a usable interface.');
             }
         } catch (\Throwable $error) {
-            self::stop($slot);
+            if (!$testOnly) {
+                self::stop($slot);
+            }
             throw $error;
         }
     }
@@ -432,7 +493,7 @@ final class ProxyRuntime
                 throw new RuntimeException('A proxy core is still stopping. Retry after it exits.');
             }
         }
-        if (is_string($owner['id'] ?? null)) {
+        if ($slot < self::SLOTS && is_string($owner['id'] ?? null)) {
             $device = 'tun' . (200 + $slot);
             if (self::ownedInterface(['id' => $owner['id']], self::ifconfig($device))) {
                 Resolver::command(['/sbin/ifconfig', $device, 'destroy']);

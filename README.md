@@ -1,4 +1,4 @@
-# Blank VPN 0.8.3
+# Blank VPN 0.8.4
 
 Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Multi-Path keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
@@ -41,11 +41,11 @@ The package and SHA-256 file are written to `dist/`. To reproduce the bundled re
 3. Transfer the matching package and its SHA-256 file to the router. Run these commands one line at a time as root from the same directory. For ARM64, replace `amd64` with `aarch64`.
 
    ```sh
-   sha256sum -c os-blank-vpn-0.8.3-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.3-amd64.pkg
+   sha256sum -c os-blank-vpn-0.8.4-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.4-amd64.pkg
    pkg info os-blank-vpn
    ```
 
-4. Sign in using the current WebGUI HTTPS address and open **VPN → Blank VPN → Dashboard** or `/ui/blankvpn/index`. Routing starts disabled. The installer registers the dashboard, model, firewall hook, and local maintenance entry.
+4. The package declares its OPNsense, Dnsmasq, PHP cURL, and Python dependencies. It loads the FreeBSD TUN driver when needed. Sign in using the current WebGUI HTTPS address and open **VPN → Blank VPN → Dashboard** or `/ui/blankvpn/index`. Routing starts disabled. The installer registers the dashboard, model, firewall hook, and local maintenance entry.
 5. For delegated access, assign **VPN: Blank VPN: View devices and connections** or **VPN: Blank VPN: Manage tunnels and policy routing** in the native user manager. Confirm ACL behavior before delegating either permission.
 
 ## Open the dashboard
@@ -80,15 +80,15 @@ The router saves the selected batches in its OPNsense configuration. Adding or r
 
 ### Test servers and exits
 
-Use **Ping server** beside the selected Mullvad relay to send one ICMP echo from OPNsense to its published IPv4 address. An unanswered ping can mean the relay filters ICMP. Use **Test exit** beside a configured VPN or enabled proxy to check an HTTPS request through that exit. VPN tests require active routing and a loaded firewall rule that blocks fallback for the test connection.
+Use **Ping server** beside the selected Mullvad relay to send one ICMP echo from OPNsense to its published IPv4 address. An unanswered ping can mean the relay filters ICMP. Use **Test exit** beside a configured VPN or enabled proxy to check an HTTPS request through that exit. Saved WireGuard and native VPN exits can be tested while device routing is off. Their HTTPS probe requires a verified firewall route with a fallback block. A relay ping checks ICMP before activation. The exit test verifies internet access through the configured tunnel.
 
 ## Add proxy servers and subscriptions
 
 The GitHub release includes Mihomo, tun2socks, Xray, sing-box, and the Clash YAML parser. The source build can also use independently installed runtimes. Review [PROXY_SUPPORT.md](PROXY_SUPPORT.md) for formats and protocol coverage.
 
 1. Open **Proxies** over HTTPS. Add a single server with **Add a proxy manually**, paste its share link, or import a base64 list, Clash YAML, Xray JSON, or sing-box JSON.
-2. For a provider feed, add its direct HTTPS subscription URL. The list shows reported traffic allowance, usage, and expiry when the provider sends those fields. New subscriptions enable automatic refresh every six hours. Change the setting per saved subscription. An enabled exit retains its server if a later refresh removes it.
-3. Choose **Enable exit** on a server, then select the exit under **Multi-Path** or **Network**. Device assignments can use the IPv4 kill switch or a backup exit. UDP support varies with the upstream protocol and transport.
+2. For a provider feed, add its direct HTTPS subscription URL. The router follows public HTTPS redirects after validating each destination and reports DNS, TLS, HTTP, timeout, or format errors. The list shows reported traffic allowance, usage, and expiry when the provider sends those fields. New subscriptions enable automatic refresh every six hours. Change the setting per saved subscription. An enabled exit retains its server if a later refresh removes it.
+3. Choose **Test server** to check a saved proxy before enabling it. Choose **Enable exit** on a server to make it available for routing, then select the exit under **Multi-Path** or **Network**. Device assignments can use the IPv4 kill switch or a backup exit. UDP support varies with the upstream protocol and transport.
 
 ## Update proxy cores
 

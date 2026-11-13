@@ -5,6 +5,7 @@ require_once('/usr/local/etc/inc/config.inc');
 use OPNsense\BlankVpn\BlankVpn;
 use OPNsense\BlankVpn\Firewall;
 use OPNsense\BlankVpn\Mullvad;
+use OPNsense\BlankVpn\NativeVpn;
 use OPNsense\BlankVpn\Operations;
 use OPNsense\BlankVpn\Policy;
 use OPNsense\BlankVpn\ProxyCatalog;
@@ -58,6 +59,14 @@ try {
             }
             echo "ok\n";
             break;
+        case 'post_install':
+            Operations::exclusive(function () {
+                $model = new BlankVpn();
+                if (Policy::settings($model)['enabled'] || Policy::profiles($model) !== [] || NativeVpn::routes($model) !== []) {
+                    Operations::sync($model);
+                }
+            });
+            break;
         case 'maintain':
             Operations::exclusive(function () {
                 $model = new BlankVpn();
@@ -94,8 +103,6 @@ try {
                 $health = array_intersect_key($old, $routes);
                 $changed = $runningProxies !== $previousProxies;
                 foreach ($routes as $id => $profile) {
-                    $marker = Policy::marker('probe', $id . Policy::PROBE_IP);
-                    $verifiedRule = ($loaded[$marker]['gateway'] ?? null) === ($profile['interface'] ?? '');
                     if (($profile['kind'] ?? '') === 'proxy') {
                         if ($profile['slot'] % 4 !== (int)gmdate('i') % 4 && in_array($id, $runningProxies, true)) {
                             continue;
@@ -107,7 +114,7 @@ try {
                         $verified = Firewall::probePathInstalled($profile, $loaded ?? []);
                         $probe = WireGuard::probeSource($verified ? $source : '');
                     } else {
-                        $probe = WireGuard::probe($profile, $verifiedRule);
+                        $probe = WireGuard::probe($profile, Firewall::probePathInstalled($profile, $loaded ?? []));
                     }
                     $previous = $old[$id] ?? [];
                     $success = !empty($probe['reachable']);

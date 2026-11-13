@@ -12,22 +12,13 @@ final class Firewall
     {
         $model = new BlankVpn();
         $settings = Policy::routingSettings(Policy::settings($model));
-        if (!$settings['enabled']) {
-            return;
-        }
-
-        $localFile = Policy::writeState('local-networks', implode("\n", Policy::localNetworks($settings)) . "\n");
-        $firewall->registerTable(Policy::LOCAL_TABLE, true, $localFile);
         $profiles = Policy::routes($model);
-        $health = self::health();
-        $diagnostics = new Diagnostics();
-        $interfaces = iterator_to_array($firewall->getInterfaceMapping());
-
         $proxyGateways = [];
-        $pausedCore = ProxyCores::pausedCore();
+        $pausedCore = $settings['enabled'] ? ProxyCores::pausedCore() : null;
         foreach ($profiles as &$profile) {
             if (($profile['kind'] ?? '') === 'proxy') {
-                $profile['owned'] = ($pausedCore === null || !ProxyCores::uses($profile, $pausedCore)) &&
+                $profile['owned'] = $settings['enabled'] &&
+                    ($pausedCore === null || !ProxyCores::uses($profile, $pausedCore)) &&
                     ProxyRuntime::ready($profile);
                 if ($profile['owned']) {
                     $proxyGateways[$profile['gateway']] = [[
@@ -39,10 +30,19 @@ final class Firewall
             $profile['owned'] = ($profile['kind'] ?? '') === 'native'
                 ? $profile['configured'] && $profile['address'] !== ''
                 : WireGuard::check($profile)['ok'];
-            self::registerProfile($firewall, $profile);
+            self::registerProfile($firewall, $profile, $settings['enabled']);
         }
-        $firewall->setGatewayGroups($proxyGateways);
         unset($profile);
+        if (!$settings['enabled']) {
+            return;
+        }
+
+        $localFile = Policy::writeState('local-networks', implode("\n", Policy::localNetworks($settings)) . "\n");
+        $firewall->registerTable(Policy::LOCAL_TABLE, true, $localFile);
+        $firewall->setGatewayGroups($proxyGateways);
+        $health = self::health();
+        $diagnostics = new Diagnostics();
+        $interfaces = iterator_to_array($firewall->getInterfaceMapping());
 
         $services = SmartRouting::boundServices(SmartRouting::services($model));
         $multiOutage = self::multiPathOutage($firewall, $services, $profiles, $health);
@@ -501,7 +501,7 @@ final class Firewall
         return null;
     }
 
-    private static function registerProfile(Plugin $firewall, array $profile): void
+    private static function registerProfile(Plugin $firewall, array $profile, bool $includeDns): void
     {
         $address = explode('/', $profile['address'] ?? '')[0];
         if (filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
@@ -512,7 +512,7 @@ final class Firewall
         $destinations = [
             ['to' => self::probeIp(), 'to_port' => '443', 'protocol' => 'tcp', 'kind' => 'probe']
         ];
-        foreach ($profile['dns'] ?? [] as $dns) {
+        foreach ($includeDns ? ($profile['dns'] ?? []) : [] as $dns) {
             if (filter_var($dns, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
                 $destinations[] = ['to' => $dns, 'to_port' => '53', 'protocol' => 'tcp/udp', 'kind' => 'dns_out'];
             }
@@ -583,7 +583,7 @@ final class Firewall
         if ($loaded === null) {
             throw new \RuntimeException('Blank VPN could not verify the loaded PF rules.');
         }
-        $settings = Policy::settings($model);
+        $settings = Policy::routingSettings(Policy::settings($model));
         foreach ($settings['strictInterfaces'] as $interface) {
             $marker = Policy::marker('block', $interface);
             if ($settings['enabled'] !== (($loaded[$marker]['action'] ?? '') === 'block')) {
@@ -593,7 +593,8 @@ final class Firewall
         if (!$settings['enabled']) {
             return;
         }
-        foreach (Policy::assignments($model) as $id => $row) {
+        $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model) : [];
+        foreach ($assignments as $id => $row) {
             $mode = Policy::mode($row);
             if (($mode === 'blocked' || ($mode === 'full' && $row['failure'] !== 'wan')) &&
                 (($loaded[Policy::marker('kill', $id)]['action'] ?? '') !== 'block' ||
@@ -601,8 +602,8 @@ final class Firewall
                 throw new \RuntimeException('A per-IP fail-closed firewall guard is missing.');
             }
         }
-        foreach (SmartRouting::services($model) as $id => $service) {
-            foreach ($settings['smartInterfaces'] as $interface) {
+        foreach (SmartRouting::boundServices(SmartRouting::services($model)) as $id => $service) {
+            foreach (array_diff($settings['smartInterfaces'], $settings['strictInterfaces']) as $interface) {
                 $marker = Policy::marker('service_guard', $id . ':' . $interface);
                 if (($loaded[$marker]['action'] ?? '') !== 'block') {
                     throw new \RuntimeException('A Multi-Path destination guard is missing.');

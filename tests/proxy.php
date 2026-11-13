@@ -69,6 +69,28 @@ assertProxy(ProxyCatalog::subscriptionUsage('Upload=12; download=34; total=100; 
 assertProxy(ProxyCatalog::subscriptionUsage('upload=1; upload=2; total=9223372036854775808; expire=-1; download=0') ===
     ['download' => 0], 'Ignore duplicate, overflowed and negative metadata.');
 
+$subscriptionEndpoint = new ReflectionMethod(ProxyCatalog::class, 'endpoint');
+$subscriptionAddresses = new ReflectionMethod(ProxyCatalog::class, 'publicAddresses');
+assertProxy($subscriptionEndpoint->invoke(null, 'https://Example.com:8443/feed?token=private') ===
+    ['example.com', 8443, 'Example.com'], 'Read a normal HTTPS subscription endpoint.');
+assertProxy($subscriptionAddresses->invoke(null, '1.1.1.1') === ['1.1.1.1'] &&
+    $subscriptionAddresses->invoke(null, '2606:4700:4700::1111') === ['2606:4700:4700::1111'],
+    'Pin public IPv4 and IPv6 addresses.');
+foreach (['127.0.0.1', '10.0.0.1', '224.0.0.1', '::ffff:127.0.0.1', '64:ff9b::7f00:1', '2002:7f00:1::1', 'ff02::1'] as $address) {
+    try {
+        $subscriptionAddresses->invoke(null, $address);
+        throw new RuntimeException('Subscription fetch accepted a non-public or translated destination.');
+    } catch (DomainException) {
+    }
+}
+foreach (['http://example.com/list', 'https://name:secret@example.com/list', 'https://example.com./list'] as $url) {
+    try {
+        $subscriptionEndpoint->invoke(null, $url);
+        throw new RuntimeException('Subscription fetch accepted an invalid redirect target.');
+    } catch (DomainException) {
+    }
+}
+
 $catalog = ProxyCores::parseCatalog((string)file_get_contents(__DIR__ . '/../src/share/blankvpn/core-catalog.json'), 'amd64');
 assertProxy(str_starts_with(ProxyCores::releaseUrl('mihomo', $catalog['mihomo'], 'amd64'), 'https://github.com/MetaCubeX/mihomo/'),
     'Derive downloads from the approved source.');
@@ -94,6 +116,8 @@ $route = ProxyRuntime::route('proxy-exit', 0, proxyNode($ss)['id'], 'test', 'mih
 $ssConfig = ProxyRuntime::configuration($route, proxyNode($ss));
 assertProxy($ssConfig['mihomo']['rules'] === ['MATCH,blankvpn-upstream'], 'Single exit without direct fallback.');
 assertProxy($ssConfig['mihomo']['allow-lan'] === false && !$ssConfig['mihomo']['tun']['enable'], 'No core-managed routing or exposed SOCKS port.');
+assertProxy($ssConfig['mihomo']['dns']['proxy-server-nameserver'] === ['system'],
+    'Resolve upstream hostnames using router DNS without requiring localhost port 53.');
 assertProxy($ssConfig['mihomo']['dns']['nameserver'] === ['https://1.1.1.1/dns-query#blankvpn-upstream'], 'Use the same exit for service DNS.');
 $xray = ProxyRuntime::configuration($route, proxyNode($vless));
 assertProxy($xray['adapter']['inbounds'][0]['listen'] === '127.0.0.1' && $xray['adapter']['outbounds'][0]['protocol'] === 'vless', 'Xray runs behind a private SOCKS listener.');

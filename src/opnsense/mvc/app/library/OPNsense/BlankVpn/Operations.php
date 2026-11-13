@@ -72,7 +72,9 @@ final class Operations
                     'Apply failed and automatic rollback could not be verified. Use the OPNsense console and configuration history to inspect the router.'
                 );
             }
-            throw new \DomainException('Apply failed. Blank VPN restored the preceding configuration and reloaded the firewall.');
+            $detail = $error instanceof \DomainException || $error::class === \RuntimeException::class
+                ? ' ' . $error->getMessage() : '';
+            throw new \DomainException('Apply failed. Blank VPN restored the preceding configuration and reloaded the firewall.' . $detail);
         }
 
         return $result;
@@ -109,7 +111,7 @@ final class Operations
         return hash('sha256', (string)$xml->C14N());
     }
 
-    private static function sync(BlankVpn $model): void
+    public static function sync(BlankVpn $model): void
     {
         $backend = new Backend();
         if (trim($backend->configdRun('blankvpn proxies', false, 45)) !== 'ok') {

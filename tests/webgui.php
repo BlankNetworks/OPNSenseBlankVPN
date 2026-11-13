@@ -98,14 +98,14 @@ namespace OPNsense\BlankVpn {
         }
     }
 
-    final class Resolver
+    final class WireGuard
     {
-        public static function command(array $command, bool $required): string
+        public static function pingRelay(string $address): array
         {
-            if ($command !== ['/sbin/ping', '-n', '-c', '1', '-W', '1500', '-t', '3', '8.8.8.8']) {
-                throw new \RuntimeException('Unexpected ping target or arguments.');
+            if ($address !== '8.8.8.8') {
+                throw new \RuntimeException('Unexpected ping target.');
             }
-            return '64 bytes from 8.8.8.8: icmp_seq=0 ttl=115 time=12.345 ms';
+            return ['replied' => true, 'milliseconds' => 12.345];
         }
     }
 

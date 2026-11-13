@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "os-blank-vpn"
-VERSION = "0.8.3"
+VERSION = "0.8.4"
 SERIES = "26.7"
 LEGACY_ARCHES = {"amd64": "x86:64", "aarch64": "aarch64:64"}
 CORE_INSTALLER = ROOT / "src/opnsense/scripts/OPNsense/BlankVpn/install_proxy_cores.py"
@@ -26,6 +26,8 @@ PREFIX = "/usr/local"
 DEPENDENCIES = {
     "opnsense": {"origin": "opnsense/opnsense", "version": SERIES},
     "dnsmasq": {"origin": "opnsense/dnsmasq", "version": "2.93"},
+    "php85-curl": {"origin": "ftp/php85-curl", "version": "8.5"},
+    "python313": {"origin": "lang/python313", "version": "3.13"},
 }
 VERSION_FILE = PurePosixPath("opnsense/version/blank-vpn")
 HOOKS = ("pre-install", "post-install", "pre-deinstall", "post-deinstall")

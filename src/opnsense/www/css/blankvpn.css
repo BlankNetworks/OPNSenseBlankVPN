@@ -10,6 +10,7 @@
     --bv-on-accent: #fff;
     --bv-focus: #315ea7;
     --bv-alert: #edf3ff;
+    --bv-highlight-ink: #173866;
     --bv-error: #fff0f1;
     --bv-error-ink: #8e273c;
     --bv-shadow: 0 1px 3px #17273c0d;
@@ -35,6 +36,7 @@
     --bv-on-accent: #14243f;
     --bv-focus: #adcbff;
     --bv-alert: #233450;
+    --bv-highlight-ink: #dce9ff;
     --bv-error: #402632;
     --bv-error-ink: #ffd3dd;
     --bv-shadow: 0 1px 3px #0003;
@@ -53,6 +55,7 @@
         --bv-on-accent: #14243f;
         --bv-focus: #adcbff;
         --bv-alert: #233450;
+        --bv-highlight-ink: #dce9ff;
         --bv-error: #402632;
         --bv-error-ink: #ffd3dd;
         --bv-shadow: 0 1px 3px #0003;
@@ -114,8 +117,9 @@
     cursor: pointer;
 }
 
-.blankvpn .bv-navigation button:hover {
-    color: var(--bv-accent);
+.blankvpn .bv-navigation button:is(:hover, :focus-visible) {
+    background: var(--bv-alert);
+    color: var(--bv-highlight-ink);
 }
 
 .blankvpn .bv-navigation [aria-pressed="true"] {
@@ -190,7 +194,11 @@
 }
 
 .blankvpn .form-control,
-.blankvpn .btn-default {
+.blankvpn .form-control:focus,
+.blankvpn .form-control:disabled,
+.blankvpn .form-control[readonly],
+.blankvpn .btn-default,
+.blankvpn .btn-default:is(:hover, :focus, :active, .active, :disabled) {
     border: 1px solid var(--bv-line);
     border-radius: .45rem;
     background-color: var(--bv-surface);
@@ -205,13 +213,24 @@
     padding-right: .55rem;
 }
 
+.blankvpn select.form-control :is(option, optgroup) {
+    color: var(--bv-ink);
+    background-color: var(--bv-surface);
+}
+
+.blankvpn ::selection {
+    background: var(--bv-alert);
+    color: var(--bv-highlight-ink);
+}
+
 .blankvpn .form-control::placeholder,
 .blankvpn .text-muted,
 .blankvpn td > small {
     color: var(--bv-muted);
 }
 
-.blankvpn .btn-primary {
+.blankvpn .btn-primary,
+.blankvpn .btn-primary:is(:hover, :focus, :active, .active, :disabled) {
     border: 1px solid var(--bv-accent);
     border-radius: .45rem;
     background: var(--bv-accent);
@@ -312,6 +331,8 @@
 
 .blankvpn .bv-table td,
 .blankvpn .bv-table th {
+    color: var(--bv-ink);
+    background-color: transparent;
     border-color: var(--bv-line);
     vertical-align: middle;
 }
@@ -403,6 +424,7 @@
 }
 
 .blankvpn .bv-interface-list label {
+    color: var(--bv-ink);
     display: flex;
     align-items: center;
     gap: .55rem;
@@ -416,6 +438,7 @@
 .blankvpn .bv-interface-list label:has(:checked) {
     background: var(--bv-alert);
     border-color: var(--bv-accent);
+    color: var(--bv-highlight-ink);
 }
 
 .blankvpn .bv-interface-list input {
@@ -437,6 +460,12 @@
 
 .blankvpn .bv-save-login {
     margin-top: .65rem;
+}
+
+.blankvpn code {
+    background: var(--bv-raised);
+    color: var(--bv-ink);
+    overflow-wrap: anywhere;
 }
 
 .blankvpn #bv-dashboard-link {

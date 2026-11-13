@@ -175,34 +175,47 @@ class ServiceController extends ApiControllerBase
     {
         return $this->respond(function () {
             $relay = $this->relay(new Mullvad(), $this->input('relay', 100));
-            $address = $relay['ipv4'];
-            if (!filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_GLOBAL_RANGE)) {
-                throw new \DomainException('The relay has no public IPv4 endpoint.');
-            }
-            $output = Resolver::command(['/sbin/ping', '-n', '-c', '1', '-W', '1500', '-t', '3', $address], false);
-            $reply = preg_match('/\btime[=<]([0-9]+(?:[.,][0-9]+)?) ms\b/', $output, $matches);
-            return ['relay' => $relay['id'], 'replied' => $reply === 1,
-                'milliseconds' => $reply === 1 ? (float)str_replace(',', '.', $matches[1]) : null];
+            return ['relay' => $relay['id']] + WireGuard::pingRelay($relay['ipv4']);
         }, true, true);
     }
 
     public function testExitAction()
     {
-        return $this->respond(function () {
-            $route = Policy::routes(new BlankVpn())[$this->input('id', 64)] ?? null;
-            if ($route === null || !self::routeConfigured($route)) {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $model = new BlankVpn();
+            $route = Policy::routes($model)[$this->input('id', 64)] ?? null;
+            if ($route === null) {
                 throw new \DomainException('Select a configured exit.');
             }
             if (($route['kind'] ?? '') === 'proxy') {
-                $probe = ProxyRuntime::probe($route);
-            } else {
-                $installed = Firewall::probePathInstalled($route, Firewall::loadedRules() ?? []);
-                $probe = ($route['kind'] ?? '') === 'native'
-                    ? WireGuard::probeSource($installed ? $route['address'] : '')
-                    : WireGuard::probe($route, $installed);
+                return ProxyRuntime::testNode($route['node'], $route);
             }
-            return ['reachable' => $probe['reachable'] ?? null, 'milliseconds' => $probe['milliseconds'] ?? null];
-        }, true, true);
+            if (!self::routeConfigured($route)) {
+                $detail = ($route['kind'] ?? '') === 'native' ? 'The attached OPNsense gateway changed.'
+                    : (WireGuard::check($route)['error'] ?? 'The WireGuard configuration is unavailable.');
+                throw new \DomainException($detail);
+            }
+            $loaded = Firewall::loadedRules();
+            if ($loaded === null) {
+                throw new \RuntimeException('Blank VPN could not read the active firewall rules from configd.');
+            }
+            if (!Firewall::probePathInstalled($route, $loaded)) {
+                Firewall::reload($model);
+                if (!Firewall::probePathInstalled($route, Firewall::loadedRules() ?? [])) {
+                    throw new \RuntimeException('OPNsense did not load the protected test route. Check the exit gateway and firewall status.');
+                }
+            }
+            return ($route['kind'] ?? '') === 'native'
+                ? WireGuard::probeSource($route['address'])
+                : WireGuard::probe($route, true);
+        }), true, true);
+    }
+
+    public function testProxyNodeAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(fn () =>
+            ProxyRuntime::testNode($this->input('id', 64))
+        ), true, true);
     }
 
     public function accountAction()
@@ -360,7 +373,7 @@ class ServiceController extends ApiControllerBase
                 $health = Firewall::health();
                 unset($health[$id]);
                 Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
-                return ['id' => $id, 'added' => $ownership, 'reload' => Policy::settings($model)['enabled']];
+                return ['id' => $id, 'added' => $ownership, 'reload' => true];
             });
             return ['profile' => $result['id']];
         }), true, true);
@@ -409,7 +422,7 @@ class ServiceController extends ApiControllerBase
             $node->name = $name;
             $node->relay = $relayId;
             $node->ownership = json_encode($ownership, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
-            return ['id' => $id, 'added' => $ownership, 'reload' => Policy::settings($model)['enabled']];
+            return ['id' => $id, 'added' => $ownership, 'reload' => true];
         });
         return ['profile' => $result['id']];
     }
@@ -442,7 +455,7 @@ class ServiceController extends ApiControllerBase
                 $node->protocol = $gateway['protocol'];
                 $node->dns = $dns;
                 $node->dnsPort = (string)$port;
-                return ['profile' => (string)$node->getAttribute('uuid'), 'reload' => Policy::settings($model)['enabled']];
+                return ['profile' => (string)$node->getAttribute('uuid'), 'reload' => true];
             });
         }), true, true);
     }
@@ -468,11 +481,11 @@ class ServiceController extends ApiControllerBase
                 }
                 if (($profile['kind'] ?? '') === 'native') {
                     $model->nativeRoutes->route->del($id);
-                    return ['reload' => Policy::settings($model)['enabled']];
+                    return ['reload' => true];
                 }
                 WireGuard::remove($profile);
                 $model->profiles->profile->del($id);
-                return ['removed' => $profile, 'reload' => Policy::settings($model)['enabled']];
+                return ['removed' => $profile, 'reload' => true];
             });
             return [];
         }), true, true);
@@ -900,7 +913,7 @@ class ServiceController extends ApiControllerBase
     {
         return $this->respond(fn () => Operations::exclusive(fn () => ProxyCatalog::addFeed(
             $this->input('name', 96),
-            $this->input('url', 2048),
+            $this->input('url', ProxyCatalog::MAX_URL_BYTES),
             $this->flag('auto'),
             array_column(ProxyRuntime::routes(new BlankVpn()), 'node')
         )), true, true, true);
@@ -947,7 +960,8 @@ class ServiceController extends ApiControllerBase
                 throw new \DomainException('Import the proxy node before enabling its exit.');
             }
             ProxyRuntime::preflight($node['core']);
-            return Operations::change(function (BlankVpn $model) use ($id, $node) {
+            ProxyRuntime::prepareTunnelDriver();
+            $result = Operations::change(function (BlankVpn $model) use ($id, $node) {
                 $routes = ProxyRuntime::routes($model);
                 $occupied = array_column($routes, 'slot');
                 foreach ($routes as $route) {
@@ -965,8 +979,13 @@ class ServiceController extends ApiControllerBase
                 $route->core = $node['core'];
                 $route->protocol = $node['protocol'];
                 $route->slot = (string)reset($free);
-                return ['reload' => Policy::settings($model)['enabled']];
+                return ['id' => (string)$route->getAttribute('uuid'), 'reload' => Policy::settings($model)['enabled']];
             });
+            if (!$result['reload']) {
+                return ['message' => 'Proxy exit saved. It can be tested now and will route devices after Blank VPN routing is enabled.'];
+            }
+            $error = ProxyRuntime::lastStatus()['errors'][$result['id']] ?? null;
+            return $error === null ? [] : ['message' => 'Proxy exit saved.', 'warning' => $error];
         }), true, true);
     }
 

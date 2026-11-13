@@ -296,7 +296,7 @@
                         remove.title = 'Remove this exit from routing policies first.';
                     }
                     if (state.canManage) {
-                        actions.append(button('Test exit', (event) => void testExit(event.currentTarget, profile, 'vpn-test')));
+                        actions.append(button('Test exit', (event) => void testConnection(event.currentTarget, profileName(profile.id), 'vpn-test', 'testExit', profile.id)));
                         actions.append(remove);
                     }
                 }
@@ -682,9 +682,9 @@
                 const exit = state.profiles.find((profile) => profile.node === node.id);
                 cell(row, node.core, '', exit?.status || '');
                 const actions = row.insertCell();
-                if (exit) {
-                    actions.append(button('Test exit', (event) => void testExit(event.currentTarget, exit, 'proxy-test')));
-                }
+                actions.append(button(exit ? 'Test exit' : 'Test server', (event) => void testConnection(
+                    event.currentTarget, node.name, 'proxy-test', exit ? 'testExit' : 'testProxyNode', exit?.id || node.id
+                )));
                 if (exit) {
                     const disable = button('Remove exit', (event) => removeProfile(exit, event.currentTarget));
                     disable.disabled = state.assignments.some((item) => [item.profile, item.backup].includes(exit.id))
@@ -1065,17 +1065,15 @@
             }
         }
 
-        async function testExit(control, exit, output) {
+        async function testConnection(control, name, output, action, id) {
             const status = byId(output);
-            const name = profileName(exit.id);
             control.disabled = true;
             status.textContent = 'Testing internet access through ' + name + '…';
             try {
-                const result = await api('testExit', {id: exit.id});
+                const result = await api(action, {id});
                 status.textContent = name + (result.reachable === true
                     ? ' passed the HTTPS test (' + result.milliseconds + ' ms).'
-                    : result.reachable === false ? ' did not pass the HTTPS test.'
-                        : ' could not be tested. Check that routing is enabled and the tunnel rules are loaded.');
+                    : ' could not pass the HTTPS test. ' + (result.detail || 'No test result was available.'));
             } catch (error) {
                 status.textContent = errorMessage(error, 'The exit test could not be completed.');
             } finally {

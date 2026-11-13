@@ -31,7 +31,11 @@ def main():
     document = (
         '<!doctype html><meta charset="utf-8"><meta name="viewport" '
         'content="width=device-width, initial-scale=1">'
-        f"<style>{css}</style><style>select.form-control {{ background-image: linear-gradient(black, black); }}</style>"
+        f"<style>{css}</style>"
+        "<style>select.form-control { background-image: linear-gradient(black, black); }"
+        ".btn-primary:focus, .btn-primary:hover, .btn-default:focus { color:white; background:#eee; }"
+        ".form-control:focus, .bv-interface-list label { color:white; background:#eee; }"
+        ".table td { color:white; background:#eee; }</style>"
         f"<body>{view}"
         f"<script>{fixture}</script><script>{app}</script></body>"
     )

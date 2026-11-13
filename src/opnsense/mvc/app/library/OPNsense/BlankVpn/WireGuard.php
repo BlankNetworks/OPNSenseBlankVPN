@@ -357,6 +357,23 @@ final class WireGuard
         return is_array($data['records'] ?? null) ? $data['records'] : [];
     }
 
+    public static function pingRelay(string $address): array
+    {
+        // The API obtains the address from Mullvad’s normalized catalog.
+        if (!filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_GLOBAL_RANGE)) {
+            throw new \DomainException('The relay has no public IPv4 endpoint.');
+        }
+        if (!is_executable('/sbin/ping')) {
+            throw new RuntimeException('The FreeBSD ping utility is unavailable.');
+        }
+        $output = Resolver::command(['/sbin/ping', '-n', '-c', '1', '-W', '1500', '-t', '3', $address], false);
+        $replied = preg_match('/\btime[=<]([0-9]+(?:[.,][0-9]+)?) ms\b/', $output, $matches) === 1;
+        if (!$replied && !preg_match('/\b[0-9]+ packets? transmitted\b/', $output)) {
+            throw new RuntimeException('OPNsense could not send a ping to the relay. Check the router’s IPv4 WAN route.');
+        }
+        return ['replied' => $replied, 'milliseconds' => $replied ? (float)str_replace(',', '.', $matches[1]) : null];
+    }
+
     /**
      * Caller verifies the source-bound output route and fallback block in the running filter
      * before requesting this probe. Its result is router tunnel reachability.
@@ -364,22 +381,35 @@ final class WireGuard
     public static function probe(array $profile, bool $routeInstalled = false): array
     {
         if (!$routeInstalled) {
-            return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified'];
+            return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
+                'detail' => 'The protected tunnel test route is unavailable.'];
         }
         $status = self::status($profile);
         if (!$status['available'] || !$status['peerPresent']) {
-            return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified'];
+            return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
+                'detail' => 'The WireGuard interface or peer is missing from the kernel.'];
         }
 
-        return self::probeSource(explode('/', $profile['address'], 2)[0]);
+        $result = self::probeSource(explode('/', $profile['address'], 2)[0]);
+        if ($result['reachable'] === false && (self::status($profile)['handshake'] ?? 0) < time() - self::HANDSHAKE_WINDOW) {
+            $result['detail'] = 'The server has no recent WireGuard handshake. Check whether outbound UDP reaches the relay.';
+        }
+        return $result;
     }
 
     public static function probeSource(string $address): array
     {
         if (!filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-            return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified'];
+            return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
+                'detail' => 'The tunnel has no usable IPv4 source address.'];
+        }
+        if (!function_exists('curl_init')) {
+            throw new RuntimeException('The OPNsense PHP cURL extension is unavailable.');
         }
         $curl = curl_init('https://' . self::PROBE_HOST . '/dns-query?name=cloudflare.com&type=A');
+        if ($curl === false) {
+            throw new RuntimeException('OPNsense could not initialize the HTTPS tunnel test.');
+        }
         $body = '';
         curl_setopt_array($curl, [
             CURLOPT_INTERFACE => $address,
@@ -410,7 +440,8 @@ final class WireGuard
             ($info['primary_ip'] ?? '') === self::PROBE_ADDRESS &&
             ($answer['Status'] ?? null) === 0;
         return ['reachable' => $reachable, 'checkedAt' => time(), 'status' => $reachable ? 'reachable' : 'probe failed',
-            'milliseconds' => $reachable ? round($info['total_time'] * 1000, 1) : null];
+            'milliseconds' => $reachable ? round($info['total_time'] * 1000, 1) : null,
+            'detail' => $reachable ? null : 'The HTTPS probe did not complete through the tunnel.'];
     }
 
     private static function createInterface(string $device, string $owner): string

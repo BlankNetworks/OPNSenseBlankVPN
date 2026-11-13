@@ -565,7 +565,7 @@ final class ProxyImport
             $pipes
         );
         if (!is_resource($process)) {
-            throw new DomainException('Clash YAML parsing requires the OPNsense PyYAML package.');
+            throw new DomainException('The router could not start the Clash YAML parser.');
         }
         $written = fwrite($pipes[0], $body);
         fclose($pipes[0]);
@@ -573,7 +573,7 @@ final class ProxyImport
         fclose($pipes[1]);
         $status = proc_close($process);
         if ($status === 2) {
-            throw new DomainException('Clash YAML parsing requires the OPNsense py313-yaml package.');
+            throw new DomainException('The Clash YAML parser is missing. Install the full Blank VPN release package.');
         }
         $config = is_string($output) ? json_decode($output, true, 32) : null;
         if ($status !== 0 || $written !== strlen($body) || !is_array($config)) {

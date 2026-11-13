@@ -9,6 +9,7 @@ use RuntimeException;
 
 final class ProxyCatalog
 {
+    public const MAX_URL_BYTES = 8192;
     private const FILE = 'proxy-catalog.json';
     private const MAX_FEEDS = 12;
     private const MAX_CATALOG_BYTES = 16777216;
@@ -138,6 +139,9 @@ final class ProxyCatalog
     private static function refresh(array &$data, array $feed, array $pinned): array
     {
         $download = self::fetch($feed['url']);
+        if (preg_match('/^\s*<(?:!doctype\s+html|html|head|body)(?:[\s>])/i', $download['body'])) {
+            throw new DomainException('The provider returned a web page. Copy the direct Clash or Mihomo subscription URL from your provider.');
+        }
         $result = ProxyImport::parse($download['body']);
         self::replaceNodes($data, $feed['id'], $result['nodes'], $pinned);
         $data['feeds'][$feed['id']] = [
@@ -187,17 +191,20 @@ final class ProxyCatalog
 
     private static function endpoint(string $url): array
     {
-        $parts = strlen($url) <= 2048 && !preg_match('/[\x00-\x20\x7f\\\\]/', $url) ? parse_url($url) : false;
+        $parts = strlen($url) <= self::MAX_URL_BYTES && !preg_match('/[\x00-\x20\x7f\\\\]/', $url) ? parse_url($url) : false;
         if (!$parts || strtolower($parts['scheme'] ?? '') !== 'https' || empty($parts['host']) ||
             isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment'])) {
             throw new DomainException('Use an HTTPS subscription URL without embedded login credentials or a fragment.');
         }
         $host = ProxyImport::host($parts['host']);
-        if (!filter_var($host, FILTER_VALIDATE_IP) && !preg_match('/\.[a-z][a-z0-9-]*$/D', $host)) {
+        $literal = filter_var($host, FILTER_VALIDATE_IP);
+        $expectedHost = $literal && str_contains($host, ':') ? '[' . $host . ']' : $host;
+        if (strcasecmp($parts['host'], $expectedHost) !== 0 ||
+            (!$literal && !preg_match('/\.[a-z][a-z0-9-]*$/D', $host))) {
             throw new DomainException('Use a conventional public subscription hostname.');
         }
         $port = ProxyImport::port($parts['port'] ?? 443);
-        return [$host, $port];
+        return [$host, $port, $parts['host']];
     }
 
     public static function subscriptionUsage(string $header): array
@@ -226,24 +233,74 @@ final class ProxyCatalog
         return $usage;
     }
 
+    private static function publicAddresses(string $host): array
+    {
+        $addresses = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : (gethostbynamel($host) ?: []);
+        if (!filter_var($host, FILTER_VALIDATE_IP)) {
+            foreach (@dns_get_record($host, DNS_AAAA) ?: [] as $record) {
+                if (isset($record['ipv6'])) {
+                    $addresses[] = $record['ipv6'];
+                }
+            }
+        }
+        if ($addresses === []) {
+            throw new DomainException('The router could not resolve the subscription hostname.');
+        }
+        foreach ($addresses as $address) {
+            $ipv6 = str_contains($address, ':');
+            if (!filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE) ||
+                Policy::contains('224.0.0.0/4', $address) || ($ipv6 &&
+                    (!Policy::contains('2000::/3', $address) || Policy::contains('2002::/16', $address)))) {
+                throw new DomainException('The subscription hostname must resolve only to public unicast addresses.');
+            }
+        }
+        return array_values(array_unique($addresses));
+    }
+
     private static function fetch(string $url): array
     {
-        [$host, $port] = self::endpoint($url);
-        $addresses = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : (gethostbynamel($host) ?: []);
-        if ($addresses === [] || array_filter($addresses, static fn ($ip) =>
-            !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE))) {
-            throw new DomainException('The subscription hostname must resolve only to public addresses.');
+        if (!function_exists('curl_init')) {
+            throw new RuntimeException('The OPNsense PHP cURL extension is unavailable.');
         }
-        $ip = $addresses[0];
-        $resolve = !filter_var($host, FILTER_VALIDATE_IP) ? [sprintf('%s:%d:%s', $host, $port, $ip)] : [];
+        $deadline = microtime(true) + 25;
+        for ($redirects = 0; $redirects <= 4; $redirects++) {
+            [$host, $port, $urlHost] = self::endpoint($url);
+            $addresses = self::publicAddresses($host);
+            $remaining = (int)(($deadline - microtime(true)) * 1000);
+            if ($remaining <= 0) {
+                throw new RuntimeException('The subscription download timed out.');
+            }
+            $reply = self::download($url, $urlHost, $port, $addresses, $remaining);
+            if ($reply['status'] === 200) {
+                return $reply;
+            }
+            if (!in_array($reply['status'], [301, 302, 303, 307, 308], true) || $reply['redirect'] === '') {
+                throw new RuntimeException('The subscription provider returned HTTP ' . $reply['status'] . '.');
+            }
+            // Resolve and validate each redirect independently. Never let cURL follow it automatically.
+            $url = $reply['redirect'];
+        }
+        throw new RuntimeException('The subscription provider redirected the download too many times.');
+    }
+
+    private static function download(string $url, string $host, int $port, array $addresses, int $remaining): array
+    {
         $curl = curl_init($url);
+        if ($curl === false) {
+            throw new RuntimeException('The router could not initialize the subscription download.');
+        }
+        $resolve = filter_var(trim($host, '[]'), FILTER_VALIDATE_IP) ? [] : [
+            $host . ':' . $port . ':' . implode(',', array_map(static fn (string $ip): string =>
+                str_contains($ip, ':') ? '[' . $ip . ']' : $ip, $addresses))
+        ];
         $body = '';
         $usage = [];
+        $oversized = false;
         $options = [
             CURLOPT_PROTOCOLS_STR => 'https', CURLOPT_FOLLOWLOCATION => false, CURLOPT_RESOLVE => $resolve,
             CURLOPT_PROXY => '', CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_SSLVERSION => CURL_SSLVERSION_TLSv1_2, CURLOPT_CONNECTTIMEOUT => 4, CURLOPT_TIMEOUT => 10,
-            CURLOPT_ENCODING => '', CURLOPT_USERAGENT => 'Blank VPN/0.3 (OPNsense; Clash-compatible)',
+            CURLOPT_SSLVERSION => CURL_SSLVERSION_TLSv1_2, CURLOPT_CONNECTTIMEOUT_MS => min(5000, $remaining),
+            CURLOPT_TIMEOUT_MS => $remaining, CURLOPT_ENCODING => '', CURLOPT_USERAGENT => 'Clash.Meta/1.19.34 BlankVPN',
             CURLOPT_HEADERFUNCTION => static function ($handle, string $header) use (&$usage): int {
                 if (str_starts_with($header, 'HTTP/')) {
                     $usage = [];
@@ -252,18 +309,29 @@ final class ProxyCatalog
                 }
                 return strlen($header);
             },
-            CURLOPT_WRITEFUNCTION => static function ($handle, string $chunk) use (&$body): int {
+            CURLOPT_WRITEFUNCTION => static function ($handle, string $chunk) use (&$body, &$oversized): int {
                 if (strlen($body) + strlen($chunk) > ProxyImport::MAX_BYTES) {
+                    $oversized = true;
                     return 0;
                 }
                 $body .= $chunk;
                 return strlen($chunk);
             }
         ];
-        if ($curl === false || !curl_setopt_array($curl, $options) || curl_exec($curl) === false ||
-            (int)curl_getinfo($curl, CURLINFO_RESPONSE_CODE) !== 200) {
-            throw new RuntimeException('The subscription could not be downloaded. Check the HTTPS URL and provider response.');
+        if (!curl_setopt_array($curl, $options)) {
+            throw new RuntimeException('The router could not configure a verified HTTPS subscription download.');
         }
-        return ['body' => $body, 'usage' => $usage];
+        if (curl_exec($curl) === false) {
+            throw new RuntimeException($oversized ? 'The subscription response exceeds the 2 MiB download limit.' :
+                match (curl_errno($curl)) {
+                    CURLE_OPERATION_TIMEDOUT => 'The subscription download timed out.',
+                    CURLE_PEER_FAILED_VERIFICATION => 'The subscription server’s TLS certificate could not be verified.',
+                    CURLE_SSL_CONNECT_ERROR => 'The subscription server could not establish a TLS connection.',
+                    CURLE_COULDNT_CONNECT => 'The router could not connect to the subscription server over HTTPS.',
+                    default => 'The HTTPS subscription download failed (cURL code ' . curl_errno($curl) . ').'
+                });
+        }
+        return ['body' => $body, 'usage' => $usage, 'status' => curl_getinfo($curl, CURLINFO_RESPONSE_CODE),
+            'redirect' => (string)curl_getinfo($curl, CURLINFO_REDIRECT_URL)];
     }
 }

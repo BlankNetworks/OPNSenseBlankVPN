@@ -128,6 +128,11 @@ namespace {
         'dnsPort' => 46651
     ]];
     $probe = Policy::marker('probe', 'jp' . Policy::PROBE_IP);
+    $probeOnly = new Plugin();
+    (new ReflectionMethod(Firewall::class, 'registerProfile'))->invoke(null, $probeOnly, $profiles['jp'], false);
+    checkRouting(array_keys($probeOnly->rules) === [$probe, $probe . '_block'] &&
+        $probeOnly->rules[$probe]['from'] === '10.64.0.9' && $probeOnly->rules[$probe]['direction'] === 'out',
+        'A VPN test while routing is off installs only a source-bound router probe and its guard.');
     $loaded = [$probe => ['action' => 'pass', 'source' => '10.64.0.9', 'gateway' => 'wg0']];
     checkRouting(!Firewall::probePathInstalled($profiles['jp'], $loaded), 'A manual exit test requires a fallback guard.');
     $loaded[$probe . '_block'] = ['action' => 'block', 'source' => '10.64.0.9'];

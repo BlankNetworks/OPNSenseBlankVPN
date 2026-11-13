@@ -29,6 +29,7 @@ const reply = {
     importProxies: {ok:true, imported:1, skipped:0},
     testRelay: {ok:true, replied:true, milliseconds:12.345},
     testExit: {ok:true, reachable:true, milliseconds:45.2},
+    testProxyNode: {ok:true, reachable:false, detail:'The proxy connection timed out.'},
     refreshRelays: {ok:true, relays:[{id:'ca-test-wg-003',country:'Canada',countryCode:'ca',city:'Test',hostname:'ca-test-wg-003',active:true}], stale:true, error:'Provider unavailable'}
 };
 window.confirm = () => true;
@@ -95,6 +96,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(getComputedStyle(bv('appearance')).backgroundImage === 'none', 'host select decoration was not suppressed');
     document.querySelector('[data-bv-section="network"]').click();
     const ports = bv('managed').querySelectorAll('input');
+    const checked = ports[0].closest('label');
+    assert(getComputedStyle(checked).color === 'rgb(23, 56, 102)' &&
+        getComputedStyle(checked).backgroundColor === 'rgb(237, 243, 255)', 'day interface highlight lost contrast');
+    bv('save-routing').focus();
+    assert(getComputedStyle(bv('save-routing')).backgroundColor === 'rgb(38, 75, 134)', 'host theme overrode the focused day button');
+    bv('appearance').value = 'night';
+    bv('appearance').dispatchEvent(new Event('change'));
+    assert(getComputedStyle(checked).color === 'rgb(220, 233, 255)' &&
+        getComputedStyle(checked).backgroundColor === 'rgb(35, 52, 80)' &&
+        getComputedStyle(bv('save-routing')).color === 'rgb(20, 36, 63)', 'night controls lost contrast');
+    bv('appearance').value = 'day';
+    bv('appearance').dispatchEvent(new Event('change'));
     assert(ports.length === 3 && ports[0].value === 'lan' && ports[0].parentElement.textContent.includes('igc0') &&
         bv('managed').textContent.includes('vlan02'), 'Ethernet ports and VLANs should be listed with the main port first');
     bv('device-list').querySelector('button').click();
@@ -232,6 +245,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'check' && x.method === 'POST'), 'approved catalog check did not run');
     assert(bv('proxy-list').textContent.includes('Example proxy'), 'proxy catalog not displayed');
+    [...bv('proxy-list').querySelectorAll('button')].find((item) => item.textContent === 'Test server').click();
+    await wait();
+    assert(requests.some(x => x.action === 'testProxyNode' && x.data.id === 'proxy-1') &&
+        bv('proxy-test').textContent.includes('The proxy connection timed out.'), 'saved proxy test did not report its failure');
+
     assert(bv('subscription-list').textContent.includes('Test feed'), 'proxy subscription not displayed');
     assert(bv('subscription-list').textContent.includes('2.0 KiB used / 1.0 MiB'), 'subscription quota not displayed');
     assert(bv('subscription-auto').checked, 'auto-refresh should default on for new subscriptions');
@@ -245,7 +263,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('proxy-manual').requestSubmit(bv('proxy-manual').querySelector('button'));
     await wait();
     assert(requests.some(x => x.action === 'addProxyNode' && x.data.protocol === 'socks5'), 'manual proxy was not submitted');
-    bv('proxy-list').querySelector('button').click();
+    [...bv('proxy-list').querySelectorAll('button')].find((item) => item.textContent === 'Enable exit').click();
     await wait();
     assert(requests.some(x => x.action === 'enableProxyExit' && x.data.id === 'proxy-1'), 'proxy was not selected individually');
     bv('proxy-body').value = 'socks5://192.0.2.9:1080';
