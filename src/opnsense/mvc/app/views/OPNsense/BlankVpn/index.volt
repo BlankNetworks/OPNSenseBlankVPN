@@ -75,26 +75,32 @@
                 <div class="bv-fields">
                     <label>Tunnel name <input id="bv-register-name" type="text" class="form-control" maxlength="64"
                         placeholder="Defaults to server name"></label>
-                    <label id="bv-retarget-row" hidden>Tunnel to switch
-                        <select id="bv-retarget" class="form-control"><option value="">Choose automatically</option></select>
-                    </label>
                 </div>
                 <div class="bv-actions">
-                    <button id="bv-register" type="submit" class="btn btn-primary" disabled>Add server</button>
+                    <button id="bv-register" type="submit" class="btn btn-primary" disabled>Use server</button>
                     <p class="text-muted">Blank VPN reuses this router’s Mullvad device registration when you switch servers.</p>
                 </div>
             </form>
             <details id="bv-mullvad-batches" class="bv-advanced" hidden>
                 <summary>Manage server batches</summary>
-                <p class="text-muted">Save a city, country, or the worldwide catalog to browse its servers.</p>
+                <p class="text-muted">Save a city, country, or worldwide list, then choose the server to use.</p>
                 <label>Batch to add or remove
                     <select id="bv-batch-scope" class="form-control" aria-describedby="bv-batch-status"></select>
                 </label>
                 <div class="bv-actions">
-                    <button id="bv-save-batch" type="button" class="btn btn-primary">Add batch</button>
+                    <button id="bv-save-batch" type="button" class="btn btn-primary">Save and show servers</button>
                     <button id="bv-remove-batch" type="button" class="btn btn-default" hidden>Remove batch</button>
                     <button id="bv-browse-batch" type="button" class="btn btn-default" disabled>Browse servers</button>
                     <p id="bv-batch-status" class="text-muted" role="status"></p>
+                </div>
+                <div id="bv-batch-servers" hidden>
+                    <h3 id="bv-batch-title" tabindex="-1"></h3>
+                    <div class="bv-scroll bv-batch-table">
+                        <table class="table bv-table">
+                            <thead><tr><th scope="col">Server</th><th scope="col">Location</th><th scope="col">Actions</th></tr></thead>
+                            <tbody id="bv-batch-server-list"></tbody>
+                        </table>
+                    </div>
                 </div>
             </details>
         </section>
@@ -288,7 +294,8 @@
                     <button id="bv-add-device" data-manage-only type="button" class="btn btn-primary">Add device rule</button>
                 </div>
             </div>
-            <p id="bv-device-guide" class="text-muted">Choose a device to fill in its addresses. LAN rules use DHCP reservations. Tailscale rules use a link that preserves peer addresses.</p>
+            <p id="bv-device-guide" class="text-muted">Refresh to find active LAN devices. Select a device to set up its routing rule.</p>
+            <h3>LAN devices</h3>
             <div class="bv-scroll">
                 <table class="table bv-table bv-devices" role="table">
                     <thead role="rowgroup">
@@ -303,6 +310,17 @@
                     </thead>
                     <tbody id="bv-device-list" role="rowgroup"></tbody>
                 </table>
+            </div>
+            <div id="bv-tailnet-devices" class="bv-advanced">
+                <h3>Tailscale devices</h3>
+                <p id="bv-tailnet-routing-hint" class="text-muted"></p>
+                <div class="bv-scroll">
+                    <table class="table bv-table bv-devices" role="table">
+                        <thead><tr><th scope="col">Device</th><th scope="col">Addresses</th><th scope="col">Availability</th>
+                            <th scope="col">Rule</th><th scope="col">Routing</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                        <tbody id="bv-tailnet-device-list" role="rowgroup"></tbody>
+                    </table>
+                </div>
             </div>
         </section>
 
@@ -358,35 +376,6 @@
                     <button id="bv-remove-assignment" type="button" class="btn btn-default" hidden>Remove assignment</button>
                 </div>
             </form>
-        </section>
-
-        <section id="bv-connections" class="bv-panel" aria-labelledby="bv-connections-title" hidden>
-            <div class="bv-heading">
-                <div>
-                    <h2 id="bv-connections-title" tabindex="-1">Connections</h2>
-                    <p id="bv-connections-label" class="text-muted"></p>
-                </div>
-                <div class="bv-actions">
-                    <button id="bv-refresh-connections" type="button" class="btn btn-default">Refresh</button>
-                    <button id="bv-close-connections" type="button" class="btn btn-default">Close</button>
-                </div>
-            </div>
-            <p id="bv-connections-note" class="text-muted">These sessions traverse OPNsense. Counters are for the displayed states.</p>
-            <div class="bv-scroll">
-                <table class="table bv-table bv-connections-table">
-                    <thead>
-                        <tr>
-                            <th scope="col">Protocol</th>
-                            <th scope="col">Source</th>
-                            <th scope="col">Destination</th>
-                            <th scope="col">State</th>
-                            <th scope="col">Age</th>
-                            <th scope="col">Traffic</th>
-                        </tr>
-                    </thead>
-                    <tbody id="bv-connection-list"></tbody>
-                </table>
-            </div>
         </section>
 
     </div>
@@ -482,8 +471,8 @@
                 </details>
                 <details class="bv-advanced" id="bv-tailnet-routing">
                     <summary>Route Tailscale devices through Blank VPN</summary>
-                    <p>A Linux Tailscale gateway on a dedicated Ethernet or VLAN link can forward device IPs to OPNsense. Enable that link on Network, select it below, then add a device rule using the peer’s Tailscale IPs.</p>
-                    <p class="text-muted">The built-in OPNsense exit node uses the router’s own address for forwarded traffic. Blank VPN needs the original device addresses to apply these rules.</p>
+                    <p>Use a Linux Tailscale exit node in kernel mode. Connect it to OPNsense on a dedicated Ethernet or VLAN interface and preserve each peer’s source IP. Enable that interface in Network Settings, then select it below. On each peer, select the Linux gateway as its exit node.</p>
+                    <p class="text-muted">The built-in OPNsense exit node forwards internet traffic under the router’s address. Per-device rules need a link that carries each peer’s original IP.</p>
                     <fieldset class="bv-interface-group">
                         <legend>Interfaces carrying Tailscale device traffic</legend>
                         <div id="bv-tailnet-interfaces" class="bv-interface-list"></div>

@@ -37,7 +37,8 @@
             availableInterfaces: [],
             canManage: true,
             editing: null,
-            connectionTarget: null,
+            reserveIp: false,
+            visibleBatch: '',
             busy: false,
             dashboardRequest: null,
             settingsDirty: false,
@@ -265,8 +266,6 @@
             } else {
                 byId('assignment').hidden = true;
                 state.editing = null;
-                byId('connections').hidden = true;
-                state.connectionTarget = null;
             }
         }
 
@@ -288,6 +287,7 @@
 
         function renderDeviceRules() {
             const body = byId('device-list');
+            const tailnetBody = byId('tailnet-device-list');
             const wholeNetwork = byId('coverage').value === 'network';
             byId('add-device').hidden = wholeNetwork;
             byId('device-guide').hidden = wholeNetwork;
@@ -313,30 +313,33 @@
                 }
             }
             body.replaceChildren();
-            if (rows.length === 0) {
-                empty(body, wholeNetwork ? 'No saved device rules.' : 'No devices found yet. Press Refresh.', 6);
-            }
+            tailnetBody.replaceChildren();
             for (const {device, assignment} of rows) {
-                const row = body.insertRow();
                 const tailnet = (device?.kind || assignment?.kind) === 'tailnet';
+                const row = (tailnet ? tailnetBody : body).insertRow();
                 const name = assignment?.label || device?.name || device?.ipv4 || assignment?.ip || 'Unnamed device';
                 const ip = device?.reservationIpv4 || device?.ipv4 || assignment?.ip || '';
                 const ipv6 = list(device?.ipv6 || assignment?.ipv6);
+                const routableV6 = ipv6.filter(address => !address.toLowerCase().startsWith('fe80:'));
                 const interfaceId = assignment?.interface || device?.interface || (transit.length === 1 ? transit[0] : '');
-    const reserved = tailnet ? Boolean(ip && ipv6.length) : device?.stable === true;
+                const reserved = tailnet ? Boolean(ip && ipv6.length) : device?.stable === true;
+                const reserveIp = !tailnet && !reserved && Boolean(device?.leaseProvider);
                 const canUseInterface = tailnet ? transit.length > 0 : managed.includes(interfaceId);
                 const blocked = assignment?.killSwitchActive === true;
                 const status = assignment
                     ? (wholeNetwork ? 'Paused by Whole-Network coverage' : !state.settings?.enabled
                         ? 'Saved · Routing off' : assignment.appliedRoute || 'Rule saved')
                     : !canUseInterface ? (tailnet ? 'Transit link needed' : 'Interface outside coverage')
-                        : !reserved ? (tailnet ? 'Both Tailscale addresses needed' : 'DHCP reservation needed')
-                            : tailnet ? (device.online ? 'Online · Ready to assign' : 'Offline · Ready to assign')
-                                : 'Ready to assign';
+                        : !reserved && !reserveIp ? (tailnet ? 'Both Tailscale addresses needed' : 'DHCP reservation needed')
+                            : reserveIp ? 'Current lease can be reserved' : 'Ready to assign';
                 const addresses = [...new Set([ip, ...list(device?.ipv4Addresses), ...ipv6].filter(Boolean))];
                 cell(row, name, 'Device', tailnet ? 'Tailscale' : (device?.mac || assignment?.mac));
                 cell(row, addresses[0], 'Addresses', addresses.slice(1).join(' · '));
-                cell(row, interfaceId ? networkName(interfaceId) : tailnet ? 'Tailscale' : '—', 'Interface');
+                if (tailnet) {
+                    cell(row, device ? (device.online ? 'Online' : 'Offline') : 'Unknown', 'Availability');
+                } else {
+                    cell(row, interfaceId ? networkName(interfaceId) : '—', 'Interface');
+                }
                 cell(row, assignment ? modes[assignment.mode] || 'Regular internet' : 'No rule', 'Rule',
                     assignment?.profile ? profileName(assignment.profile) : '');
                 cell(row, status, 'Status', wholeNetwork ? '' : blocked ? 'Kill Switch blocking internet'
@@ -348,15 +351,23 @@
                         actions.append(button('Edit', () => openAssignment(assignment), 'Edit ' + name));
                     } else {
                         actions.append(button('Select', () => openAssignment(null, tailnet ? 'tailnet' : 'lan', {
-                            ip, ipv6: tailnet || ipv6.length === 1 ? ipv6[0] : '', interface: interfaceId,
-                            mac: device.mac, label: (device.name || '').replace(/[<>]/g, '').slice(0, 80), reserved, canUseInterface
+                            ip, ipv6: tailnet || routableV6.length === 1 ? routableV6[0] : '',
+                            interface: interfaceId, mac: device.mac, label: (device.name || '').replace(/[<>]/g, '').slice(0, 80),
+                            reserved, reserveIp, canUseInterface
                         }), 'Select ' + name));
                     }
                 }
-                if (ip) {
-                    actions.append(button('Connections', () => openConnections(ip, name), 'Connections for ' + name));
-                }
             }
+            if (!body.rows.length) {
+                empty(body, wholeNetwork ? 'No saved LAN rules.' : 'No active LAN devices found. Press Refresh.', 6);
+            }
+            byId('tailnet-devices').hidden = wholeNetwork || (!state.settings?.tailscaleInstalled && tailnetBody.rows.length === 0);
+            if (!tailnetBody.rows.length) {
+                empty(tailnetBody, 'No Tailscale peers found.', 6);
+            }
+            byId('tailnet-routing-hint').textContent = transit.length ? '' :
+                'Per-device routing needs a Linux Tailscale exit node and a transit link. See Tailscale Settings.';
+            byId('tailnet-routing-hint').hidden = transit.length > 0;
             const count = wholeNetwork ? 0 : state.devices.length + state.tailnetDevices.length;
             const counts = [];
             if (!wholeNetwork) {
@@ -1038,7 +1049,10 @@
             state.editing = assignment;
             const device = assignment || discovered;
             const locked = Boolean(device);
-            byId('save-device').disabled = Boolean(discovered && (!discovered.reserved || !discovered.canUseInterface));
+            state.reserveIp = Boolean(discovered?.reserveIp && discovered.canUseInterface);
+            const save = byId('save-device');
+            save.disabled = false;
+            save.textContent = state.reserveIp ? 'Reserve IP and save rule' : 'Save device rule';
             byId('assignment').hidden = false;
             byId('assignment-title').textContent = assignment ? 'Edit device rule' : 'Add device rule';
             byId('ip').value = device?.ip || '';
@@ -1068,6 +1082,7 @@
             byId('identity').textContent = discovered && !discovered.canUseInterface
                 ? (kind === 'tailnet' ? 'Choose a source-preserving transit link in Tailscale Settings, then refresh.'
                     : 'Select this interface under Routing coverage and save, then refresh.')
+                : state.reserveIp ? 'Save this device’s current address as a DHCP reservation and apply the rule.'
                 : discovered && !discovered.reserved
                     ? (kind === 'tailnet' ? 'This peer needs both Tailscale addresses.'
                         : 'Create a DHCP reservation for this address and MAC in OPNsense, then refresh.')
@@ -1181,35 +1196,55 @@
                     state.mullvadBatches = result.batches;
                     renderMullvadBatches();
                     if (action === 'add') {
-                        byId('relay-list').value = scope;
-                        byId('country').value = '';
-                        byId('city').value = '';
-                        byId('relay').value = '';
+                        browseMullvadBatch();
+                    } else {
+                        if (state.visibleBatch === scope) {
+                            state.visibleBatch = '';
+                        }
+                        renderRelays();
                     }
-                    renderRelays();
                 });
             renderBatchChoice();
         }
 
         function browseMullvadBatch() {
-            byId('relay-list').value = byId('batch-scope').value;
+            state.visibleBatch = byId('batch-scope').value;
+            byId('relay-list').value = state.visibleBatch;
             byId('country').value = '';
             byId('city').value = '';
             byId('relay').value = '';
             renderRelays();
-            byId('relay').focus();
+            byId('batch-title').focus();
+        }
+
+        function renderBatchServers() {
+            const batch = state.visibleBatch;
+            const panel = byId('batch-servers');
+            panel.hidden = !batch;
+            if (!batch) {
+                return;
+            }
+            const relays = state.relays.filter((relay) => batchIncludes(relay, batch));
+            byId('batch-title').textContent = relays.length + (relays.length === 1 ? ' saved server' : ' saved servers');
+            const body = byId('batch-server-list');
+            body.replaceChildren();
+            if (!relays.length) {
+                empty(body, 'Refresh the Mullvad server catalog to load this batch.', 3);
+            }
+            for (const relay of relays) {
+                const row = body.insertRow();
+                const enabled = state.profiles.some(profile => profile.relay === relay.id && !profile.disabled);
+                cell(row, relay.hostname || relay.id, '', relay.active === false ? 'Unavailable' : enabled ? 'Enabled' : '');
+                cell(row, [relay.city, relay.country].filter(Boolean).join(', '));
+                const use = button('Use', (event) => void mutate(event.currentTarget,
+                    () => api('register', {relay: relay.id}), 'Enabled ' + relay.id + '.'),
+                    'Use ' + (relay.hostname || relay.id));
+                use.disabled = !state.mullvadSignedIn || relay.active === false || enabled;
+                row.insertCell().append(use);
+            }
         }
 
         function renderRelays() {
-            const retarget = byId('retarget');
-            const assigned = new Set([
-                state.settings?.networkProfile,
-                ...state.assignments.flatMap((row) => [row.profile, row.backup]),
-                ...state.services.map((service) => service.profile)
-            ]);
-            const reusable = state.profiles.filter((profile) => profile.relay && !assigned.has(profile.id));
-            byId('retarget-row').hidden = reusable.length === 0;
-            options(retarget, reusable.map(exitChoice), 'Choose automatically');
             renderMullvadBatches();
             const batch = byId('relay-list').value;
             const relays = state.relays.filter((relay) => batchIncludes(relay, batch));
@@ -1237,6 +1272,7 @@
                 byId('relay').value = '';
             }
             renderRelayChoice();
+            renderBatchServers();
         }
 
         function renderRelayChoice() {
@@ -1250,7 +1286,7 @@
             const register = byId('register');
             register.disabled = !relay || !state.mullvadSignedIn;
             const enabled = relay && state.profiles.some((profile) => profile.relay === relay.id && !profile.disabled);
-            register.textContent = enabled ? 'Enabled' : byId('retarget').value ? 'Switch server' : 'Add server';
+            register.textContent = enabled ? 'Enabled' : 'Use server';
             register.disabled ||= Boolean(enabled);
             byId('test-relay').disabled = !relay || !state.mullvadSignedIn || state.testingRelay;
         }
@@ -1480,69 +1516,6 @@
             return size.toFixed(1) + ' ' + units[unit];
         }
 
-        function traffic(record) {
-            const counters = record.bytes;
-            const bytes = Array.isArray(counters)
-                ? counters.map(toBytes)
-                : [toBytes(record.bytesIn ?? record.bytes_in), toBytes(record.bytesOut ?? record.bytes_out)];
-            const total = toBytes(Array.isArray(counters) ? null : counters);
-            if (total === null && bytes.every((value) => value === null)) {
-                return 'Unavailable';
-            }
-            return formatBytes(total ?? bytes.reduce((sum, value) => sum + (value || 0), 0));
-        }
-
-        async function loadConnections() {
-            const target = state.connectionTarget;
-            if (!target) {
-                return;
-            }
-            const body = byId('connection-list');
-            const control = byId('refresh-connections');
-            control.disabled = true;
-            empty(body, 'Loading active connections…');
-            try {
-                const response = await api('connections', undefined, '/' + encodeURIComponent(target.ip));
-                if (state.connectionTarget !== target) {
-                    return;
-                }
-                const rows = array(response.connections || response.states);
-                byId('connections-note').textContent = response.truncated
-                    ? 'Showing a bounded sample of active states. Traffic counters cover the displayed states.'
-                    : 'These sessions traverse OPNsense. Traffic counters cover the displayed states.';
-                if (!rows.length) {
-                    empty(body, 'No matching active firewall states.');
-                    return;
-                }
-                body.replaceChildren();
-                for (const record of rows) {
-                    const row = body.insertRow();
-                    cell(row, record.protocol || record.proto);
-                    cell(row, endpoint(record.source || record.src, record.sourcePort || record.src_port));
-                    cell(row, endpoint(record.destination || record.dst, record.destinationPort || record.dst_port));
-                    cell(row, record.state);
-                    cell(row, record.age);
-                    cell(row, traffic(record));
-                }
-            } catch (error) {
-                if (state.connectionTarget === target) {
-                    empty(body, errorMessage(error, 'Active connections are unavailable.'));
-                }
-            } finally {
-                if (state.connectionTarget === target) {
-                    control.disabled = false;
-                }
-            }
-        }
-
-        function openConnections(ip, name) {
-            state.connectionTarget = {ip, name};
-            byId('connections').hidden = false;
-            byId('connections-label').textContent = name === ip ? ip : name + ' · ' + ip;
-            byId('connections-title').focus();
-            void loadConnections();
-        }
-
         byId('refresh').addEventListener('click', async (event) => {
             const control = event.currentTarget;
             control.disabled = true;
@@ -1585,7 +1558,11 @@
             if (byId('save-device').disabled) {
                 return;
             }
+            if (state.reserveIp && !window.confirm('Reserve this IP address and save the rule? OPNsense will reload the DHCP service.')) {
+                return;
+            }
             const payload = {
+                reserveIp: state.reserveIp,
                 ip: byId('ip').value.trim(),
                 interface: byId('interface').value.trim(),
                 mac: byId('mac').value.trim(),
@@ -1616,13 +1593,6 @@
                 });
             }
         });
-        byId('close-connections').addEventListener('click', () => {
-            state.connectionTarget = null;
-            byId('connections').hidden = true;
-            byId('refresh').focus();
-        });
-        byId('refresh-connections').addEventListener('click', () => void loadConnections());
-
         if (insecureWebGui) {
             const target = new URL(window.location.href);
             target.protocol = 'https:';
@@ -1646,7 +1616,6 @@
         byId('city').addEventListener('change', renderRelays);
         byId('relay').addEventListener('change', renderRelayChoice);
         byId('test-relay').addEventListener('click', () => void pingRelay());
-        byId('retarget').addEventListener('change', renderRelayChoice);
         byId('login-form').addEventListener('submit', (event) => {
             event.preventDefault();
             void inspectAccount();
@@ -1668,16 +1637,11 @@
                 return;
             }
             const payload = {relay: byId('relay').value, name: byId('register-name').value.trim()};
-            const reused = byId('retarget').value;
-            void mutate(event.submitter, () => reused
-                ? api('retargetProfile', {id: reused, relay: payload.relay})
-                : api('register', payload), reused ? 'Switched to ' + payload.relay + '.'
-                : 'Enabled ' + payload.relay + '.', (result) => {
+            void mutate(event.submitter, () => api('register', payload), 'Enabled ' + payload.relay + '.', (result) => {
                 if (result.profile) {
                     state.tests.delete('exit:' + result.profile);
                 }
                 byId('register-name').value = '';
-                byId('retarget').value = '';
                 byId('relay').value = '';
             }).then(() => {
                 renderRelayChoice();

@@ -96,8 +96,8 @@ window.jQuery.ajax = async (request) => {
     }
     if (action === 'discoverDevices') {
         if (!reply.dashboard.devices.some(device => device.ipv4 === '10.0.0.30')) {
-            reply.dashboard.devices.push({ipv4:'10.0.0.30', reservationIpv4:'10.0.0.30', interface:'lan',
-                name:'New console', mac:'02:00:00:00:00:30', stable:true});
+            reply.dashboard.devices.push({ipv4:'10.0.0.30', interface:'lan',
+                name:'New console', mac:'02:00:00:00:00:30', stable:false, leaseProvider:'Dnsmasq DHCP'});
         }
     }
     return structuredClone(reply[action] || {ok:true});
@@ -112,7 +112,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('device-list').textContent.includes('<b>Device rule</b>'), 'device name should remain literal text');
     assert(!bv('device-list').querySelector('b'), 'device name injected HTML');
     assert(bv('device-list').textContent.includes('10.0.0.21') &&
-        bv('device-list').textContent.includes('100.101.102.104'), 'LAN and Tailscale addresses must be listed');
+        bv('tailnet-device-list').textContent.includes('100.101.102.104') &&
+        bv('tailnet-device-list').textContent.includes('Online'), 'LAN and Tailscale addresses must be shown in separate lists');
     bv('appearance').value = 'night';
     bv('appearance').dispatchEvent(new Event('change'));
     assert(getComputedStyle(document.getElementById('blankvpn')).colorScheme === 'dark', 'night theme did not apply');
@@ -154,10 +155,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('mode').dispatchEvent(new Event('change'));
     assert(bv('ipv6').required && bv('profile-field').hidden && bv('mac-field').hidden, 'Tailscale block form has incorrect fields');
     bv('close-assignment').click();
-    bv('device-list').querySelectorAll('button')[1].click();
-    await wait();
-    assert(bv('connection-list').textContent.includes('[2001:db8::25]:443'), 'IPv6 destination rendering failed');
-    assert(bv('connection-list').textContent.includes('2.0 KiB'), 'connection bytes not rendered');
+    assert(!bv('device-list').textContent.includes('Connections') && !bv('connections'),
+        'Connection inspection must be removed from Network Settings.');
     document.querySelector('[data-bv-section="vpns"]').click();
     assert(!bv('tunnels').hidden && bv('register-form').hidden, 'VPN login did not open');
     bv('account').value = '1234567890123456';
@@ -183,6 +182,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'saveMullvadBatch' && x.data.country === 'ca' && x.data.action === 'add') &&
         bv('relay-list').value === 'ca' && bv('relay').options.length === 3 && bv('relay').options[2].disabled,
         'saved country batch should select all relays for that country, including unavailable ones');
+    assert(!bv('batch-servers').hidden && bv('batch-server-list').textContent.includes('ca-test-wg-002') &&
+        bv('batch-server-list').querySelector('[aria-label="Use ca-test-wg-002"]').disabled,
+        'Saving a batch must show an actionable list and mark unavailable relays.');
     bv('batch-scope').value = 'all';
     bv('batch-scope').dispatchEvent(new Event('change'));
     bv('save-batch').click();
@@ -238,18 +240,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         'Browsing a batch must never register a Mullvad device.');
     bv('relay').value = 'jp-test-wg-001';
     bv('relay').dispatchEvent(new Event('change'));
-    assert(bv('register').textContent === 'Add server', 'Mullvad server must be ready when added');
+    assert(bv('register').textContent === 'Use server' && !bv('retarget'), 'Mullvad should offer automatic tunnel selection');
     bv('register-form').requestSubmit(bv('register'));
     await wait();
     assert(requests.some(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001' &&
         !Object.hasOwn(x.data, 'account')), 'registration payload failed');
-    bv('relay').value = 'jp-test-wg-001';
-    bv('retarget').value = 'vpn1';
-    bv('relay').dispatchEvent(new Event('change'));
-    bv('register-form').requestSubmit(bv('register'));
+    const uses = requests.filter(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001').length;
+    bv('batch-server-list').querySelector('[aria-label="Use jp-test-wg-001"]').click();
     await wait();
-    assert(requests.some(x => x.action === 'retargetProfile' && x.data.id === 'vpn1' &&
-        !Object.hasOwn(x.data, 'account')), 'switching servers must reuse a saved tunnel');
+    assert(requests.filter(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001').length === uses + 1,
+        'Use must select the listed relay through the normal registration action.');
     document.querySelector('[data-bv-section="smart"]').click();
     bv('service-preset').value = 'Netflix';
     bv('service-preset').dispatchEvent(new Event('change'));
@@ -411,11 +411,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('mode').dispatchEvent(new Event('change'));
     bv('profile').value = 'proxy-proxy-1';
     bv('profile').dispatchEvent(new Event('change'));
+    assert(!bv('save-device').disabled && bv('save-device').textContent === 'Reserve IP and save rule',
+        'A detected DHCP lease must offer one-step reservation and routing.');
     bv('assign-form').requestSubmit(bv('save-device'));
     await wait();
     assert(requests.some(x => x.action === 'assign' && x.data.ip === '10.0.0.30' &&
-        x.data.profile === 'proxy-proxy-1' && x.data.killSwitch), 'New proxies must be ready to assign without a separate enable action.');
-    bv('device-list').querySelector('[aria-label="Select Remote iPad"]').click();
+        x.data.reserveIp && x.data.profile === 'proxy-proxy-1' && x.data.killSwitch), 'New proxies must be ready to assign without a separate enable action.');
+    bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
     assert(bv('ip').value === '100.101.102.104' && bv('ipv6').value === 'fd7a:115c:a1e0::104' &&
         bv('interface').value === 'opt2' && bv('device-kind').value === 'tailnet', 'Tailscale peer rule must fill both addresses.');
     bv('close-assignment').click();
@@ -475,7 +477,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(getComputedStyle(bv('service-form')).display === 'none', 'service management visible to read-only user');
     assert(getComputedStyle(bv('add-device')).display === 'none', 'management controls were visible to read-only user');
-    assert([...bv('device-list').querySelectorAll('button')].every(button => button.textContent === 'Connections'),
+    assert(!bv('device-list').querySelector('button') && !bv('tailnet-device-list').querySelector('button'),
         'Read-only device controls must exclude rule editing.');
     document.body.setAttribute('data-fixture-result', 'PASS');
   } catch (error) {

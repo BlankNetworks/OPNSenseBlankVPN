@@ -44,6 +44,9 @@ final class Operations
         }
 
         try {
+            if (!empty($result['dhcpProvider'])) {
+                self::applyDhcpReservation($result['dhcpProvider']);
+            }
             if (isset($result['added'])) {
                 WireGuard::apply($result['added']);
             }
@@ -65,6 +68,9 @@ final class Operations
         } catch (\Throwable $error) {
             try {
                 self::rollback($original, $expected);
+                if (!empty($result['dhcpProvider'])) {
+                    self::applyDhcpReservation($result['dhcpProvider']);
+                }
                 if (isset($result['added']) || isset($result['removed'])) {
                     WireGuard::apply();
                 }
@@ -81,6 +87,22 @@ final class Operations
         }
 
         return $result;
+    }
+
+    private static function applyDhcpReservation(string $provider): void
+    {
+        $backend = new Backend();
+        if ($provider === 'Kea DHCPv4') {
+            if (trim($backend->configdpRun('template reload', ['OPNsense/Kea'])) !== 'OK') {
+                throw new \RuntimeException('OPNsense could not render the Kea DHCP configuration.');
+            }
+            $response = $backend->configdRun('kea restart', false, 20);
+        } else {
+            $response = $backend->configdRun('dnsmasq restart', false, 20);
+        }
+        if (trim($response) !== 'OK') {
+            throw new \RuntimeException('OPNsense could not apply the DHCP reservation.');
+        }
     }
 
     private static function verifyNetworkProxy(array $proxy, array $settings): void

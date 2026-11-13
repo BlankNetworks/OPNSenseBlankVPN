@@ -48,7 +48,7 @@ namespace {
 
     $peers = Diagnostics::tailnetPeers(['BackendState' => 'Running', 'Peer' => [
         ['HostName' => 'Travel iPad', 'Online' => true, 'TailscaleIPs' => ['100.100.1.2', 'fd7a:115c:a1e0::2', '192.168.2.1']],
-        ['DNSName' => 'laptop.example.ts.net.', 'Online' => false, 'TailscaleIPs' => ['100.100.1.3']],
+        ['HostName' => 'localhost', 'DNSName' => 'laptop.example.ts.net.', 'Online' => false, 'TailscaleIPs' => ['100.100.1.3']],
         ['HostName' => 'Unrelated', 'TailscaleIPs' => ['198.51.100.2']],
     ]]);
     check(count($peers) === 2 && $peers[0]['ipv4'] === '100.100.1.2' && $peers[0]['ipv6'] === ['fd7a:115c:a1e0::2'] &&
@@ -85,6 +85,8 @@ namespace {
         'interface list arp' => [
             ['intf' => 'igc0', 'mac' => '02:00:00:00:00:01', 'ip' => '192.168.10.5'],
             ['intf' => 'igc0', 'mac' => '02:00:00:00:00:09', 'ip' => '192.168.10.7'],
+            ['intf' => 'igc0', 'mac' => '02:00:00:00:00:06', 'ip' => '192.168.10.18'],
+            ['intf' => 'igc0', 'mac' => '02:00:00:00:00:13', 'ip' => '192.168.10.19', 'expired' => true],
             ['intf' => 'igc0', 'mac' => '02:00:00:00:00:10', 'ip' => '192.168.10.1'],
             ['intf' => 'igc1', 'mac' => '02:00:00:00:00:11', 'ip' => '203.0.113.1'],
         ],
@@ -97,6 +99,7 @@ namespace {
         ]],
         'kea list leases4' => ['records' => [
             ['if' => 'igc0', 'hwaddr' => '02:00:00:00:00:04', 'address' => '192.168.10.8', 'expire' => $now + 4000],
+            ['if' => 'igc0', 'hwaddr' => '02:00:00:00:00:06', 'address' => '192.168.10.18', 'expire' => $now + 4000, 'hostname' => 'pitv'],
             ['if' => 'igc0', 'hwaddr' => '02:00:00:00:00:05', 'address' => '192.168.10.9', 'expire' => $now - 20],
         ]],
         'dnsmasq list leases' => ['records' => []],
@@ -128,13 +131,18 @@ namespace {
     check($desktop['stable'] && $desktop['ipv4'] === '192.168.10.5', 'Stable device');
     check($desktop['ipv6'] === ['fe80::5'] && $desktop['lastSeen'] !== null, 'NDP and Hostwatch');
     check($desktop['name'] === 'reserved-host', 'Reservation hostname');
-    check($devices['lan-020000000002']['addressConflict'], 'Conflicting IP detected');
-    check(!$devices['lan-020000000002']['stable'], 'Conflicting reservation cannot be stable');
-    check($devices['lan-020000000004']['observation'] === 'lease-only', 'Lease-only device');
-    check($devices['lan-020000000012']['observation'] === 'history', 'Stale Hostwatch device');
-    check($devices['lan-020000000012']['ipv4'] === null, 'Stale observation is not a current address');
+    check($devices['lan-020000000009']['addressConflict'] && !$devices['lan-020000000009']['stable'],
+        'A live IP conflicting with another MAC’s reservation cannot be assigned automatically.');
+    check(!isset($devices['lan-020000000002']) && !isset($devices['lan-020000000004']) &&
+        !isset($devices['lan-020000000012']) && !isset($devices['lan-020000000013']), 'Hide reservation-only, lease-only, historical and expired neighbors.');
     check(!isset($devices['lan-020000000005']) && !isset($devices['lan-020000000010'])
         && !isset($devices['wan-020000000011']), 'Expired and non-client devices excluded');
+    check($devices['lan-020000000006']['name'] === 'pitv' && !$devices['lan-020000000006']['stable'] &&
+        $diagnostics->reservationProvider('lan', '192.168.10.18', '02:00:00:00:00:06') === 'Kea DHCPv4',
+        'Match a live client to its exact DHCP lease for in-place reservation.');
+    check($diagnostics->reservationProvider('lan', '192.168.10.8', '02:00:00:00:00:04') === '' &&
+        $diagnostics->reservationProvider('lan', '192.168.10.18', '02:00:00:00:00:99') === '',
+        'Reject lease-only clients and MAC mismatches.');
 
     $sessions = $diagnostics->connections('192.168.10.5');
     check($sessions['truncated'] && $sessions['total'] === 1, 'Bounded, exact endpoint matching');

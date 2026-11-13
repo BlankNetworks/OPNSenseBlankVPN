@@ -1,4 +1,4 @@
-- Network Settings lists LAN devices and Tailscale peers. Refresh checks the managed LAN for neighbors and shows available IP addresses, MAC addresses, and names. Select a row to fill a device routing rule.
-- Proxy Login has a SOCKS5 filter and pagination. Subscriptions accept up to 2,048 entries and 4 MiB.
-- Imported proxy servers are enabled for selection by default. Assigning a proxy starts its tunnel when routing is on. Disable is available for unassigned servers.
-- Routing shows the active policy and server where the firewall confirms it. Per-device Multi-Path can use saved domain lists without enabling them for the whole interface.
+- LAN discovery shows current IPv4 neighbors. Saved rules stay visible for offline devices. Tailscale peers have a separate list with online and offline status.
+- Reserve a verified Kea or Dnsmasq DHCP lease and save its device routing rule in one step.
+- Removed the Connections panel and Mullvad tunnel selector. Mullvad reuses an available unassigned tunnel automatically.
+- Saving a Mullvad batch opens the server list with a Use button for each available relay.

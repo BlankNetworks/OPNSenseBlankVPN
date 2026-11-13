@@ -43,6 +43,9 @@ class ServiceController extends ApiControllerBase
             $services = SmartRouting::services($model);
             $diagnostics = new Diagnostics();
             $discovery = $diagnostics->devices();
+            $lanInterfaces = array_diff($settings['interfaces'] ?: ['lan'], $settings['tailscaleInterfaces']);
+            $discovery['devices'] = array_values(array_filter($discovery['devices'],
+                static fn (array $device): bool => in_array($device['interface'], $lanInterfaces, true)));
             $discovery['tailnetDevices'] = $settings['tailscaleInstalled'] ? $diagnostics->tailnetDevices() : [];
             $runtime = $profiles === [] ? [] : WireGuard::runtimeRecords();
             $health = Firewall::health();
@@ -403,10 +406,18 @@ class ServiceController extends ApiControllerBase
             }
             $profile = $owned[$id];
         }
-        if ($profile === null && count($owned) > 1) {
-            throw new \DomainException('Choose which saved Mullvad tunnel to switch to this server.');
+        if ($profile === null && $owned !== []) {
+            $used = [Policy::settings($model)['networkProfile'], ...array_column(SmartRouting::services($model), 'profile')];
+            foreach (Policy::assignments($model) as $rule) {
+                array_push($used, $rule['profile'], $rule['backup']);
+            }
+            $available = array_diff_key($owned, array_fill_keys($used, true));
+            $available = array_filter($available, static fn (array $candidate): bool => $candidate['registered']);
+            $profile = reset($available) ?: null;
+            if ($profile === null) {
+                throw new \DomainException('Free an unused Mullvad tunnel or remove an obsolete registration before switching servers.');
+            }
         }
-        $profile ??= reset($owned) ?: null;
         if ($profile !== null) {
             if (!$profile['registered']) {
                 throw new \DomainException('Mullvad no longer lists this device registration. Remove the saved tunnel and enable a server again.');
@@ -875,11 +886,20 @@ class ServiceController extends ApiControllerBase
             if ($kind === 'tailnet' && (!Policy::tailnetAddress($ip) || !Policy::tailnetAddress($ipv6, true))) {
                 throw new \DomainException('Enter both the Tailscale IPv4 and IPv6 addresses for this peer.');
             }
-            if ($kind === 'lan' && !(new Diagnostics())->hasReservation($interface, $ip, $mac)) {
-                throw new \DomainException('Create a unique IPv4 DHCP reservation for this MAC and interface first.');
+            $provider = '';
+            if ($kind === 'lan') {
+                $diagnostics = new Diagnostics();
+                if (!$diagnostics->hasReservation($interface, $ip, $mac)) {
+                    if ($this->flag('reserveIp')) {
+                        $provider = $diagnostics->reservationProvider($interface, $ip, $mac);
+                    }
+                    if ($provider === '') {
+                        throw new \DomainException('A DHCP reservation is required. Refresh to reserve the device’s current lease, or create a reservation in OPNsense.');
+                    }
+                }
             }
             $result = Operations::change(function (BlankVpn $model) use (
-                $ip, $ipv6, $mac, $kind, $mode, $interface, $label, $profile, $backup, $failure, $killSwitch
+                $ip, $ipv6, $mac, $kind, $mode, $interface, $label, $profile, $backup, $failure, $killSwitch, $provider
             ) {
                 $settings = Policy::settings($model);
                 if (!in_array($interface, $settings['interfaces'], true)) {
@@ -916,6 +936,9 @@ class ServiceController extends ApiControllerBase
                         throw new \DomainException('This address already has an assignment on the selected interface.');
                     }
                 }
+                if ($provider !== '') {
+                    (new Diagnostics())->reserveDevice($provider, $interface, $ip, $mac);
+                }
                 if ($node === null) {
                     $node = $model->assignments->assignment->add();
                 }
@@ -937,13 +960,16 @@ class ServiceController extends ApiControllerBase
                     ($prior['failure'] ?? '') !== $failure ||
                     Policy::killSwitch($prior) !== Policy::killSwitch(Policy::fields($node));
                 return [
-                    'settings' => $settings, 'reload' => $settings['enabled'],
+                    'settings' => $settings, 'reload' => $settings['enabled'], 'dhcpProvider' => $provider,
                     'killSwitchReset' => $settings['enabled'] && $changed ?
                         array_values(array_unique(array_filter([$ip, $ipv6, $prior['ip'] ?? '', $prior['ipv6'] ?? '']))) : []
                 ];
             });
             $reset = $result['killSwitchReset'] !== [];
             $result = ['applied' => $result['reload'], 'killSwitchReset' => $reset];
+            if ($provider !== '') {
+                $result['message'] = 'IP address reserved and device rule saved.';
+            }
             if ($result['applied'] && !$reset && $this->flag('switchNow')) {
                 try {
                     $result['reconnected'] = Operations::switchDevice($ip, Policy::settings(new BlankVpn()));

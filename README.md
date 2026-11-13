@@ -78,8 +78,8 @@ Choose **Tailscale address** and save to use the router’s MagicDNS hostname an
 ## Enable a Mullvad server
 
 1. Open **VPN Login**, enter your Mullvad account number, and sign in. Select **Save login on this router** to restore sign-in in future WebGUI sessions. The router stores the account number in a private file scoped to your WebGUI user, outside the OPNsense configuration export.
-2. Pick a country, city, and server, then choose **Add server**. The tunnel is available for routing immediately. Disable an unused Mullvad server to pause its tunnel and keep its registration. For the first tunnel on the account, Blank VPN generates a local WireGuard key and registers its public key with Mullvad.
-3. To change locations, select a new server. Blank VPN reuses the router’s registration. If you already have multiple Mullvad tunnels from an earlier release, choose which tunnel to switch. Move its device and Multi-Path assignments before switching.
+2. Pick a country, city, and server, then choose **Use server**. The tunnel is available for routing immediately. Disable an unused Mullvad server to pause its tunnel and keep its registration. For the first tunnel on the account, Blank VPN generates a local WireGuard key and registers its public key with Mullvad.
+3. To change locations, select a new server. Blank VPN reuses the router’s registration. Blank VPN automatically reuses an available registration from a tunnel with no routing assignments. Free a tunnel first if all existing tunnels are assigned.
 
 The router retains the registration key in private storage across upgrades and tunnel removal. Existing Mullvad tunnels from earlier releases stay available. Mullvad allows up to five registered devices per account. [Mullvad device limits](https://mullvad.net/en/help/using-mullvad-vpn-app#too-many-devices)
 
@@ -87,7 +87,7 @@ VPN Login offers Mullvad. Existing VPN tunnels saved with earlier releases remai
 
 ### Add server batches
 
-In **VPN Login**, open **Manage server batches** and choose a city, country, or **Worldwide · all servers**. Click **Add batch** to save the list. Use **Browse servers** or the **Server list** menu to select a server from the batch. **Refresh servers** updates the catalog. Saving a batch uses zero device slots.
+In **VPN Login**, open **Manage server batches** and choose a city, country, or **Worldwide · all servers**. Click **Save and show servers** to open the batch list. Click **Use** next to a relay to put it in **VPN tunnels**. Use **Browse servers** to reopen a saved batch and **Refresh servers** to refresh the catalog. Each batch shares the existing catalog and uses zero device slots.
 
 ### Test servers
 
@@ -126,15 +126,15 @@ Open **Network Settings**, check the Ethernet ports or VLANs under **Interface**
 | Off | Follow the native network policy and bypass Blank VPN service routing for the assigned addresses. |
 | Blocked | Block internet traffic from the assigned addresses and keep approved local access subject to native firewall rules. |
 
-In **Network Settings**, choose **Only Devices I choose** and press **Refresh** to see LAN devices and Tailscale peers. **Select** fills the addresses and MAC where available. LAN rules require a unique DHCP reservation. Selecting Multi-Path for a device uses the domain lists assigned in **Multi-Path Settings**. Add the device’s stable IPv6 address to cover that address as well. On shared LANs, other IPv6 addresses follow the native policy. Use a dedicated strict interface for network-wide internet IPv6 blocking.
+In **Network Settings**, choose **Only Devices I choose** and press **Refresh** to see LAN devices and Tailscale peers. **Select** fills the addresses and MAC where available. The LAN list shows IPv4 neighbors from OPNsense’s current ARP table. Saved rules stay visible for devices that go offline. For a matching active Kea or Dnsmasq lease, **Reserve IP and save rule** adds a DHCP reservation and applies the rule. For other devices, create a unique reservation in OPNsense first. Selecting Multi-Path for a device uses the domain lists assigned in **Multi-Path Settings**. Add the device’s stable IPv6 address to cover that address as well. On shared LANs, other IPv6 addresses follow the native policy. Use a dedicated strict interface for network-wide internet IPv6 blocking.
 
 You can run multiple provider exits together, with up to 32 VPN profiles and eight active proxy exits. A phone can use Mullvad, a TV ExpressVPN, a tablet a proxy, and a Mac NordVPN. With Multi-Path, select a different exit for each service, such as a Japan exit for Netflix, a USA exit for Hulu, and a China exit for WeChat. Each service uses the domains you enter. Presets are starting lists that you can edit.
 
 ### Assign a Tailscale peer
 
-The standard OPNsense FreeBSD Tailscale exit node uses userspace forwarding. PF sees the router’s connection after Tailscale has translated it, so it cannot enforce a per-peer internet policy there. The dashboard is still reachable over that Tailscale interface. [Tailscale forwarding modes](https://tailscale.com/docs/reference/kernel-vs-userspace-routers)
+The standard OPNsense FreeBSD Tailscale exit node uses userspace forwarding. PF sees the router’s connection after Tailscale has translated it, so it cannot enforce a per-peer internet policy there. Tailscale peers appear in a separate list with online and offline status. Accessing the dashboard only requires a permitted connection to the OPNsense Tailscale address. [Tailscale forwarding modes](https://tailscale.com/docs/reference/kernel-vs-userspace-routers)
 
-To apply per-peer policy, use a Linux Tailscale exit gateway in kernel forwarding mode on a dedicated OPNsense Ethernet or VLAN link. Preserve the peer source addresses, configure the return routes for those addresses through the Linux gateway, and confirm both address families with an OPNsense capture. Advertise and approve the home subnets for remote LAN access. In Blank VPN select **Only devices I choose**, enable the dedicated port under **Network Settings → Interface**, then select the port under **Tailscale Settings → Route Tailscale devices through Blank VPN**. Press **Refresh** in **Network Settings**, then select the peer to fill in its Tailscale IPv4 and IPv6 addresses. [Tailscale forwarding modes](https://tailscale.com/docs/reference/kernel-vs-userspace-routers) · [Tailscale subnet routing](https://tailscale.com/docs/features/subnet-routers)
+To apply per-peer policy, use a Linux Tailscale exit gateway in kernel forwarding mode on a dedicated OPNsense Ethernet or VLAN link. Select that Linux gateway as the exit node on each peer. Configure the gateway so it preserves peer source addresses on traffic sent to OPNsense. Set return routes for those addresses through the Linux gateway and verify both address families with an OPNsense capture. Advertise and approve the home subnets for remote LAN access. In Blank VPN select **Only devices I choose**, enable the dedicated port under **Network Settings → Interface**, then select the port under **Tailscale Settings → Route Tailscale devices through Blank VPN**. Press **Refresh** in **Network Settings**, then select the peer to fill in its Tailscale IPv4 and IPv6 addresses. [Tailscale forwarding modes](https://tailscale.com/docs/reference/kernel-vs-userspace-routers) · [Tailscale subnet routing](https://tailscale.com/docs/features/subnet-routers)
 
 ## Route Netflix or another service
 

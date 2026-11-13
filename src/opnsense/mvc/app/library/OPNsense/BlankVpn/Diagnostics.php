@@ -35,6 +35,7 @@ final class Diagnostics
         $interfaces = $this->localInterfaces($warnings);
         $observations = [];
         $now = time();
+        $leases = [];
 
         $append = function (array $record) use (&$observations, $interfaces): void {
             $ip = self::ip((string)($record['ip'] ?? ''));
@@ -43,7 +44,8 @@ final class Diagnostics
             if ($ip === null || $mac === null || !isset($interfaces[$device])) {
                 return;
             }
-            if (in_array($ip, $interfaces[$device]['ownAddresses'], true)) {
+            if (in_array($ip, $interfaces[$device]['ownAddresses'], true) ||
+                (!str_contains($ip, ':') && self::interfaceForIp($ip, [$device => $interfaces[$device]], []) === null)) {
                 return;
             }
             $record['ip'] = $ip;
@@ -64,7 +66,8 @@ final class Diagnostics
                 $append([
                     'device' => $row['intf'] ?? '', 'mac' => $row['mac'] ?? '', 'ip' => $row['ip'] ?? '',
                     'name' => $row['hostname'] ?? '', 'source' => $label,
-                    'current' => empty($row['expired']),
+                    'current' => empty($row['expired']) && empty($row['permanent']) &&
+                        !in_array($row['type'] ?? '', ['published', 'proxy'], true),
                 ]);
             }
         }
@@ -120,6 +123,12 @@ final class Diagnostics
                 if (($lease['type'] ?? '') === 'IA_PD' || (int)($lease['type'] ?? -1) === 2) {
                     continue;
                 }
+                $address = self::ip((string)($lease['address'] ?? ''));
+                $hardware = self::mac((string)($lease['hwaddr'] ?? ''));
+                $port = $interfaces[(string)($lease['if'] ?? '')]['id'] ?? null;
+                if ($port !== null && $address !== null && !str_contains($address, ':') && $hardware !== null) {
+                    $leases[$port . '/' . $address][$source . '/' . $hardware] = ['source' => $source, 'mac' => $hardware];
+                }
                 $append([
                     'device' => $lease['if'] ?? '', 'mac' => $lease['hwaddr'] ?? '',
                     'ip' => $lease['address'] ?? '', 'name' => $lease['hostname'] ?? '',
@@ -132,7 +141,15 @@ final class Diagnostics
             $append($reservation + ['source' => 'DHCP reservation']);
         }
 
-        return $this->combine($observations, $interfaces, $this->reservations(), $warnings, $truncated, $now);
+        $snapshot = $this->combine($observations, $interfaces, $this->reservations(), $warnings, $truncated, $now);
+        foreach ($snapshot['devices'] as &$device) {
+            $claims = $leases[$device['interface'] . '/' . $device['ipv4']] ?? [];
+            $lease = count($claims) === 1 ? reset($claims) : null;
+            $device['leaseProvider'] = !$snapshot['truncated'] && !$device['addressConflict'] &&
+                ($lease['mac'] ?? null) === $device['mac'] ? $lease['source'] : '';
+        }
+        unset($device);
+        return $snapshot;
     }
 
     public function tailnetDevices(): array
@@ -160,8 +177,9 @@ final class Diagnostics
             if ($v4 === '' && $v6 === '') {
                 continue;
             }
-            $name = self::label($peer['HostName'] ?? '') ??
-                self::label(explode('.', (string)($peer['DNSName'] ?? ''), 2)[0]);
+            $host = self::label($peer['HostName'] ?? '');
+            $dnsName = self::label(explode('.', (string)($peer['DNSName'] ?? ''), 2)[0]);
+            $name = $host === null || strtolower($host) === 'localhost' ? ($dnsName ?? $host) : $host;
             $peers[] = ['kind' => 'tailnet', 'name' => $name, 'ipv4' => $v4, 'ipv6' => $v6 === '' ? [] : [$v6],
                 'online' => ($peer['Online'] ?? false) === true];
         }
@@ -253,6 +271,71 @@ final class Diagnostics
             }
         }
         return $result;
+    }
+
+    public function reservationProvider(string $interface, string $ip, string $mac): string
+    {
+        foreach ($this->devices()['devices'] as $device) {
+            if ($device['interface'] === $interface && $device['ipv4'] === $ip && $device['mac'] === $mac) {
+                return $device['leaseProvider'];
+            }
+        }
+        return '';
+    }
+
+    public function reserveDevice(string $provider, string $interface, string $ip, string $mac): void
+    {
+        $warnings = [];
+        $interfaces = $this->localInterfaces($warnings, false);
+        $device = self::interfaceForIp($ip, $interfaces, [$interface]);
+        if ($device === null || in_array($ip, $interfaces[$device]['ownAddresses'], true)) {
+            throw new \DomainException('This address is outside the selected LAN.');
+        }
+        foreach ($this->readReservations($interfaces) as $entry) {
+            if ($entry['ip'] === $ip || ($entry['device'] === $device && self::mac($entry['mac']) === $mac)) {
+                throw new \DomainException('An existing DHCP reservation conflicts with this device. Review it in OPNsense.');
+            }
+        }
+
+        if ($provider === 'Dnsmasq DHCP') {
+            $model = new \OPNsense\Dnsmasq\Dnsmasq();
+            foreach ($this->config->dnsmasq->hosts as $entry) {
+                if (in_array($ip, self::csv((string)$entry->ip), true) ||
+                    in_array($mac, self::csv(strtolower((string)$entry->hwaddr)), true)) {
+                    throw new \DomainException('An existing Dnsmasq host entry matches this device. Review it before reserving its IP.');
+                }
+            }
+            $node = $model->hosts->add();
+            $node->ip = $ip;
+            $node->hwaddr = $mac;
+            $node->descr = 'Blank VPN device rule';
+        } elseif ($provider === 'Kea DHCPv4') {
+            $model = new \OPNsense\Kea\KeaDhcpv4();
+            $subnets = [];
+            foreach ($this->config->OPNsense->Kea->dhcp4->subnets->subnet4 as $subnet) {
+                $network = Policy::cidr((string)$subnet->subnet);
+                if ($network !== null && Policy::contains($network, $ip)) {
+                    $subnets[] = (string)$subnet['uuid'];
+                }
+            }
+            if (count($subnets) !== 1 || (string)$model->general->manual_config === '1' ||
+                !in_array($interface, self::csv((string)$model->general->interfaces), true)) {
+                throw new \DomainException('Create a reservation in Kea for the device’s LAN subnet, then save the rule.');
+            }
+            $node = $model->reservations->reservation->add();
+            $node->subnet = $subnets[0];
+            $node->ip_address = $ip;
+            $node->hw_address = $mac;
+        } else {
+            throw new \DomainException('Create a DHCP reservation for this device in OPNsense, then save the rule.');
+        }
+        if (count($model->performValidation()) !== 0) {
+            throw new \DomainException('OPNsense rejected this DHCP reservation. Review the address and MAC in DHCP settings.');
+        }
+        $model->serializeToConfig();
+        if (!(new self())->hasReservation($interface, $ip, $mac)) {
+            throw new \DomainException('OPNsense could not confirm the reservation on this LAN.');
+        }
     }
 
     public function hasReservation(string $interface, string $ip, string $mac): bool
@@ -547,7 +630,7 @@ final class Diagnostics
             $ipv4 = [];
             $ipv6 = [];
             $reserved = [];
-            $state = 'reservation-only';
+            $liveIpv4 = [];
             foreach ($device['records'] as $record) {
                 $ip = $record['ip'];
                 $current = !empty($record['current']);
@@ -559,37 +642,35 @@ final class Diagnostics
                     $reserved[$ip] = true;
                 } elseif ($current) {
                     $ipv4[$ip] = true;
-                }
-                if ($current && in_array($record['source'], ['ARP', 'NDP', 'Hostwatch'], true)) {
-                    $state = 'observed-neighbor';
-                } elseif ($current && $state !== 'observed-neighbor') {
-                    $state = 'lease-only';
-                } elseif ($record['source'] !== 'DHCP reservation' && $state === 'reservation-only') {
-                    $state = 'history';
+                    if ($record['source'] === 'ARP') {
+                        $liveIpv4[$ip] = true;
+                    }
                 }
             }
+            if ($liveIpv4 === []) {
+                unset($devices[$id]);
+                continue;
+            }
             $reservedIp = count($reserved) === 1 ? array_key_first($reserved) : null;
-            $ip = array_key_first($ipv4) ?? $reservedIp;
+            $ip = array_key_first($liveIpv4);
             $conflict = count($reserved) > 1 || ($ip !== null && count($claims[$ip] ?? []) > 1)
                 || ($reservedIp !== null && $ipv4 && (count($ipv4) > 1 || !isset($ipv4[$reservedIp])));
             $device['ipv4'] = $ip;
-            $device['ipv4Addresses'] = array_keys($ipv4);
+            $device['ipv4Addresses'] = array_keys($liveIpv4);
             $device['ipv6'] = array_keys($ipv6);
             $device['reservationIpv4'] = $reservedIp;
             $device['addressConflict'] = $conflict;
             $device['stable'] = $reservedIp !== null && !$conflict && !$truncated
                 && ($configuredOwners[$reservedIp] ?? '') === $device['interface'] . '/' . $device['mac'];
-            $device['observation'] = $state;
             $device['sources'] = array_keys($device['sources']);
             $device['lastSeen'] = $device['lastSeen'] === null ? null : gmdate('c', $device['lastSeen']);
             unset($device['records']);
         }
         unset($device);
 
-        $priority = ['observed-neighbor' => 0, 'lease-only' => 1, 'reservation-only' => 2, 'history' => 3];
         $devices = array_values($devices);
-        usort($devices, static fn ($a, $b) => [$priority[$a['observation']], $a['id']]
-            <=> [$priority[$b['observation']], $b['id']]);
+        usort($devices, static fn ($a, $b) => [$a['interface'], ip2long($a['ipv4'])]
+            <=> [$b['interface'], ip2long($b['ipv4'])]);
 
         return [
             'devices' => array_slice($devices, 0, self::DEVICE_LIMIT),
