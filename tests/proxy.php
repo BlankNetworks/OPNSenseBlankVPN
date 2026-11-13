@@ -33,6 +33,36 @@ function rejectProxy(string $body): void
     throw new RuntimeException('An unsafe or invalid proxy configuration was accepted.');
 }
 
+$plainSocks = proxyNode('socks5://192.0.2.8:1080');
+assertProxy($plainSocks['id'] === proxyNode('socks5h://192.0.2.8:1080')['id'],
+    'Remote DNS SOCKS links must keep the existing node identity.');
+$tlsSocks = proxyNode('socks5://test%40account:secret%3Apass@192.0.2.8:443?tls=true&sni=example.com&udp=1');
+assertProxy($tlsSocks['config']['username'] === 'test@account' &&
+    $tlsSocks['config']['password'] === 'secret:pass' && $tlsSocks['config']['tls'] === true &&
+    $tlsSocks['config']['name-cert-verify'] === 'example.com' && $tlsSocks['config']['udp'] === true,
+    'SOCKS5 links should preserve decoded credentials and TLS and UDP settings.');
+assertProxy($tlsSocks['id'] === ProxyImport::manual('TLS SOCKS', 'socks5', '192.0.2.8', '443',
+    'test@account', 'secret:pass', '', 'tls=true&sni=example.com&udp=true')['id'], 'Manual SOCKS5 settings must match link import.');
+rejectProxy('socks5://192.0.2.8:1080?sni=example.com');
+rejectProxy('socks5://192.0.2.8:1080?tls=invalid');
+rejectProxy('socks5://192.0.2.8:1080?skip-cert-verify=true');
+
+$greet = new ReflectionMethod(ProxyRuntime::class, 'socksGreeting');
+foreach ([
+    ["\x05\x00", '', '', 'without authentication'],
+    ["\x05\xff", 'user', 'pass', 'refused'],
+    ["\x05\x02\x01\x00", 'user', 'pass', 'accepted the username'],
+    ["\x05\x02\x01\x01", 'user', 'pass', 'rejected the username'],
+    ['HT', '', '', 'valid SOCKS5 greeting']
+] as [$reply, $username, $password, $detail]) {
+    [$client, $server] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+    fwrite($server, $reply);
+    assertProxy(str_contains($greet->invoke(null, $client, $username, $password), $detail),
+        'SOCKS5 diagnostics must report the upstream greeting or authentication stage.');
+    fclose($client);
+    fclose($server);
+}
+
 $uuid = 'e823f0a1-0f99-4ed1-aa0d-f5b05ae75e19';
 $ss = 'ss://' . rtrim(strtr(base64_encode('aes-256-gcm:fixture-pass'), '+/', '-_'), '=') . '@192.0.2.2:1234#Example';
 $legacy = 'ssr://' . rtrim(strtr(base64_encode('192.0.2.3:443:origin:aes-256-cfb:plain:' .

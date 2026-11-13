@@ -1,4 +1,4 @@
-# Blank VPN 0.8.6
+# Blank VPN 0.8.7
 
 This lab prerelease targets OPNsense Community Edition 26.7 with the FreeBSD 15 package ABI.
 
@@ -8,9 +8,8 @@ This lab prerelease targets OPNsense Community Edition 26.7 with the FreeBSD 15 
 
 Use `pkg config ABI` on the router to choose the matching download.
 
-- Name a single proxy at import or use **Edit name** on a saved VPN or proxy. Custom proxy names survive subscription refreshes.
-- Proxy and VPN tests show results in each server’s row. Fixed a PHP cURL constant that could turn proxy failures into unexpected errors. Manual proxy tests can retry through a second HTTPS destination and identify where a connection timed out.
-- Save entire Mullvad cities, countries, or the worldwide catalog. Activate servers in a batch up to Mullvad’s available device slots.
-- The Tailscale dashboard uses the router’s MagicDNS hostname and shows its direct tailnet IP. Saving allows the hostname in OPNsense while preserving existing aliases.
+- Server rows use **Test**, **Edit**, **Enable**, and **Remove**. For an enabled proxy, **Disable** frees its routing slot and keeps the server in the catalog.
+- Proxy tests include a regional HTTPS endpoint and report upstream TCP, SOCKS5 authentication, and TLS failures where available. SOCKS5 links and manual entries support TLS hostname verification and optional UDP.
+- Blank VPN reuses the router’s Mullvad device registration when you switch servers. Existing tunnels are preserved. City, country, and worldwide batches remain available for browsing.
 
 Download the `.pkg` and SHA-256 file below. See the [installation instructions](https://github.com/BlankNetworks/OPNSenseBlankVPN#lab-installation) and [third-party source information](https://github.com/BlankNetworks/OPNSenseBlankVPN/blob/main/THIRD_PARTY.md). Live OPNsense forwarding, core rollback, and tunnel-drop behavior still need lab validation.

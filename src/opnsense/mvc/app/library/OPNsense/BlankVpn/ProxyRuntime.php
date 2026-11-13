@@ -236,7 +236,7 @@ final class ProxyRuntime
             throw new DomainException('The saved proxy server is missing. Import it again before testing.');
         }
         if ($route !== null && self::ready($route)) {
-            $result = self::probeSocks($route['socksPort'], true);
+            $result = self::testSocks($route['socksPort'], $node);
             if (!$result['reachable']) {
                 syslog(LOG_NOTICE, 'Blank VPN proxy test (' . $node['core'] . '): ' . $result['detail']);
             }
@@ -250,7 +250,7 @@ final class ProxyRuntime
         self::stop($slot);
         try {
             self::start($test, $node, true);
-            $result = self::probeSocks($test['socksPort'], true);
+            $result = self::testSocks($test['socksPort'], $node);
             if (!$result['reachable']) {
                 syslog(LOG_NOTICE, 'Blank VPN proxy test (' . $node['core'] . '): ' . $result['detail']);
             }
@@ -271,13 +271,77 @@ final class ProxyRuntime
         return self::probeSocks($route['socksPort']);
     }
 
+    private static function testSocks(int $port, array $node): array
+    {
+        $result = self::probeSocks($port, true);
+        if (!$result['reachable'] && $node['core'] === 'mihomo' && $node['protocol'] === 'socks5' &&
+            empty($node['config']['fingerprint'])) {
+            $result['detail'] = self::upstreamSocksStatus($node['config']) . ' ' . $result['detail'];
+        }
+        return $result;
+    }
+
+    private static function upstreamSocksStatus(array $config): string
+    {
+        $server = $config['server'];
+        $address = str_contains($server, ':') ? '[' . $server . ']' : $server;
+        $context = stream_context_create(['ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+            'peer_name' => $config['name-cert-verify'] ?? $server
+        ]]);
+        $socket = @stream_socket_client('tcp://' . $address . ':' . $config['port'],
+            $error, $message, 3, STREAM_CLIENT_CONNECT, $context);
+        if ($socket === false) {
+            return 'OPNsense could not open a TCP connection to the SOCKS5 server.';
+        }
+        try {
+            stream_set_timeout($socket, 2);
+            if (!empty($config['tls']) && @stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT) !== true) {
+                return 'The SOCKS5 server’s TLS connection or certificate check failed.';
+            }
+            return self::socksGreeting($socket, (string)($config['username'] ?? ''), (string)($config['password'] ?? ''));
+        } finally {
+            fclose($socket);
+        }
+    }
+
+    private static function socksGreeting($socket, string $user, string $password): string
+    {
+        $authenticated = $user !== '';
+        $greeting = $authenticated ? "\x05\x01\x02" : "\x05\x01\x00";
+        $reply = @fwrite($socket, $greeting) === strlen($greeting) ? @stream_get_contents($socket, 2) : false;
+        if ($reply === "\x05\x02" && $authenticated) {
+            if (strlen($user) > 255 || strlen($password) > 255) {
+                return 'The SOCKS5 username or password exceeds the protocol limit.';
+            }
+            $request = "\x01" . chr(strlen($user)) . $user . chr(strlen($password)) . $password;
+            $reply = @fwrite($socket, $request) === strlen($request) ? @stream_get_contents($socket, 2) : false;
+            if ($reply === "\x01\x00") {
+                return 'The SOCKS5 server accepted the username and password.';
+            }
+            if (is_string($reply) && strlen($reply) === 2 && $reply[0] === "\x01") {
+                return 'The SOCKS5 server rejected the username or password.';
+            }
+            return 'The SOCKS5 server did not finish authentication.';
+        }
+        return match ($reply) {
+            "\x05\x00" => 'The SOCKS5 server accepted a connection without authentication.',
+            "\x05\xff" => 'The SOCKS5 server refused the configured authentication method.',
+            default => 'TCP connected, but the server did not return a valid SOCKS5 greeting.'
+        };
+    }
+
     private static function probeSocks(int $port, bool $tryAlternate = false): array
     {
         if (!function_exists('curl_init')) {
             throw new RuntimeException('The OPNsense PHP cURL extension is unavailable.');
         }
-        // A second destination distinguishes a failed endpoint or DNS lookup from a failed proxy.
-        $targets = ['https://1.1.1.1/dns-query?name=example.com&type=A' => 200];
+        // Use IP-based endpoints in different regions before a hostname-based HTTPS check.
+        $targets = [
+            'https://1.1.1.1/dns-query?name=example.com&type=A' => 200,
+            'https://223.5.5.5/resolve?name=example.com&type=A' => 200
+        ];
         if ($tryAlternate) {
             $targets['https://www.gstatic.com/generate_204'] = 204;
         }
@@ -289,7 +353,7 @@ final class ProxyRuntime
                 CURLOPT_NOPROXY => '', CURLOPT_PROTOCOLS_STR => 'https', CURLOPT_FOLLOWLOCATION => false,
                 CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
                 CURLOPT_HTTPHEADER => ['Accept: application/dns-json'],
-                CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_TIMEOUT => 8,
+                CURLOPT_CONNECTTIMEOUT => $tryAlternate ? 4 : 3, CURLOPT_TIMEOUT => $tryAlternate ? 5 : 4,
                 CURLOPT_WRITEFUNCTION => static fn ($handle, string $body) => strlen($body)
             ])) {
                 throw new RuntimeException('OPNsense could not configure the proxy connection test.');
@@ -305,7 +369,7 @@ final class ProxyRuntime
                 (float)curl_getinfo($curl, CURLINFO_CONNECT_TIME),
                 (float)curl_getinfo($curl, CURLINFO_APPCONNECT_TIME),
                 $error === CURLE_PROXY ? (int)curl_getinfo($curl, CURLINFO_PROXY_ERROR) : 0);
-            if ($error === CURLE_COULDNT_CONNECT || $error === CURLE_SSL_CACERT) {
+            if ($error === CURLE_COULDNT_CONNECT) {
                 break;
             }
         }

@@ -13,6 +13,7 @@ class Mullvad
     private const API = 'https://api.mullvad.net';
     private const TOKEN = '/auth/v1/token';
     private const DEVICE_LIMIT = 5;
+    private const ROUTER_REGISTRATION = 'blank-vpn-router';
     private const ACCOUNT = '/accounts/v1/accounts/me';
     private const DEVICES = '/accounts/v1/devices';
     private const RELAYS = '/www/relays/all';
@@ -215,20 +216,76 @@ class Mullvad
         }
     }
 
+    public function routerProfiles(string $token, array $profiles): array
+    {
+        $details = $this->accountDetails($token);
+        if ($details['expired']) {
+            throw new RuntimeException('The Mullvad account has expired. Add time before enabling a server.');
+        }
+        $binding = $this->binding($details['id']);
+        $devices = $this->devices($token);
+        $matched = [];
+        foreach ($profiles as $id => $profile) {
+            if ($profile['relay'] === '') {
+                continue;
+            }
+            $savedBinding = $profile['accountBinding'] ?? '';
+            $device = $this->findDevice($devices, $profile['identityKey'] ?? '');
+            if ($device !== null || hash_equals($binding, $savedBinding)) {
+                $matched[$id] = array_replace($profile, ['accountBinding' => $binding]);
+                $matched[$id]['registered'] = $device !== null && $device['id'] === $profile['identity'];
+            } elseif ($savedBinding === '') {
+                throw new RuntimeException('A saved Mullvad tunnel has no account binding. Check which Mullvad account registered it.');
+            }
+        }
+        return $matched;
+    }
+
+    public function registerRouterWithToken(string $token, string $relay): array
+    {
+        return $this->registerWithToken($token, self::ROUTER_REGISTRATION, $relay);
+    }
+
+    public function rememberRouterKey(string $binding, string $privateKey): void
+    {
+        if (!preg_match('/^[a-f0-9]{64}$/D', $binding) || !$this->validKey($privateKey)) {
+            throw new InvalidArgumentException('Invalid Mullvad router identity.');
+        }
+        $name = $this->registrationName($binding, self::ROUTER_REGISTRATION);
+        $path = $this->dataDirectory . '/' . $name . '.json';
+        $lock = $this->lock($name);
+        try {
+            if (!flock($lock, LOCK_EX | LOCK_NB)) {
+                throw new RuntimeException('The Mullvad router identity is being saved. Try again.');
+            }
+            if ($this->pendingKey($path) === null) {
+                $this->writeJson($path, ['privateKey' => $privateKey]);
+            }
+        } finally {
+            fclose($lock);
+        }
+    }
+
+    private function registrationName(string $binding, string $registrationId): string
+    {
+        return 'mullvad-registration-' . hash('sha256', $binding . "\0" . $registrationId);
+    }
+
     public function register(string $account, string $registrationId = ''): array
     {
         return $this->registerWithToken($this->token($account), $registrationId);
     }
 
-    public function registerWithToken(string $token, string $registrationId = ''): array
+    public function registerWithToken(string $token, string $registrationId = '', ?string $previousRelay = null): array
     {
         if (strlen($registrationId) > 256) {
             throw new InvalidArgumentException('Invalid WireGuard registration identifier.');
         }
         $details = $this->accountDetails($token);
         $binding = $this->binding($details['id']);
-        $scope = hash('sha256', $details['id'] . "\0" . $registrationId);
-        $name = 'mullvad-registration-' . $scope;
+        $name = $registrationId === self::ROUTER_REGISTRATION ? $this->registrationName($binding, $registrationId)
+            : 'mullvad-registration-' . hash('sha256', $details['id'] . "\0" . $registrationId);
+        $scope = substr($name, strlen('mullvad-registration-'));
         $path = $this->dataDirectory . '/' . $name . '.json';
         $lock = $this->lock($name);
         try {
@@ -237,6 +294,14 @@ class Mullvad
             }
             $devices = $this->devices($token);
             $privateKey = $this->pendingKey($path);
+            if ($privateKey === null && $previousRelay !== null) {
+                // Adopt an interrupted registration from before router-wide identity reuse.
+                $previousScope = hash('sha256', $details['id'] . "\0" . $previousRelay);
+                $privateKey = $this->pendingKey($this->dataDirectory . '/mullvad-registration-' . $previousScope . '.json');
+                if ($privateKey !== null) {
+                    $this->writeJson($path, ['privateKey' => $privateKey]);
+                }
+            }
             if ($privateKey !== null) {
                 $publicKey = $this->derivePublicKey($privateKey);
                 $registered = $this->findDevice($devices, $publicKey);
@@ -248,7 +313,7 @@ class Mullvad
                 throw new RuntimeException('The Mullvad account has expired. Add time before registering a device.');
             }
             if (count($devices) >= $details['maxDevices'] || !$details['canAddDevices']) {
-                throw new RuntimeException(sprintf('Mullvad cannot register another exit. %d of %d device slots are in use.',
+                throw new RuntimeException(sprintf('Mullvad cannot register this router. %d of %d device slots are in use.',
                     count($devices), $details['maxDevices']));
             }
             if ($privateKey === null) {

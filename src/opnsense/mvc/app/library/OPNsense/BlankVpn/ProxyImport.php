@@ -180,18 +180,41 @@ final class ProxyImport
         $query = self::query($url['query'] ?? '');
         $server = self::host($url['host']);
         $port = self::port($url['port'] ?? match ($scheme) {
-            'http' => 80, 'https' => 443, 'socks', 'socks5' => 1080, default => 443
+            'http' => 80, 'https' => 443, 'socks', 'socks5', 'socks5h' => 1080, default => 443
         });
         $user = rawurldecode($url['user'] ?? '');
         $pass = rawurldecode($url['pass'] ?? '');
         $base = ['server' => $server, 'port' => $port];
-        if (in_array($scheme, ['socks', 'socks5', 'http', 'https'], true)) {
-            if ($query !== [] || !in_array($url['path'] ?? '', ['', '/'], true)) {
+        if (in_array($scheme, ['socks', 'socks5', 'socks5h', 'http', 'https'], true)) {
+            $socks = str_starts_with($scheme, 'socks');
+            if (array_diff(array_keys($query), $socks ? ['tls', 'sni', 'udp'] : []) !== [] ||
+                !in_array($url['path'] ?? '', ['', '/'], true)) {
                 throw new DomainException('Use a structured entry for additional HTTP or SOCKS options.');
             }
-            $type = str_starts_with($scheme, 'socks') ? 'socks5' : 'http';
+            if (($pass !== '' && $user === '') || preg_match('/[\x00-\x1f\x7f]/', $user . $pass) ||
+                ($socks && (strlen($user) > 255 || strlen($pass) > 255))) {
+                throw new DomainException('Invalid proxy username or password.');
+            }
             $auth = $user === '' ? [] : ['username' => $user, 'password' => $pass];
-            return self::node('mihomo', ['type' => $type, 'tls' => $scheme === 'https'] + $base + $auth, $label);
+            $tls = $scheme === 'https';
+            $options = [];
+            foreach (['tls', 'udp'] as $flag) {
+                if (isset($query[$flag])) {
+                    $options[$flag] = match (strtolower($query[$flag])) {
+                        '1', 'true' => true,
+                        '0', 'false' => false,
+                        default => throw new DomainException('Use true or false for the SOCKS5 ' . $flag . ' option.')
+                    };
+                }
+            }
+            $tls = $options['tls'] ?? $tls;
+            if (isset($query['sni'])) {
+                if (!$tls) {
+                    throw new DomainException('Enable TLS to set a SOCKS5 certificate hostname.');
+                }
+                $options['name-cert-verify'] = self::host($query['sni']);
+            }
+            return self::node('mihomo', ['type' => $socks ? 'socks5' : 'http', 'tls' => $tls] + $base + $auth + $options, $label);
         }
         $query['password'] = $pass;
         if ($scheme === 'vless' &&

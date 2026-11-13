@@ -183,11 +183,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('relay-list').value === 'ca' && bv('relay').options.length === 3, 'saved batch was lost on dashboard refresh');
     bv('relay').value = 'ca-test-wg-001';
     bv('relay').dispatchEvent(new Event('change'));
-    assert(bv('relay-choice').textContent.includes('Canada') && !bv('register').disabled, 'relay selection did not update');
+    assert(bv('relay-choice').textContent.includes('Canada') && bv('register').disabled &&
+        bv('register').textContent === 'Enabled', 'an already configured Mullvad server must show Enabled');
     bv('test-relay').click();
     await wait();
     assert(bv('relay-test').textContent.includes('12.345 ms') &&
         requests.some(x => x.action === 'testRelay' && x.data.relay === 'ca-test-wg-001'), 'per-relay ping missing');
+    assert(bv('profile-list').querySelector('button').textContent === 'Test', 'VPN button must say Test');
     bv('profile-list').querySelector('button').click();
     await wait();
     assert(bv('profile-list').querySelector('[data-test-result]').textContent.includes('45.2 ms'), 'exit HTTPS test missing');
@@ -199,27 +201,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'renameProfile' && x.data.id === 'vpn1' && x.data.name === 'Canada home') &&
         bv('profile-list').textContent.includes('Canada home') &&
         bv('profile-list').querySelector('[data-test-result]').textContent.includes('45.2 ms'), 'VPN rename lost the row or its result');
-    bv('register-form').requestSubmit(bv('register-form').querySelector('button[type=submit]'));
-    await wait();
-    assert(requests.some(x => x.action === 'register' && x.data.relay === 'ca-test-wg-001' && !Object.hasOwn(x.data, 'account')), 'registration payload failed');
-    assert(bv('account').value === '', 'successful registration retained account input');
-    bv('relay').value = 'ca-test-wg-001';
-    bv('retarget').value = 'vpn1';
-    bv('relay').dispatchEvent(new Event('change'));
-    bv('register-form').requestSubmit(bv('register-form').querySelector('button[type=submit]'));
-    await wait();
-    assert(requests.some(x => x.action === 'retargetProfile' && x.data.id === 'vpn1' &&
-      !Object.hasOwn(x.data, 'account')), 'retarget must reuse a profile without an account number');
+    assert(bv('account').value === '', 'successful sign-in retained account input');
     bv('batch-scope').value = 'jp:nrt';
     bv('batch-scope').dispatchEvent(new Event('change'));
     bv('save-batch').click();
     await wait();
     assert(bv('relay-list').value === 'jp:nrt' && bv('relay').options[1].value === 'jp-test-wg-001',
         'City batch must expose its saved relay.');
-    bv('activate-batch').click();
+    bv('browse-batch').click();
+    assert(bv('relay-list').value === 'jp:nrt' && !requests.some(x => x.action === 'register'),
+        'Browsing a batch must never register a Mullvad device.');
+    bv('relay').value = 'jp-test-wg-001';
+    bv('relay').dispatchEvent(new Event('change'));
+    assert(bv('register').textContent === 'Enable', 'available Mullvad server must show Enable');
+    bv('register-form').requestSubmit(bv('register'));
     await wait();
-    assert(requests.some(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001') &&
-        bv('batch-operation').textContent.includes('1 exit added'), 'Batch activation must use the available device slot.');
+    assert(requests.some(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001' &&
+        !Object.hasOwn(x.data, 'account')), 'registration payload failed');
+    bv('relay').value = 'jp-test-wg-001';
+    bv('retarget').value = 'vpn1';
+    bv('relay').dispatchEvent(new Event('change'));
+    bv('register-form').requestSubmit(bv('register'));
+    await wait();
+    assert(requests.some(x => x.action === 'retargetProfile' && x.data.id === 'vpn1' &&
+        !Object.hasOwn(x.data, 'account')), 'switching servers must reuse a saved tunnel');
     document.querySelector('[data-bv-section="smart"]').click();
     bv('service-preset').value = 'Netflix';
     bv('service-preset').dispatchEvent(new Event('change'));
@@ -273,11 +278,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'check' && x.method === 'POST'), 'approved catalog check did not run');
     assert(bv('proxy-list').textContent.includes('Example proxy'), 'proxy catalog not displayed');
-    [...bv('proxy-list').querySelectorAll('button')].find((item) => item.textContent === 'Test server').click();
+    [...bv('proxy-list').querySelectorAll('button')].find((item) => item.textContent === 'Test').click();
     await wait();
     assert(requests.some(x => x.action === 'testProxyNode' && x.data.id === 'proxy-1') &&
         bv('proxy-list').querySelector('[data-test-result]').textContent.includes('The proxy connection timed out.'), 'saved proxy test did not report its failure');
 
+    assert([...bv('proxy-list').querySelectorAll('button')].map(button => button.textContent).join(',') === 'Test,Edit,Enable,Remove',
+        'proxy row actions must use simple labels');
     bv('proxy-list').querySelector('[aria-label="Edit name for Example proxy"]').click();
     const proxyName = bv('proxy-list').querySelector('.bv-name-editor');
     proxyName.querySelector('input').value = 'SOCKS5 office';
@@ -299,7 +306,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('proxy-manual').requestSubmit(bv('proxy-manual').querySelector('button'));
     await wait();
     assert(requests.some(x => x.action === 'addProxyNode' && x.data.protocol === 'socks5'), 'manual proxy was not submitted');
-    [...bv('proxy-list').querySelectorAll('button')].find((item) => item.textContent === 'Enable exit').click();
+    [...bv('proxy-list').querySelectorAll('button')].find((item) => item.textContent === 'Enable').click();
     await wait();
     assert(requests.some(x => x.action === 'enableProxyExit' && x.data.id === 'proxy-1'), 'proxy was not selected individually');
     bv('proxy-body').value = 'socks5://192.0.2.9:1080';

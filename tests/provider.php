@@ -165,6 +165,24 @@ try {
     check(glob($directory . '/mullvad-registration-*.json') === [], 'Completion should remove the retry key.');
     expectFailure(fn () => $provider->register($account, 'profile-2'), '1 of 1 device slots');
 
+    $token = $provider->authenticate($account)['token'];
+    $profile = [
+        'relay' => 'ca-yyz-wg-001', 'identityKey' => $identity['publicKey'],
+        'identity' => $identity['id'], 'accountBinding' => $identity['accountBinding']
+    ];
+    check($provider->routerProfiles($token, ['legacy' => $profile])['legacy']['registered'],
+        'An upgrade must recognize the existing Mullvad device.');
+    check($provider->routerProfiles($token, ['unbound' => array_diff_key($profile, ['accountBinding' => true])])
+        ['unbound']['accountBinding'] === $identity['accountBinding'], 'Recognize older tunnels by their registered public key.');
+    $provider->rememberRouterKey($identity['accountBinding'], $identity['privateKey']);
+    $restarted = new FixtureMullvad($directory);
+    $restarted->deviceRecords = $provider->deviceRecords;
+    foreach (['ca-yyz-wg-001', 'jp-tyo-wg-001'] as $relayId) {
+        $reused = $restarted->registerRouterWithToken($token, $relayId);
+        check($reused['id'] === $identity['id'] && $reused['publicKey'] === $identity['publicKey'] &&
+            $restarted->creates === 0, 'Changing servers and reloading the package must preserve the registered identity.');
+    }
+
     $privateKey = base64_encode(str_repeat('p', 32));
     $publicKey = base64_encode(str_repeat('r', 32));
     $config = <<<WG

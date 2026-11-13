@@ -332,74 +332,88 @@ class ServiceController extends ApiControllerBase
                 $this->storeMullvadSession($user, $login);
                 $token = $login['token'];
             }
-            $existing = Policy::profiles(new BlankVpn());
-            foreach ($existing as $profile) {
-                if ($profile['relay'] === $relayId && $relayId !== '') {
-                    if (!empty($profile['accountBinding'])) {
-                        if ($token !== null) {
-                            $mullvad->verifyBindingWithToken($token, $profile['accountBinding']);
-                        } else {
-                            $mullvad->verifyBinding($account, $profile['accountBinding']);
-                        }
-                    }
-                    if (!WireGuard::check($profile)['ok']) {
-                        throw new \DomainException('The existing exit needs repair before it can be reused.');
-                    }
-                    return ['profile' => $profile['id'], 'reused' => true, 'message' => 'The existing exit was reused.'];
-                }
+            if ($token === null) {
+                $token = $mullvad->authenticate($account)['token'];
             }
-            $dnsPort = Resolver::freePort(Policy::routes(new BlankVpn()));
-            $relay = $this->relay($mullvad, $relayId);
-            WireGuard::preflight($relay['ipv4']);
-            $identity = $token !== null ? $mullvad->registerWithToken($token, $relayId) : $mullvad->register($account, $relayId);
-            $result = $this->addProfile($name, $relayId, $identity, $relay, $dnsPort);
-            try {
-                $mullvad->completeRegistration($identity['registrationReceipt']);
-            } catch (\Throwable) {
-                $result['warning'] = 'The tunnel was saved. A local registration recovery record still needs cleanup.';
-            }
-            return $result;
+            return $this->enableMullvadServer($mullvad, $token, $relayId, $name, $this->input('id', 64));
         }), true, true, true);
     }
 
     public function retargetProfileAction()
     {
-        return $this->respond(fn () => Operations::exclusive(function () {
-            $id = $this->input('id', 64);
-            $relayId = $this->input('relay', 100);
-            $relay = $this->relay(new Mullvad(), $relayId);
-            $result = Operations::change(function (BlankVpn $model) use ($id, $relayId, $relay) {
-                $profiles = Policy::profiles($model);
-                $profile = $profiles[$id] ?? null;
-                if ($profile === null || $profile['relay'] === '') {
-                    throw new \DomainException('Select a locally registered Mullvad profile to change its server.');
+        return $this->registerAction();
+    }
+
+    private function enableMullvadServer(Mullvad $mullvad, string $token, string $relayId, string $name, string $id): array
+    {
+        $model = new BlankVpn();
+        $profiles = Policy::profiles($model);
+        $owned = $mullvad->routerProfiles($token, $profiles);
+        $profile = null;
+        foreach ($profiles as $candidate) {
+            if ($relayId !== '' && $candidate['relay'] === $relayId) {
+                if (!isset($owned[$candidate['id']])) {
+                    throw new \DomainException('This server is linked to a different Mullvad account.');
                 }
-                foreach (Policy::assignments($model) as $row) {
-                    if ($row['profile'] === $id || $row['backup'] === $id) {
-                        throw new \DomainException('Move all devices off this shared exit before changing its server.');
-                    }
+                $profile = $owned[$candidate['id']];
+                break;
+            }
+        }
+        if ($id !== '') {
+            if (!isset($owned[$id])) {
+                throw new \DomainException('Choose a saved tunnel linked to the signed-in Mullvad account.');
+            }
+            if ($profile !== null && $profile['id'] !== $id) {
+                throw new \DomainException('This Mullvad server is already enabled. Use its saved tunnel.');
+            }
+            $profile = $owned[$id];
+        }
+        if ($profile === null && count($owned) > 1) {
+            throw new \DomainException('Choose which saved Mullvad tunnel to switch to this server.');
+        }
+        $profile ??= reset($owned) ?: null;
+        if ($profile !== null) {
+            if (!$profile['registered']) {
+                throw new \DomainException('Mullvad no longer lists this device registration. Remove the saved tunnel and enable a server again.');
+            }
+            $mullvad->rememberRouterKey($profile['accountBinding'], WireGuard::ownedPrivateKey($profile));
+            if ($profile['relay'] === $relayId) {
+                return ['profile' => $profile['id'], 'reused' => true, 'message' => 'This server is already enabled.'];
+            }
+            return $this->switchMullvadServer($profile, $relayId, $this->relay($mullvad, $relayId));
+        }
+        $relay = $this->relay($mullvad, $relayId);
+        $dnsPort = Resolver::freePort(Policy::routes($model));
+        WireGuard::preflight($relay['ipv4']);
+        $identity = $mullvad->registerRouterWithToken($token, $relayId);
+        return $this->addProfile($name, $relayId, $identity, $relay, $dnsPort)
+            + ['message' => 'Mullvad server enabled.'];
+    }
+
+    private function switchMullvadServer(array $profile, string $relayId, array $relay): array
+    {
+        $id = $profile['id'];
+        $result = Operations::change(function (BlankVpn $model) use ($profile, $id, $relayId, $relay) {
+            foreach (Policy::assignments($model) as $row) {
+                if ($row['profile'] === $id || $row['backup'] === $id) {
+                    throw new \DomainException('Move all devices off this tunnel before switching servers.');
                 }
-                $this->requireUnusedByRouting($model, $id);
-                foreach ($profiles as $other) {
-                    if ($other['id'] !== $id && $other['relay'] === $relayId) {
-                        throw new \DomainException('A tunnel for that relay already exists. Use that profile.');
-                    }
-                }
-                $node = $model->profiles->profile->getChild($id);
-                $ownership = WireGuard::retarget($profile, $relay);
-                unset($ownership['id'], $ownership['name'], $ownership['relay']);
-                $node->relay = $relayId;
-                if ($profile['name'] === $profile['relay']) {
-                    $node->name = $relayId;
-                }
-                $node->ownership = json_encode($ownership, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
-                $health = Firewall::health();
-                unset($health[$id]);
-                Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
-                return ['id' => $id, 'added' => $ownership, 'reload' => true];
-            });
-            return ['profile' => $result['id']];
-        }), true, true);
+            }
+            $this->requireUnusedByRouting($model, $id);
+            $node = $model->profiles->profile->getChild($id);
+            $ownership = WireGuard::retarget($profile, $relay);
+            unset($ownership['id'], $ownership['name'], $ownership['relay'], $ownership['registered']);
+            $node->relay = $relayId;
+            if ($profile['name'] === $profile['relay']) {
+                $node->name = $relayId;
+            }
+            $node->ownership = json_encode($ownership, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+            $health = Firewall::health();
+            unset($health[$id]);
+            Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
+            return ['id' => $id, 'added' => $ownership, 'reload' => true];
+        });
+        return ['profile' => $result['id'], 'message' => 'Mullvad server switched. The router kept its device registration.'];
     }
 
     private function relay(Mullvad $mullvad, string $relayId): array
@@ -532,6 +546,9 @@ class ServiceController extends ApiControllerBase
                 if (($profile['kind'] ?? '') === 'native') {
                     $model->nativeRoutes->route->del($id);
                     return ['reload' => true];
+                }
+                if ($profile['relay'] !== '' && !empty($profile['accountBinding'])) {
+                    (new Mullvad())->rememberRouterKey($profile['accountBinding'], WireGuard::ownedPrivateKey($profile));
                 }
                 WireGuard::remove($profile);
                 $model->profiles->profile->del($id);

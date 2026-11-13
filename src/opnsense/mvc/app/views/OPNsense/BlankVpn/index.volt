@@ -70,34 +70,33 @@
                     <small id="bv-relay-test" class="bv-test-result" role="status"></small>
                 </div>
                 <div class="bv-fields">
-                    <label>Exit name <input id="bv-register-name" type="text" class="form-control" maxlength="64"
+                    <label>Tunnel name <input id="bv-register-name" type="text" class="form-control" maxlength="64"
                         placeholder="Defaults to server name"></label>
-                    <label id="bv-retarget-row" hidden>Change server on an unused exit
-                        <select id="bv-retarget" class="form-control"><option value="">Create a new exit</option></select>
+                    <label id="bv-retarget-row" hidden>Tunnel to switch
+                        <select id="bv-retarget" class="form-control"><option value="">Choose automatically</option></select>
                     </label>
                 </div>
                 <div class="bv-actions">
-                    <button id="bv-register" type="submit" class="btn btn-primary" disabled>Add Mullvad exit</button>
-                    <p class="text-muted">Each new exit uses one Mullvad device slot.</p>
+                    <button id="bv-register" type="submit" class="btn btn-primary" disabled>Enable</button>
+                    <p class="text-muted">Blank VPN reuses this router’s Mullvad device registration when you switch servers.</p>
                 </div>
             </form>
             <details id="bv-mullvad-batches" class="bv-advanced" hidden>
                 <summary>Manage server batches</summary>
-                <p class="text-muted">Save a city, country, or the worldwide catalog. Activate servers in the batch using your available Mullvad device slots.</p>
+                <p class="text-muted">Save a city, country, or the worldwide catalog to browse its servers.</p>
                 <label>Batch to add or remove
                     <select id="bv-batch-scope" class="form-control" aria-describedby="bv-batch-status"></select>
                 </label>
                 <div class="bv-actions">
                     <button id="bv-save-batch" type="button" class="btn btn-primary">Add batch</button>
                     <button id="bv-remove-batch" type="button" class="btn btn-default" hidden>Remove batch</button>
-                    <button id="bv-activate-batch" type="button" class="btn btn-default" disabled>Activate available exits</button>
+                    <button id="bv-browse-batch" type="button" class="btn btn-default" disabled>Browse servers</button>
                     <p id="bv-batch-status" class="text-muted" role="status"></p>
                 </div>
-                <p id="bv-batch-operation" class="text-muted" role="status"></p>
             </details>
         </section>
-        <section class="bv-panel" aria-label="Saved VPN exits">
-            <h2>VPN exits</h2>
+        <section class="bv-panel" aria-label="Saved VPN tunnels">
+            <h2>VPN tunnels</h2>
                 <div class="bv-scroll">
                 <table class="table bv-table bv-profiles">
                     <thead>
@@ -139,7 +138,7 @@
                 </div>
                 <button type="submit" class="btn btn-default">Verify and install archive</button>
             </form>
-            <p class="text-muted">Installing or rolling back a core briefly interrupts exits that use it.</p>
+            <p class="text-muted">Installing or rolling back a core briefly interrupts tunnels that use it.</p>
         </details>
         <div class="bv-grid">
             <form id="bv-proxy-import">
@@ -211,7 +210,7 @@
                 <tbody id="bv-proxy-list"></tbody>
             </table>
         </div>
-        <p class="text-muted">Test a saved server here. Enable it as an exit to use it in a routing rule.</p>
+        <p class="text-muted">Enable a server to use it in a routing rule.</p>
     </section>
 
     <div id="bv-network-page" data-bv-panel="network" hidden>
@@ -240,7 +239,7 @@
                             <option value="disabled">Use regular internet</option>
                         </select>
                     </label>
-                    <label id="bv-network-profile-field" hidden>Exit
+                    <label id="bv-network-profile-field" hidden>Server
                         <select id="bv-network-profile" class="form-control"></select>
                     </label>
                 </div>
@@ -317,20 +316,20 @@
                     <label>IPv6 address <input id="bv-ipv6" type="text" class="form-control" autocomplete="off" spellcheck="false"></label>
                     <label>Routing mode
                         <select id="bv-mode" class="form-control">
-                            <option value="full">All traffic through one exit</option>
+                            <option value="full">All traffic through one server</option>
                             <option value="multi">Multi-Path</option>
                             <option value="disabled">Off</option>
                             <option value="blocked">Blocked</option>
                         </select>
                     </label>
-                    <label id="bv-profile-field">Exit <select id="bv-profile" class="form-control"></select></label>
-                    <label id="bv-failure-field">If the exit fails
+                    <label id="bv-profile-field">Server <select id="bv-profile" class="form-control"></select></label>
+                    <label id="bv-failure-field">If the server fails
                         <select id="bv-failure" class="form-control">
-                            <option value="backup">Use a backup exit</option>
+                            <option value="backup">Use a backup server</option>
                             <option value="wan">Use normal internet</option>
                         </select>
                     </label>
-                    <label id="bv-backup-field" hidden>Backup exit <select id="bv-backup" class="form-control"></select></label>
+                    <label id="bv-backup-field" hidden>Backup server <select id="bv-backup" class="form-control"></select></label>
                 </div>
                 <label class="bv-check" id="bv-device-kill-field">
                     <input type="checkbox" id="bv-device-kill" checked> Kill Switch
@@ -412,7 +411,7 @@
             </div>
             <p id="bv-domain-file-status" class="text-muted" role="status"></p>
             <p class="text-muted">Enter domains one per line or separated by commas. A domain includes its subdomains.
-                Save a list now and choose an exit when it’s ready.</p>
+                Save a list now and choose a server when it’s ready.</p>
             <div class="bv-actions">
                 <button id="bv-save-service" type="submit" class="btn btn-primary">Save list</button>
                 <button id="bv-cancel-service" type="button" class="btn btn-default" hidden>Cancel edit</button>
@@ -423,7 +422,7 @@
                 <thead>
                     <tr>
                         <th scope="col">Service and domains</th>
-                        <th scope="col">Exit</th>
+                        <th scope="col">Server</th>
                         <th scope="col">Routing</th>
                         <th scope="col"><span class="sr-only">Actions</span></th>
                     </tr>

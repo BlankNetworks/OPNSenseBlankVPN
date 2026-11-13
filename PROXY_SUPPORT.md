@@ -13,6 +13,8 @@ Blank VPN imports individual upstreams and can enable up to eight proxy exits. E
 
 The import panel accepts newline-separated links, base64 URI lists, Clash YAML or JSON proxy entries, and native JSON outbound objects or arrays. A provider configuration can include other application settings. The importer extracts individual proxy nodes from the document. TLS certificate verification remains enabled, and file-based credentials, privileged routing settings, and arbitrary chaining are excluded. An explicit plain HTTP or SOCKS endpoint can be used on a trusted network. Imported legacy options are shown in the catalog and remain inactive until an exit is enabled.
 
+SOCKS5 links accept `socks5://` and `socks5h://`, with optional URL-encoded credentials. Add `tls=true`, `sni=example.com`, or `udp=true` as query options when the provider offers them. Manual SOCKS5 entries accept the same options in **Advanced link parameters**. The server must support UDP ASSOCIATE to carry UDP. [Mihomo SOCKS documentation](https://wiki.metacubex.one/en/config/proxies/socks/)
+
 For paired plugins or custom protocol settings, use a compatible structured node. A format may parse successfully while a particular core build rejects its cipher, credentials, or transport.
 
 ## Source index coverage

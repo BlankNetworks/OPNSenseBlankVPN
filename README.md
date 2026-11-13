@@ -1,4 +1,4 @@
-# Blank VPN 0.8.6
+# Blank VPN 0.8.7
 
 Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Multi-Path keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
@@ -41,7 +41,7 @@ The package and SHA-256 file are written to `dist/`. To reproduce the bundled re
 3. Transfer the matching package and its SHA-256 file to the router. Run these commands one line at a time as root from the same directory. For ARM64, replace `amd64` with `aarch64`.
 
    ```sh
-   sha256sum -c os-blank-vpn-0.8.6-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.6-amd64.pkg
+   sha256sum -c os-blank-vpn-0.8.7-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.7-amd64.pkg
    pkg info os-blank-vpn
    ```
 
@@ -62,25 +62,23 @@ Open the **Tailscale** tab to see the router’s Tailscale address, its exit-nod
 
 Choose **Tailscale address** and save to use the router’s MagicDNS hostname and add it to the OPNsense WebGUI’s allowed hostnames. The dashboard also shows the direct Tailscale IP. The package detects and allows the MagicDNS hostname during an upgrade when Tailscale access was already selected. Use the WebGUI’s existing HTTPS certificate settings. The `blankvpn.local` name uses link-local Bonjour for home access. [MagicDNS](https://tailscale.com/docs/features/magicdns)
 
-## Add a Mullvad exit
+## Enable a Mullvad server
 
-1. Open the WebGUI over HTTPS and choose **VPN Login → Sign in**. Enter your account number. After sign-in, the server catalog loads automatically. Choose a country, city, and server.
-2. Choose **Add Mullvad exit**. Blank VPN checks your device slots, generates a WireGuard key pair locally, registers only the public key with Mullvad, and creates the native tunnel. The account number is cleared from the form after sign-in. Select **Save login on this router** when signing in to restore it automatically in future WebGUI sessions. The router stores the account number in a private file outside the OPNsense configuration export, scoped to your WebGUI user.
-3. Select the exit under **Network** or **Multi-Path Settings**. **Sign out and forget login** removes the saved sign-in. Saved tunnels keep running with their WireGuard keys.
+1. Open **VPN Login**, enter your Mullvad account number, and sign in. Select **Save login on this router** to restore sign-in in future WebGUI sessions. The router stores the account number in a private file scoped to your WebGUI user, outside the OPNsense configuration export.
+2. Pick a country, city, and server, then choose **Enable**. For the first tunnel on the account, Blank VPN generates a local WireGuard key and registers its public key with Mullvad.
+3. To change locations, select a new server. Blank VPN reuses the router’s registration. If you already have multiple Mullvad tunnels from an earlier release, choose which tunnel to switch. Move its device and Multi-Path assignments before switching.
 
-Each new Mullvad exit uses one Mullvad device slot. Multiple local devices can use the same exit. An interrupted registration retains a restricted recovery key. Retry with the same account and server to recover it without consuming a second device slot.
+The router retains the registration key in private storage across upgrades and tunnel removal. Existing Mullvad tunnels from earlier releases stay available. Mullvad allows up to five registered devices per account. [Mullvad device limits](https://mullvad.net/en/help/using-mullvad-vpn-app#too-many-devices)
 
-VPN Login currently offers Mullvad. Existing exits saved with earlier releases remain available for routing. If the WebGUI opens over HTTP, enable HTTPS under **System → Settings → Administration**, then reopen the dashboard over HTTPS before signing in.
+VPN Login offers Mullvad. Existing VPN tunnels saved with earlier releases remain available for routing. Use HTTPS to open the dashboard before signing in.
 
 ### Add server batches
 
-In **VPN Login**, open **Manage server batches**. Select a city, country, or **Worldwide · all servers** and click **Add batch**. Pick a saved batch under **Server list** to browse every relay in it. **Refresh servers** updates the lists. Unavailable relays stay visible.
+In **VPN Login**, open **Manage server batches** and choose a city, country, or **Worldwide · all servers**. Click **Add batch** to save the list. Use **Browse servers** or the **Server list** menu to select a server from the batch. **Refresh servers** updates the catalog. Saving a batch uses zero device slots.
 
-Click **Activate available exits** to register active servers from the selected batch, up to the available device slots, or choose a single server to activate it. Assign active exits under **Network** or **Multi-Path Settings**. Mullvad allows five registered devices per account, including devices outside Blank VPN. Saving a batch uses zero slots. Removing a batch leaves its activated exits and routing rules in place. [Mullvad device limits](https://mullvad.net/en/help/using-mullvad-vpn-app#too-many-devices)
+### Test servers
 
-### Test servers and exits
-
-Use **Ping server** beside the selected Mullvad relay to send one ICMP echo from OPNsense to its published IPv4 address. An unanswered ping can mean the relay filters ICMP. Use **Test exit** beside a configured VPN or enabled proxy to check HTTPS through that exit. Results appear on the tested row. Saved WireGuard and native VPN exits can be tested while device routing is off. Their HTTPS probe requires a verified firewall route with a fallback block. A relay ping checks ICMP before activation. The exit test verifies internet access through the configured tunnel.
+Use **Ping server** beside the selected Mullvad server to check ICMP from OPNsense. Use **Test** beside a VPN tunnel or proxy server to verify HTTPS. Results appear on the tested row. The VPN test can run with device routing off and requires a verified firewall route with a fallback block. Proxy tests try HTTPS targets in different regions. For a basic SOCKS5 server, a failed test can also report upstream TCP, SOCKS5 authentication, or TLS errors.
 
 ## Add proxy servers and subscriptions
 
@@ -88,9 +86,9 @@ The GitHub release includes Mihomo, tun2socks, Xray, sing-box, and the Clash YAM
 
 1. Open **Proxies** over HTTPS. Add a single server with **Add a proxy manually**, paste its share link with an optional server name, or import a base64 list, Clash YAML, Xray JSON, or sing-box JSON.
 2. For a provider feed, add its direct HTTPS subscription URL. The router follows public HTTPS redirects after validating each destination and reports DNS, TLS, HTTP, timeout, or format errors. The list shows reported traffic allowance, usage, and expiry when the provider sends those fields. New subscriptions enable automatic refresh every six hours. Change the setting per saved subscription. An enabled exit retains its server if a later refresh removes it.
-3. Choose **Test server** to check HTTPS through a saved proxy before enabling it. Choose **Enable exit** on a server to make it available for routing, then select the exit under **Multi-Path** or **Network**. Device assignments can use the IPv4 kill switch or a backup exit. UDP support varies with the upstream protocol and transport.
+3. Choose **Test** to check HTTPS through a saved proxy before enabling it. Choose **Enable** on a server to make it available for routing, then select the exit under **Multi-Path** or **Network**. Device assignments can use the IPv4 kill switch or a backup exit. UDP support varies with the upstream protocol and transport.
 
-Use **Edit name** beside a saved VPN exit or proxy server. Proxy names also appear in routing choices and survive subscription refreshes when the same server configuration returns.
+Use **Edit** beside a saved VPN exit or proxy server. Proxy names also appear in routing choices and survive subscription refreshes when the same server configuration returns.
 
 ## Update proxy cores
 
@@ -98,7 +96,7 @@ Open **Proxies → Core updates and storage** as an OPNsense administrator. Sele
 
 The approved [amd64](src/share/blankvpn/core-catalog.json) and [aarch64](src/share/blankvpn/core-catalog-aarch64.json) catalogs pin specific upstream or Blank Networks release assets. Change the catalog on GitHub to approve a new version independently of the plug-in. The [sing-box workflow](.github/workflows/cores.yml) can publish FreeBSD builds from a pinned upstream tag and commit. After verifying the build, add its version and asset SHA-256 to the catalog. The router fetches the catalog on demand. See [CORE_UPDATES.md](CORE_UPDATES.md) for the exact release format, offline installation and rollback.
 
-Core updates, saved Mullvad logins, the private subscription catalog, and recovery state use `/var/db/blank-vpn`. The storage panel shows available space, downloaded core size, and catalog size. Staging keeps at least 64 MiB free for settings and runtime state. The bundled cores are part of the package. OPNsense stores saved assignments and WireGuard settings in its normal configuration. Each saved Mullvad exit has a persistent WireGuard key.
+Core updates, saved Mullvad logins, the private subscription catalog, and recovery state use `/var/db/blank-vpn`. The storage panel shows available space, downloaded core size, and catalog size. Staging keeps at least 64 MiB free for settings and runtime state. The bundled cores are part of the package. OPNsense stores saved assignments and WireGuard settings in its normal configuration. The Mullvad registration key is private and persists across package upgrades.
 
 ## Choose routing coverage
 

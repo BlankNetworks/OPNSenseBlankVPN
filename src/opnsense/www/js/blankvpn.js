@@ -8,7 +8,7 @@
             return;
         }
 
-        const modes = {full: 'All traffic through one exit', multi: 'Multi-Path', disabled: 'Off', blocked: 'Blocked'};
+        const modes = {full: 'All traffic through one server', multi: 'Multi-Path', disabled: 'Off', blocked: 'Blocked'};
         const insecureWebGui = window.location.protocol === 'http:';
         const maxDomainBytes = 131072;
         const state = {
@@ -169,7 +169,7 @@
         }
 
         function nameEditor(row, name, id, action, render, onSave) {
-            const edit = button('Edit name', () => {
+            const edit = button('Edit', () => {
                 state.nameEditor = {id, action, draft: name};
                 render();
                 root.querySelector('.bv-name-editor input')?.focus();
@@ -237,7 +237,7 @@
 
         function exitChoice(profile) {
             return {value: profile.id, label: profileName(profile.id),
-                group: profile.kind === 'proxy' ? 'Proxy exits' : 'VPN exits'};
+                group: profile.kind === 'proxy' ? 'Proxy servers' : 'VPN tunnels'};
         }
 
         function showSection(section) {
@@ -313,7 +313,7 @@
             const body = byId('profile-list');
             const vpns = state.profiles.filter((profile) => profile.kind !== 'proxy');
             if (!vpns.length) {
-                empty(body, 'No VPN exits have been added.');
+                empty(body, 'No VPN tunnels have been added.');
             } else {
                 body.replaceChildren();
                 for (const profile of vpns) {
@@ -343,10 +343,10 @@
                         'Remove ' + profileName(profile.id));
                     remove.disabled = network || used > 0 || services > 0;
                     if (remove.disabled) {
-                        remove.title = 'Remove this exit from routing policies first.';
+                        remove.title = 'Remove this server from routing policies first.';
                     }
                     if (state.canManage) {
-                        appendConnectionTest(actions, 'Test exit', 'testExit', profile.id);
+                        appendConnectionTest(actions, 'testExit', profile.id, profileName(profile.id));
                         const edit = nameEditor(row, profile.name || profile.relay, profile.id, 'renameProfile',
                             renderProfiles, (name) => { profile.name = name; });
                         if (edit) {
@@ -434,9 +434,9 @@
             const savedExit = state.settingsDirty ? select.value : (state.settings?.networkProfile || '');
             const choices = routableExits().map(exitChoice);
             if (savedExit && !choices.some((choice) => choice.value === savedExit)) {
-                choices.push({value: savedExit, label: 'Unavailable exit'});
+                choices.push({value: savedExit, label: 'Unavailable server'});
             }
-            options(select, choices, 'Choose an exit', savedExit);
+            options(select, choices, 'Choose a server', savedExit);
             const settings = state.settings;
             const enabled = settings?.enabled === true;
             const save = byId('save-routing');
@@ -480,10 +480,10 @@
             const summary = {
                 full: exit.value
                     ? 'All selected interfaces use ' + profileName(exit.value) + '.'
-                        + (killSwitch ? ' Internet is blocked if the exit goes offline.' : '')
-                    : 'Add a VPN or proxy exit, then select it here.',
+                        + (killSwitch ? ' Internet is blocked if the server goes offline.' : '')
+                    : 'Add a VPN or proxy server, then select it here.',
                 multi: 'The selected interfaces use your domain lists. '
-                    + (killSwitch ? 'All internet is blocked if a list’s exit goes offline or no list has an exit.'
+                    + (killSwitch ? 'All internet is blocked if a list’s server goes offline or no list has a server.'
                         : 'Other traffic uses regular internet.'),
                 blocked: 'Internet is blocked on the selected LANs and VLANs.',
                 disabled: 'Devices use your normal OPNsense routing.'
@@ -556,7 +556,7 @@
             const active = state.settings?.enabled && interfaces.length && state.services.some((service) => service.profile);
             byId('smart-status').textContent = active
                 ? 'Routing matched DNS traffic on ' + interfaces.map(networkName).join(', ') + '.'
-                : 'Saved lists start routing after you choose an exit and enable Multi-Path.';
+                : 'Saved lists start routing after you choose a server and enable Multi-Path.';
             byId('use-lan').hidden = !state.availableInterfaces.some((item) => item.id === 'lan')
                 || interfaces.includes('lan') || list(state.settings?.strictInterfaces).includes('lan');
             const body = byId('service-list');
@@ -593,7 +593,7 @@
             const select = byId('service-profile');
             const choices = routableExits().map(exitChoice);
             if (select.value && !choices.some((choice) => choice.value === select.value)) {
-                choices.push({value: select.value, label: 'Unavailable exit'});
+                choices.push({value: select.value, label: 'Unavailable server'});
             }
             options(select, choices, 'Leave unassigned');
             options(byId('service-preset'), Object.keys(state.presets).map((name) => ({value: name, label: name})),
@@ -607,7 +607,7 @@
             byId('service-name').value = service?.name || '';
             const exit = byId('service-profile');
             if (service?.profile && ![...exit.options].some((option) => option.value === service.profile)) {
-                exit.add(new Option('Unavailable exit', service.profile));
+                exit.add(new Option('Unavailable server', service.profile));
             }
             exit.value = service?.profile || '';
             byId('service-domains').value = list(service?.domains).join('\n');
@@ -654,7 +654,7 @@
                 const actions = row.insertCell();
                 if (core.update) {
                     actions.append(button('Install', (event) => {
-                        if (window.confirm('Install ' + core.id + ' ' + core.available.version + '? Its proxy exits will briefly restart.')) {
+                        if (window.confirm('Install ' + core.id + ' ' + core.available.version + '? Its proxy tunnels will briefly restart.')) {
                             void mutate(event.currentTarget, () => coreApi('install', {
                                 core: core.id, digest: core.available.sha256
                             }), 'Core updated.', renderCores);
@@ -663,7 +663,7 @@
                 }
                 if (core.rollback) {
                     actions.append(button('Roll back', (event) => {
-                        if (window.confirm('Roll back ' + core.id + '? Its proxy exits will briefly restart.')) {
+                        if (window.confirm('Roll back ' + core.id + '? Its proxy tunnels will briefly restart.')) {
                             void mutate(event.currentTarget, () => coreApi('rollback', {core: core.id}),
                                 'Core rolled back.', renderCores);
                         }
@@ -690,8 +690,8 @@
         function renderProxyCatalog() {
             const missing = ['mihomo', 'tun2socks'].filter((core) => state.proxyCores[core] !== true);
             byId('proxy-cores').textContent = missing.length
-                ? 'Install ' + missing.join(' and ') + ' to enable proxy exits. You can import and inspect servers now.'
-                : 'Proxy transport ready. Xray and sing-box exits require their corresponding core.';
+                ? 'Install ' + missing.join(' and ') + ' to enable proxy tunnels. You can import and inspect servers now.'
+                : 'Proxy transport ready. Xray and sing-box servers require their corresponding core.';
             const subscriptions = byId('subscription-list');
             subscriptions.replaceChildren();
             if (!state.proxyFeeds.length) {
@@ -719,7 +719,7 @@
                         auto ? 'Automatic refresh enabled.' : 'Automatic refresh paused.', () => void refreshProxyCatalog());
                 }));
                 actions.append(button('Remove', (event) => {
-                    if (window.confirm('Remove this proxy subscription? Any enabled exit keeps its current server.')) {
+                    if (window.confirm('Remove this proxy subscription? Any enabled server keeps its current settings.')) {
                         void mutate(event.currentTarget, () => api('removeSubscription', {id: feed.id}),
                             'Subscription removed.', () => void refreshProxyCatalog());
                     }
@@ -745,29 +745,35 @@
                 const exit = state.profiles.find((profile) => profile.node === node.id);
                 cell(row, node.core, '', exit?.status || '');
                 const actions = row.insertCell();
-                appendConnectionTest(actions, exit ? 'Test exit' : 'Test server',
-                    exit ? 'testExit' : 'testProxyNode', exit?.id || node.id, node.id);
+                appendConnectionTest(actions, exit ? 'testExit' : 'testProxyNode', exit?.id || node.id, node.name, node.id);
                 const edit = nameEditor(row, node.name, node.id, 'renameProxyNode',
                     renderProxyCatalog, (name) => { node.name = name; });
                 if (edit) {
                     actions.append(edit);
                 }
-                if (exit) {
-                    const disable = button('Remove exit', (event) => removeProfile(exit, event.currentTarget));
-                    disable.disabled = state.assignments.some((item) => [item.profile, item.backup].includes(exit.id))
-                        || state.services.some((item) => item.profile === exit.id);
-                    actions.append(disable);
-                }
-                const enable = button(exit ? 'Exit enabled' : 'Enable exit', (event) =>
-                    void mutate(event.currentTarget, () => api('enableProxyExit', {id: node.id}), 'Proxy exit enabled.'));
-                enable.disabled = Boolean(exit) || missing.length > 0 || state.proxyCores[node.core] !== true;
-                if (!exit && enable.disabled) {
-                    enable.title = 'Install the required proxy cores first.';
+                const enable = exit
+                    ? button('Disable', (event) => void mutate(event.currentTarget,
+                        () => api('removeProfile', {id: exit.id}), 'Proxy disabled.'), 'Disable ' + node.name)
+                    : button('Enable', (event) => void mutate(event.currentTarget,
+                        () => api('enableProxyExit', {id: node.id}), 'Proxy enabled.'), 'Enable ' + node.name);
+                const assigned = exit && (state.settings?.networkProfile === exit.id
+                    || state.assignments.some((item) => [item.profile, item.backup].includes(exit.id))
+                    || state.services.some((item) => item.profile === exit.id));
+                enable.disabled = exit ? assigned : missing.length > 0 || state.proxyCores[node.core] !== true;
+                if (enable.disabled) {
+                    enable.title = exit ? 'Remove this server from routing policies first.' : 'Install the required proxy cores first.';
                 }
                 actions.append(enable);
-                const remove = button('Remove', (event) => void mutate(event.currentTarget,
-                    () => api('removeProxyNode', {id: node.id}), 'Server removed.', () => void refreshProxyCatalog()));
+                const remove = button('Remove', (event) => {
+                    if (window.confirm('Remove “' + node.name + '” from the proxy list?')) {
+                        void mutate(event.currentTarget, () => api('removeProxyNode', {id: node.id}),
+                            'Server removed.', () => void refreshProxyCatalog());
+                    }
+                }, 'Remove ' + node.name);
                 remove.disabled = Boolean(exit);
+                if (exit) {
+                    remove.title = 'Disable this server before removing it.';
+                }
                 actions.append(remove);
             }
         }
@@ -823,7 +829,7 @@
                     state.mullvadLoginSaved = saved;
                     if (state.mullvadSignedIn && !signedIn) {
                         byId('account-status').textContent = saved ? 'Reconnecting saved Mullvad login…'
-                            : 'Mullvad sign-in expired. Sign in again to add exits.';
+                            : 'Mullvad sign-in expired. Sign in again to enable servers.';
                     }
                     setMullvadSignedIn(signedIn);
                     if (signedIn && !byId('account-status').textContent) {
@@ -887,7 +893,7 @@
             const showBackup = primary && !killSwitch && failover.value === 'backup';
             byId('backup-field').hidden = !showBackup;
             byId('backup').required = Boolean(showBackup);
-            options(byId('backup'), state.profiles.filter((profile) => profile.id !== primary).map(exitChoice), 'Choose a backup exit');
+            options(byId('backup'), state.profiles.filter((profile) => profile.id !== primary).map(exitChoice), 'Choose a backup server');
             const profile = state.profiles.find((item) => item.id === primary);
             byId('profile').setCustomValidity(primary && !profile ? 'Choose an available route.' : '');
             const interfaceId = byId('interface').value.trim();
@@ -897,15 +903,15 @@
             }
             if (mode === 'multi') {
                 notes.push(list(state.settings?.smartInterfaces).includes(interfaceId)
-                    ? 'Matched services use their assigned exits. Other traffic uses normal internet.'
+                    ? 'Matched services use their assigned servers. Other traffic uses normal internet.'
                     : 'In Network → More routing options, select Use Multi-Path domain lists for this interface.');
             }
             if (mode === 'blocked') {
                 notes.push('Internet is blocked for the assigned addresses. Approved local access follows your firewall rules.');
             }
             if (killSwitch) {
-                notes.push(full ? 'Internet is blocked if this exit goes offline.'
-                    : 'All internet is blocked if a list’s exit goes offline or no list has an exit.');
+                notes.push(full ? 'Internet is blocked if this server goes offline.'
+                    : 'All internet is blocked if a list’s server goes offline or no list has a server.');
             }
             if (mode === 'full' || mode === 'blocked' || killSwitch) {
                 const strict = list(state.settings?.strictInterfaces).includes(interfaceId);
@@ -950,7 +956,7 @@
             if (selected && !choices.some((choice) => choice.value === selected)) {
                 choices.push({value: selected, label: 'Unavailable VPN profile'});
             }
-            options(byId('profile'), choices, 'Choose an exit', selected);
+            options(byId('profile'), choices, 'Choose a server', selected);
             byId('failure').value = assignment?.failure === 'backup' ? 'backup' : 'wan';
             byId('device-kill').checked = ['full', 'multi'].includes(assignment?.mode)
                 ? (assignment.killSwitch ?? assignment.failure === 'block') : true;
@@ -995,10 +1001,10 @@
         }
 
         function removeProfile(profile, control) {
-            if (!window.confirm('Remove exit “' + profileName(profile.id) + '” from this router?')) {
+            if (!window.confirm('Remove “' + profileName(profile.id) + '” from this router?')) {
                 return;
             }
-            void mutate(control, () => api('removeProfile', {id: profile.id}), 'Exit removed.');
+            void mutate(control, () => api('removeProfile', {id: profile.id}), 'Tunnel removed.');
         }
 
         function relayCity(relay) {
@@ -1051,7 +1057,7 @@
             byId('save-batch').disabled = !state.mullvadSignedIn || count === 0;
             byId('remove-batch').hidden = !saved;
             byId('remove-batch').disabled = !state.mullvadSignedIn;
-            byId('activate-batch').disabled = !state.mullvadSignedIn || !count || state.busy;
+            byId('browse-batch').disabled = !saved || !count;
             byId('batch-status').textContent = scope ? count + ' server' + (count === 1 ? '' : 's')
                 + (saved ? ' · Saved' : '') : '';
         }
@@ -1077,58 +1083,13 @@
             renderBatchChoice();
         }
 
-        async function activateMullvadBatch(control) {
-            const scope = byId('batch-scope').value;
-            const status = byId('batch-operation');
-            if (!scope || state.busy || !state.mullvadSignedIn) {
-                return;
-            }
-            state.busy = true;
-            renderBatchChoice();
-            status.textContent = 'Checking Mullvad device slots…';
-            try {
-                const account = await api('mullvadAccountStatus');
-                renderMullvadAccount(account);
-                const existing = new Set(state.profiles.map((profile) => profile.relay));
-                const candidates = state.relays.filter((relay) => relay.active && batchIncludes(relay, scope) && !existing.has(relay.id));
-                const batch = candidates.slice(0, account.canAddDevices ? account.availableSlots : 0);
-                if (!batch.length) {
-                    status.textContent = candidates.length ? 'Mullvad has no available device slots.'
-                        : 'All available servers in this batch already have exits.';
-                    return;
-                }
-                if (!window.confirm('Activate ' + batch.length + ' of ' + candidates.length
-                    + ' available servers in this batch? Each new exit uses a Mullvad device slot.')) {
-                    status.textContent = '';
-                    return;
-                }
-                let completed = 0;
-                for (const relay of batch) {
-                    status.textContent = 'Adding ' + relay.id + ' (' + (completed + 1) + ' of ' + batch.length + ')…';
-                    try {
-                        await api('register', {relay: relay.id});
-                        completed++;
-                    } catch (error) {
-                        status.textContent = completed + ' added. ' + relay.id + ' · ' + errorMessage(error, 'Registration failed.');
-                        break;
-                    }
-                }
-                if (completed === batch.length) {
-                    status.textContent = completed + (completed === 1 ? ' exit added.' : ' exits added.') +
-                        (candidates.length > completed ? ' Remaining servers are available in the catalog.' : '');
-                }
-                await refreshDashboard();
-                const current = await api('mullvadAccountStatus').catch(() => null);
-                if (current) {
-                    renderMullvadAccount(current);
-                }
-            } catch (error) {
-                status.textContent = errorMessage(error, 'The batch could not be activated.');
-            } finally {
-                state.busy = false;
-                control.disabled = false;
-                renderBatchChoice();
-            }
+        function browseMullvadBatch() {
+            byId('relay-list').value = byId('batch-scope').value;
+            byId('country').value = '';
+            byId('city').value = '';
+            byId('relay').value = '';
+            renderRelays();
+            byId('relay').focus();
         }
 
         function renderRelays() {
@@ -1140,7 +1101,7 @@
             ]);
             const reusable = state.profiles.filter((profile) => profile.relay && !assigned.has(profile.id));
             byId('retarget-row').hidden = reusable.length === 0;
-            options(retarget, reusable.map(exitChoice), 'Create a new exit');
+            options(retarget, reusable.map(exitChoice), 'Choose automatically');
             renderMullvadBatches();
             const batch = byId('relay-list').value;
             const relays = state.relays.filter((relay) => batchIncludes(relay, batch));
@@ -1180,7 +1141,9 @@
             byId('relay-test').dataset.result = result?.kind || '';
             const register = byId('register');
             register.disabled = !relay || !state.mullvadSignedIn;
-            register.textContent = byId('retarget').value ? 'Change server' : 'Add Mullvad exit';
+            const enabled = relay && state.profiles.some((profile) => profile.relay === relay.id);
+            register.textContent = enabled ? 'Enabled' : byId('retarget').value ? 'Switch server' : 'Enable';
+            register.disabled ||= Boolean(enabled);
             byId('test-relay').disabled = !relay || !state.mullvadSignedIn || state.testingRelay;
         }
 
@@ -1203,12 +1166,12 @@
             }
         }
 
-        function appendConnectionTest(actions, label, action, id, nodeId = '') {
+        function appendConnectionTest(actions, action, id, name, nodeId = '') {
             const key = nodeId ? 'proxy:' + nodeId : 'exit:' + id;
             const status = document.createElement('small');
             status.className = 'bv-test-result';
             status.setAttribute('role', 'status');
-            const control = button(label, () => void testConnection(action, id, key, Boolean(nodeId)));
+            const control = button('Test', () => void testConnection(action, id, key, Boolean(nodeId)), 'Test ' + name);
             control.dataset.testKey = key;
             control.dataset.proxyTest = String(Boolean(nodeId));
             status.dataset.testResult = key;
@@ -1245,7 +1208,7 @@
                     ? {kind: 'pass', text: 'HTTPS passed · ' + result.milliseconds + ' ms'}
                     : {kind: 'fail', text: result.detail || 'The HTTPS test did not complete.'});
             } catch (error) {
-                state.tests.set(key, {kind: 'fail', text: errorMessage(error, 'The exit test could not be completed.')});
+                state.tests.set(key, {kind: 'fail', text: errorMessage(error, 'The connection test could not be completed.')});
             } finally {
                 if (proxy) {
                     state.proxyTestRunning = false;
@@ -1548,7 +1511,7 @@
         byId('batch-scope').addEventListener('change', renderBatchChoice);
         byId('save-batch').addEventListener('click', (event) => void saveMullvadBatch(event.currentTarget, 'add'));
         byId('remove-batch').addEventListener('click', (event) => void saveMullvadBatch(event.currentTarget, 'remove'));
-        byId('activate-batch').addEventListener('click', (event) => void activateMullvadBatch(event.currentTarget));
+        byId('browse-batch').addEventListener('click', browseMullvadBatch);
         byId('country').addEventListener('change', renderRelays);
         byId('city').addEventListener('change', renderRelays);
         byId('relay').addEventListener('change', renderRelayChoice);
@@ -1578,8 +1541,11 @@
             const reused = byId('retarget').value;
             void mutate(event.submitter, () => reused
                 ? api('retargetProfile', {id: reused, relay: payload.relay})
-                : api('register', payload), reused ? 'Mullvad exit moved to ' + payload.relay + '.'
-                : 'Mullvad exit added for ' + payload.relay + '.', () => {
+                : api('register', payload), reused ? 'Switched to ' + payload.relay + '.'
+                : 'Enabled ' + payload.relay + '.', (result) => {
+                if (result.profile) {
+                    state.tests.delete('exit:' + result.profile);
+                }
                 byId('register-name').value = '';
                 byId('retarget').value = '';
                 byId('relay').value = '';
@@ -1624,7 +1590,7 @@
                 domains: byId('service-domains').value.trim()
             };
             const message = payload.profile ? 'Domain list saved with ' + profileName(payload.profile) + '.'
-                : 'Domain list saved. Choose an exit when ready.';
+                : 'Domain list saved. Choose a server when ready.';
             void mutate(event.submitter, () => api('saveService', payload), message, () => editService());
         });
         byId('service-file').addEventListener('change', async (event) => {
@@ -1686,9 +1652,11 @@
             byId('manual-secret').required = !basic && !byId('manual-secret-field').hidden;
             byId('manual-cipher-field').hidden = protocol !== 'ss';
             byId('manual-cipher').required = protocol === 'ss';
-            byId('manual-params-field').hidden = basic;
-            byId('manual-note').hidden = protocol !== 'vless';
-            byId('manual-note').textContent = 'For REALITY, include security=reality, sni, pbk (public key), sid (short ID), and fp (fingerprint) in the link parameters, joined by &.';
+            byId('manual-params-field').hidden = protocol === 'http' || protocol === 'https';
+            byId('manual-note').hidden = protocol !== 'vless' && protocol !== 'socks5';
+            byId('manual-note').textContent = protocol === 'socks5'
+                ? 'For a provider that offers TLS or UDP, use tls=true, sni=hostname, or udp=true. Join multiple options with &.'
+                : 'For REALITY, include security=reality, sni, pbk (public key), sid (short ID), and fp (fingerprint) in the link parameters, joined by &.';
         }
 
         byId('manual-protocol').addEventListener('change', manualFields);
@@ -1728,7 +1696,7 @@
                 notice('Choose an approved archive smaller than 100 MiB.', 'danger');
                 return;
             }
-            if (!window.confirm('Verify and install this archive? Its proxy exits will briefly restart.')) {
+            if (!window.confirm('Verify and install this archive? Its proxy tunnels will briefly restart.')) {
                 return;
             }
             const data = new FormData();

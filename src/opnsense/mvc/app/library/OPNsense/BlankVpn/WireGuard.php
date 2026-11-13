@@ -172,6 +172,12 @@ final class WireGuard
         ];
     }
 
+    public static function ownedPrivateKey(array $profile): string
+    {
+        [$servers] = self::ownedObjects($profile);
+        return (string)$servers->getNodeByReference('servers.server.' . self::instanceId($profile))->privkey;
+    }
+
     /** Change a peer in place after the caller verifies no device uses this profile. */
     public static function retarget(array $profile, array $relay): array
     {
