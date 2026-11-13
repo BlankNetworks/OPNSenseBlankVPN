@@ -30,7 +30,6 @@ class ServiceController extends ApiControllerBase
             $settings = Policy::settings($model);
             $routing = Policy::effectiveRouting($model);
             $settings['dashboardAddresses'] = Resolver::dashboardAddresses();
-            $settings['dashboardMagicDns'] = $settings['dashboardAddresses']['tailnet'] !== '' ? Resolver::magicDnsName() : '';
             $settings['tailscaleInstalled'] = is_executable('/usr/local/bin/tailscale');
             $settings['tailscaleExitAdvertised'] =
                 (string)(Config::getInstance()->object()->OPNsense->tailscale->settings->advertiseExitNode ?? '') === '1';
@@ -47,7 +46,8 @@ class ServiceController extends ApiControllerBase
             $discovery['devices'] = array_values(array_filter($discovery['devices'],
                 static fn (array $device): bool => in_array($device['interface'], $lanInterfaces, true)));
             $tailnet = $settings['tailscaleInstalled'] ? $diagnostics->tailnetStatus() : [];
-            $settings['tailscaleNativeReady'] = $diagnostics->nativeTailnetReady($tailnet);
+            $settings['dashboardMagicDns'] = Resolver::magicDnsFromStatus($tailnet);
+            $settings['tailscaleSetup'] = $diagnostics->nativeTailnetSetup($tailnet);
             $discovery['tailnetDevices'] = Diagnostics::tailnetPeers($tailnet);
             $runtime = $profiles === [] ? [] : WireGuard::runtimeRecords();
             $health = Firewall::health();
@@ -122,7 +122,7 @@ class ServiceController extends ApiControllerBase
                     'device' => $row['interface'] . '/' . (($row['kind'] ?? '') === 'tailnet' ? $row['ip'] : $row['mac']),
                     'verified' => false,
                     'killSwitchActive' => $guard && $rule === null && $row['killSwitch'],
-                    'appliedRoute' => $row['interface'] === Policy::TAILSCALE_DEVICE && !$settings['tailscaleNativeReady']
+                    'appliedRoute' => $row['interface'] === Policy::TAILSCALE_DEVICE && !$settings['tailscaleSetup']['ready']
                         ? 'Exit node setup needed' : ($loaded === null ? 'Firewall status unavailable' : $applied)
                 ];
             }
@@ -167,7 +167,6 @@ class ServiceController extends ApiControllerBase
                     $acl->isPageAccessible($username, '/api/blankvpn/core/status'),
                 'mullvadSignedIn' => $this->mullvadToken() !== null,
                 'mullvadLoginSaved' => $mullvadUser !== null && (new Mullvad())->hasSavedAccount($mullvadUser),
-                'mullvadBatches' => Mullvad::savedBatches(Policy::fields($model->mullvadCatalog)),
                 'assignments' => array_values($assignments),
                 'settings' => $settings,
                 'activeSmartInterfaces' => $routing['smartInterfaces'],
@@ -198,30 +197,6 @@ class ServiceController extends ApiControllerBase
     public function refreshRelaysAction()
     {
         return $this->respond(fn () => (new Mullvad())->relays(true), true, true);
-    }
-
-    public function saveMullvadBatchAction()
-    {
-        return $this->respond(fn () => Operations::exclusive(function () {
-            $country = strtolower($this->input('country', 2));
-            $city = strtolower($this->input('city', 24));
-            $action = $this->input('action', 6);
-            if (!in_array($action, ['add', 'remove'], true)) {
-                throw new \DomainException('Choose whether to add or remove the Mullvad batch.');
-            }
-            $model = new BlankVpn();
-            $before = Mullvad::savedBatches(Policy::fields($model->mullvadCatalog));
-            $after = (new Mullvad())->updateBatch($before, $country, $action === 'add', $city);
-            if ($after !== $before) {
-                Operations::change(function (BlankVpn $model) use ($after) {
-                    $model->mullvadCatalog->worldwide = $after['worldwide'] ? '1' : '0';
-                    $model->mullvadCatalog->countries = implode(',', $after['countries']);
-                    $model->mullvadCatalog->cities = implode(',', $after['cities']);
-                    return [];
-                });
-            }
-            return ['batches' => $after];
-        }), true, true, true);
     }
 
     public function testRelayAction()
@@ -894,20 +869,24 @@ class ServiceController extends ApiControllerBase
             ) {
                 throw new \DomainException('Choose a valid reserved IPv4 device, interface and routing policy.');
             }
-            if ($kind === 'tailnet' && (!Policy::tailnetAddress($ip) || !Policy::tailnetAddress($ipv6, true))) {
-                throw new \DomainException('Enter both the Tailscale IPv4 and IPv6 addresses for this peer.');
+            if ($kind === 'tailnet' && (!Policy::tailnetAddress($ip) ||
+                (!$nativeTailnet && !Policy::tailnetAddress($ipv6, true)))) {
+                throw new \DomainException($nativeTailnet ? 'Enter the iPad or other device’s Tailscale IPv4 address.'
+                    : 'Enter both the Tailscale IPv4 and IPv6 addresses for this peer.');
             }
             if ($nativeTailnet) {
                 $diagnostics = new Diagnostics();
                 $status = $diagnostics->tailnetStatus();
-                if (!$diagnostics->nativeTailnetReady($status)) {
-                    throw new \DomainException('Enable Advertise Exit Node and Disable SNAT in OPNsense Tailscale settings, then refresh.');
+                $setup = $diagnostics->nativeTailnetSetup($status);
+                if (!$setup['ready']) {
+                    throw new \DomainException($setup['reason']);
                 }
-                $matches = array_filter(Diagnostics::tailnetPeers($status), static fn (array $peer): bool =>
-                    $peer['ipv4'] === $ip && in_array($ipv6, $peer['ipv6'], true));
-                if ($matches === []) {
-                    throw new \DomainException('Refresh the device list and choose a peer on this tailnet.');
+                $peer = $diagnostics->tailnetPeer($ip, $status);
+                if ($peer === null) {
+                    throw new \DomainException('OPNsense could not verify this Tailscale peer and both addresses. Open Tailscale on the device, confirm its IPv4 address, and try again.');
                 }
+                $ipv6 = $peer['ipv6'][0];
+                $label = $label !== '' ? $label : ($peer['name'] ?? '');
             }
             $provider = '';
             if ($kind === 'lan') {

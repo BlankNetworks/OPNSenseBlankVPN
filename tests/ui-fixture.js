@@ -10,7 +10,6 @@ const reply = {
         services: [],
         canManageCores: true,
         mullvadSignedIn: false,
-        mullvadBatches: {worldwide:false,countries:[],cities:[]},
         proxyCores: {mihomo:true,tun2socks:true,xray:true,"sing-box":true},
         servicePresets: {Netflix:['netflix.com','nflxvideo.net']},
         settings: {dashboardBind:'lan',dashboardAddresses:{lan:'10.0.0.1',tailnet:'100.101.102.103'},dashboardMagicDns:'opnsense.tailnet.ts.net',enabled:false, interfaces:['lan','opt2'], availableInterfaces:[{id:'opt1', name:'VLAN 2', device:'vlan02'},
@@ -53,21 +52,6 @@ window.jQuery.ajax = async (request) => {
     if (action === 'logoutMullvad') {
         reply.dashboard.mullvadSignedIn = false;
         reply.dashboard.mullvadLoginSaved = false;
-    }
-    if (action === 'saveMullvadBatch') {
-        const batches = reply.dashboard.mullvadBatches;
-        const add = data.action === 'add';
-        if (data.country === '') {
-            batches.worldwide = add;
-        } else if (data.city) {
-            const key = data.country + ':' + data.city;
-            batches.cities = add ? [...new Set([...batches.cities, key])] : batches.cities.filter((city) => city !== key);
-        } else if (add && !batches.countries.includes(data.country)) {
-            batches.countries.push(data.country);
-        } else if (!add) {
-            batches.countries = batches.countries.filter((country) => country !== data.country);
-        }
-        return structuredClone({ok:true, batches});
     }
     if (action === 'renameProfile') {
         reply.dashboard.profiles.find(x => x.id === data.id).name = data.name;
@@ -173,49 +157,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'restoreMullvad' && !Object.hasOwn(x.data, 'account')) &&
         !bv('register-form').hidden, 'saved login did not restore the server picker');
     assert(bv('relay').options.length === 4 && bv('relay').options[2].disabled, 'server availability not enforced');
-    bv('mullvad-batches').open = true;
-    bv('batch-scope').value = 'ca';
-    bv('batch-scope').dispatchEvent(new Event('change'));
-    assert(bv('batch-status').textContent === '2 servers' && !bv('save-batch').disabled, 'country count was incorrect');
-    bv('save-batch').click();
-    await wait();
-    assert(requests.some(x => x.action === 'saveMullvadBatch' && x.data.country === 'ca' && x.data.action === 'add') &&
-        bv('relay-list').value === 'ca' && bv('relay').options.length === 3 && bv('relay').options[2].disabled,
-        'saved country batch should select all relays for that country, including unavailable ones');
-    assert(bv('profile-list').textContent.includes('ca-test-wg-002') &&
-        bv('profile-list').querySelector('[aria-label="Use ca-test-wg-002"]').disabled &&
-        bv('profile-list').querySelector('[aria-label="Test ca-test-wg-002"]').disabled &&
-        bv('profile-list').rows.length === 2,
-        'Adding a batch must list relays in VPN tunnels, deduplicate configured relays and mark unavailable relays.');
-    bv('batch-scope').value = 'all';
-    bv('batch-scope').dispatchEvent(new Event('change'));
-    bv('save-batch').click();
-    await wait();
-    assert(requests.some(x => x.action === 'saveMullvadBatch' && x.data.country === '' && x.data.action === 'add') &&
-        bv('relay-list').value === 'all' && bv('relay').options.length === 4 &&
-        bv('profile-list').rows.length === 3 &&
-        !requests.some(x => x.action === 'register'), 'adding the worldwide batch lists every relay without activating a tunnel');
-    bv('profile-list').querySelector('[aria-label="Test jp-test-wg-001"]').click();
-    await wait();
-    assert(bv('profile-list').querySelector('[data-test-result="relay:jp-test-wg-001"]').textContent.includes('12.345 ms') &&
-        requests.some(x => x.action === 'testRelay' && x.data.relay === 'jp-test-wg-001'),
-        'Batch servers must support a per-row test before tunnel activation.');
-    bv('tunnel-search').value = 'Japan';
-    bv('tunnel-search').dispatchEvent(new Event('input'));
-    assert(bv('profile-list').rows.length === 1 && bv('profile-list').textContent.includes('jp-test-wg-001'),
-        'VPN tunnel search must filter the batch by location.');
-    bv('tunnel-search').value = '';
-    bv('tunnel-search').dispatchEvent(new Event('input'));
-    bv('relay-list').value = 'ca';
-    bv('relay-list').dispatchEvent(new Event('change'));
-    bv('remove-batch').click();
-    await wait();
-    assert(requests.some(x => x.action === 'saveMullvadBatch' && x.data.country === '' && x.data.action === 'remove') &&
-        bv('relay-list').value === 'ca' && bv('relay-list').options.length === 2 &&
-        !bv('profile-list').textContent.includes('jp-test-wg-001'), 'removing worldwide leaves only the saved country batch');
-    bv('refresh').click();
-    await wait();
-    assert(bv('relay-list').value === 'ca' && bv('relay').options.length === 3, 'saved batch was lost on dashboard refresh');
+    assert(!bv('mullvad-batches') && !bv('relay-list') && bv('profile-list').rows.length === 1,
+        'Mullvad must list configured tunnels and offer individual server selection.');
+    bv('country').value = 'Canada';
+    bv('country').dispatchEvent(new Event('change'));
+    assert(bv('relay').options.length === 3 && bv('relay').options[2].disabled,
+        'The country filter must keep the individual server picker usable.');
     bv('relay').value = 'ca-test-wg-001';
     bv('relay').dispatchEvent(new Event('change'));
     assert(bv('relay-choice').textContent.includes('Canada') && bv('register').disabled &&
@@ -244,15 +191,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(!reply.dashboard.profiles[0].disabled, 'The existing Mullvad tunnel must be re-enabled.');
     assert(bv('account').value === '', 'successful sign-in retained account input');
-    bv('batch-scope').value = 'jp:nrt';
-    bv('batch-scope').dispatchEvent(new Event('change'));
-    bv('save-batch').click();
-    await wait();
-    assert(bv('relay-list').value === 'jp:nrt' && bv('relay').options[1].value === 'jp-test-wg-001',
-        'City batch must expose its saved relay.');
-    bv('browse-batch').click();
-    assert(bv('relay-list').value === 'jp:nrt' && !requests.some(x => x.action === 'register'),
-        'Browsing a batch must never register a Mullvad device.');
+    bv('country').value = 'Japan';
+    bv('country').dispatchEvent(new Event('change'));
     bv('relay').value = 'jp-test-wg-001';
     bv('relay').dispatchEvent(new Event('change'));
     assert(bv('register').textContent === 'Use server' && !bv('retarget'), 'Mullvad should offer automatic tunnel selection');
@@ -260,11 +200,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001' &&
         !Object.hasOwn(x.data, 'account')), 'registration payload failed');
-    const uses = requests.filter(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001').length;
-    bv('profile-list').querySelector('[aria-label="Use jp-test-wg-001"]').click();
-    await wait();
-    assert(requests.filter(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001').length === uses + 1,
-        'Use must select the listed relay through the normal registration action.');
     document.querySelector('[data-bv-section="smart"]').click();
     bv('service-preset').value = 'Netflix';
     bv('service-preset').dispatchEvent(new Event('change'));
@@ -433,20 +368,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'assign' && x.data.ip === '10.0.0.30' &&
         x.data.reserveIp && x.data.profile === 'proxy-proxy-1' && x.data.killSwitch), 'New proxies must be ready to assign without a separate enable action.');
     assert(bv('tailnet-devices').tagName === 'DETAILS' && !bv('tailnet-devices').open &&
-        bv('tailnet-count').textContent.includes('1 online'), 'Tailscale list must be collapsible.');
+        bv('tailnet-count').textContent.includes('1 online') &&
+        getComputedStyle(bv('tailnet-devices').querySelector('.bv-disclosure-link')).textDecorationLine === 'underline',
+        'Tailscale device list must be collapsible with an underlined label.');
     bv('tailnet-devices').open = true;
     bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
     assert(bv('ip').value === '100.101.102.104' && bv('ipv6').value === 'fd7a:115c:a1e0::104' &&
         bv('interface').value === 'opt2' && bv('device-kind').value === 'tailnet', 'Existing gateway link rules must remain available.');
     bv('close-assignment').click();
     reply.dashboard.settings.tailscaleInterfaces = [];
+    reply.dashboard.settings.tailscaleSetup = {ready:false, disableSnat:true, reason:'Apply Tailscale settings from the LAN.'};
     bv('refresh').click();
     await wait();
     bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
     assert(bv('assignment-interface-field').hidden && bv('save-device').disabled &&
-        bv('identity').textContent.includes('OPNsense exit node setup'), 'Unconfigured exit node must give an actionable message.');
+        bv('route-note').textContent.includes('Apply Tailscale settings'), 'Unconfigured exit node must give an actionable message.');
     bv('close-assignment').click();
-    reply.dashboard.settings.tailscaleNativeReady = true;
+    reply.dashboard.settings.tailscaleSetup = {ready:true, disableSnat:true, reason:''};
     bv('refresh').click();
     await wait();
     bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
@@ -459,6 +397,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'assign' && x.data.kind === 'tailnet' && x.data.interface === 'tailscale0' &&
         x.data.ip === '100.101.102.104' && x.data.profile === 'vpn1' && !Object.hasOwn(x.data, 'switchNow')),
         'Selecting a native exit peer must submit both the interface and the chosen VPN server.');
+    reply.dashboard.tailnetDevices = [];
+    bv('refresh').click();
+    await wait();
+    assert(!bv('add-tailnet-peer').hidden && bv('native-snat-status').classList.contains('bv-setting-checked'),
+        'A missing peer needs a manual IP fallback and a checked SNAT indicator.');
+    bv('add-tailnet-peer').click();
+    bv('ip').value = '100.101.102.104';
+    bv('profile').value = 'vpn1';
+    assert(bv('ipv6-field').hidden && !bv('ipv6').required && bv('assign-form').checkValidity(),
+        'Manual native lookup only needs the Tailscale IPv4 address.');
+    bv('assign-form').requestSubmit(bv('save-device'));
+    await wait();
+    assert(requests.some(x => x.action === 'assign' && x.data.kind === 'tailnet' &&
+        x.data.ip === '100.101.102.104' && x.data.ipv6 === '' && x.data.profile === 'vpn1'),
+        'A missing peer must be looked up by IPv4 when saving the chosen server.');
     bv('coverage').value = 'network';
     bv('network-mode').value = 'full';
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
@@ -500,8 +453,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         !bv('save-routing').classList.contains('bv-enabled') && bv('network-kill').checked,
         'Disabling VPN did not preserve the saved kill switch and clear the green state.');
     document.querySelector('[data-bv-section="vpns"]').click();
-    bv('relay-list').value = '';
-    bv('relay-list').dispatchEvent(new Event('change'));
+    bv('country').value = '';
+    bv('country').dispatchEvent(new Event('change'));
     bv('refresh-relays').click();
     await wait();
     assert(bv('relay').options[1].value === 'ca-test-wg-003', 'cached relay lost after refresh error');

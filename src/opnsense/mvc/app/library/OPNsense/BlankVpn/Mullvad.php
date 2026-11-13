@@ -68,42 +68,6 @@ class Mullvad
         }
     }
 
-    public static function savedBatches(array $fields): array
-    {
-        return [
-            'worldwide' => ($fields['worldwide'] ?? '') === '1',
-            'countries' => array_values(array_unique(preg_grep('/^[a-z]{2}$/D', explode(',', $fields['countries'] ?? '')))),
-            'cities' => array_values(array_unique(preg_grep('/^[a-z]{2}:[a-z0-9-]{1,24}$/D', explode(',', $fields['cities'] ?? ''))))
-        ];
-    }
-
-    public function updateBatch(array $batches, string $country, bool $add, string $city = ''): array
-    {
-        if (($country !== '' && !preg_match('/^[a-z]{2}$/D', $country)) ||
-            ($city !== '' && ($country === '' || !preg_match('/^[a-z0-9-]{1,24}$/D', $city)))) {
-            throw new \DomainException('Choose a valid Mullvad country and city.');
-        }
-        $scope = $city === '' ? $country : $country . ':' . $city;
-        $field = $city === '' ? 'countries' : 'cities';
-        $saved = $scope === '' ? $batches['worldwide'] : in_array($scope, $batches[$field], true);
-        if ($saved === $add) {
-            return $batches;
-        }
-        if ($add && array_filter($this->relays()['relays'], static fn (array $relay): bool =>
-            ($country === '' || $relay['countryCode'] === $country) &&
-            ($city === '' || $relay['cityCode'] === $city)) === []) {
-            throw new \DomainException('No Mullvad servers are in this selection. Refresh the catalog and try again.');
-        }
-        if ($scope === '') {
-            $batches['worldwide'] = $add;
-        } else {
-            $values = $add ? [...$batches[$field], $scope] : array_diff($batches[$field], [$scope]);
-            sort($values, SORT_STRING);
-            $batches[$field] = $values;
-        }
-        return $batches;
-    }
-
     public function account(string $account): array
     {
         return $this->authenticate($account)['account'];

@@ -60,9 +60,6 @@
                 </div>
                 <p id="bv-relay-status" class="text-muted" aria-live="polite"></p>
                 <div class="bv-fields">
-                    <label>Server list <select id="bv-relay-list" class="form-control"></select></label>
-                </div>
-                <div class="bv-fields">
                     <label>Country <select id="bv-country" class="form-control"><option value="">All countries</option></select></label>
                     <label>City <select id="bv-city" class="form-control"><option value="">All cities</option></select></label>
                     <label>Server <select id="bv-relay" class="form-control" required><option value="">Select a server</option></select></label>
@@ -81,27 +78,10 @@
                     <p class="text-muted">Blank VPN reuses this router’s Mullvad device registration when you switch servers.</p>
                 </div>
             </form>
-            <details id="bv-mullvad-batches" class="bv-advanced" hidden>
-                <summary>Manage server batches</summary>
-                <p class="text-muted">Add every server in a city, country, or worldwide batch to VPN tunnels.</p>
-                <label>Batch to add or remove
-                    <select id="bv-batch-scope" class="form-control" aria-describedby="bv-batch-status"></select>
-                </label>
-                <div class="bv-actions">
-                    <button id="bv-save-batch" type="button" class="btn btn-primary">Add to VPN</button>
-                    <button id="bv-remove-batch" type="button" class="btn btn-default" hidden>Remove batch</button>
-                    <button id="bv-browse-batch" type="button" class="btn btn-default" disabled>View in VPN tunnels</button>
-                    <p id="bv-batch-status" class="text-muted" role="status"></p>
-                </div>
-            </details>
         </section>
         <section class="bv-panel" aria-label="Saved VPN tunnels">
-            <h2 id="bv-vpn-tunnels-title" tabindex="-1">VPN tunnels</h2>
-            <label id="bv-tunnel-search-field" hidden>Find a VPN server
-                <input id="bv-tunnel-search" class="form-control" type="search" autocomplete="off">
-            </label>
-            <p id="bv-batch-servers-note" class="text-muted" hidden>Test checks reachability from the router. Use activates a server for routing.</p>
-            <div class="bv-scroll bv-vpn-table">
+            <h2>VPN tunnels</h2>
+            <div class="bv-scroll">
                 <table class="table bv-table bv-profiles">
                     <thead>
                         <tr>
@@ -307,8 +287,9 @@
                 </table>
             </div>
             <details id="bv-tailnet-devices" class="bv-advanced">
-                <summary>Tailscale devices <span id="bv-tailnet-count" class="text-muted"></span></summary>
+                <summary><span class="bv-disclosure-link">Tailscale devices</span> <span id="bv-tailnet-count" class="text-muted"></span></summary>
                 <p id="bv-tailnet-routing-hint" class="text-muted"></p>
+                <button type="button" id="bv-add-tailnet-peer" class="btn btn-default" data-manage-only hidden>Add by Tailscale IP</button>
                 <div class="bv-scroll">
                     <table class="table bv-table bv-devices" role="table">
                         <thead><tr><th scope="col">Device</th><th scope="col">Addresses</th><th scope="col">Availability</th>
@@ -338,7 +319,7 @@
                         <select id="bv-interface" class="form-control" required></select>
                     </label>
                     <label id="bv-mac-field">MAC address <input id="bv-mac" type="text" class="form-control" autocomplete="off" spellcheck="false" required></label>
-                    <label>IPv6 address <input id="bv-ipv6" type="text" class="form-control" autocomplete="off" spellcheck="false"></label>
+                    <label id="bv-ipv6-field">IPv6 address <input id="bv-ipv6" type="text" class="form-control" autocomplete="off" spellcheck="false"></label>
                     <label>Routing mode
                         <select id="bv-mode" class="form-control">
                             <option value="full">All traffic through one server</option>
@@ -461,6 +442,7 @@
                 </details>
                 <section class="bv-advanced" aria-labelledby="bv-tailnet-routing-title">
                     <h3 id="bv-tailnet-routing-title">Route Tailscale devices through Blank VPN</h3>
+                    <p id="bv-native-snat-status" hidden></p>
                     <p id="bv-native-tailnet-status" role="status"></p>
                     <p>In OPNsense Tailscale settings, enable <strong>Advertise Exit Node</strong> and the advanced <strong>Disable SNAT</strong> option. Apply from a local connection because Tailscale will restart. Approve the exit node in Tailscale, then select OPNsense as the exit node on each device.</p>
                     <details class="bv-advanced" id="bv-tailnet-routing">

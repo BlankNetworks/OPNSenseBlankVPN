@@ -85,10 +85,6 @@ The router retains the registration key in private storage across upgrades and t
 
 VPN Login offers Mullvad. Existing VPN tunnels saved with earlier releases remain available for routing. Use HTTPS to open the dashboard before signing in.
 
-### Add server batches
-
-In **VPN Login**, open **Manage server batches** and choose a city, country, or **Worldwide · all servers**. Click **Add to VPN**. Every server in the batch appears under **VPN tunnels**, where you can search by hostname or location and click **Test** for an ICMP reachability check from the router. Click **Use** to activate the chosen server for routing. An active tunnel's **Test** runs HTTPS through the tunnel. Saved batches share the catalog and use zero additional Mullvad device slots.
-
 ### Test servers
 
 Use **Ping server** beside the selected Mullvad server to check ICMP from OPNsense. Use **Test** beside a VPN tunnel or proxy server to verify HTTPS. Results appear on the tested row. The VPN test can run with device routing off and requires a verified firewall route with a fallback block. Proxy tests try HTTPS targets in different regions. For a basic SOCKS5 server, a failed test can also report upstream TCP, SOCKS5 authentication, or TLS errors.
@@ -134,7 +130,7 @@ You can run multiple provider exits together, with up to 32 VPN profiles and eig
 
 From the LAN or console, open **VPN → Tailscale → Settings**. Use Tailscale 1.104.2 or newer. Enable **Advertise Exit Node** and the advanced **Disable SNAT** setting, then apply. OPNsense uses that setting to pass decrypted traffic into the FreeBSD kernel on `tailscale0` with the peer's original address. Applying the change restarts Tailscale. Approve OPNsense as an exit node in Tailscale admin and select it as the exit node on the client. [OPNsense Tailscale configuration](https://github.com/opnsense/plugins/blob/26.7.9/security/tailscale/src/opnsense/service/templates/OPNsense/Tailscale/rc.conf.d) · [Tailscale exit node setup](https://tailscale.com/docs/features/exit-nodes/how-to/setup)
 
-In Blank VPN open **Tailscale Settings** to check readiness. Then open **Network Settings → Only Devices I choose**, save and enable routing, expand **Tailscale devices**, and select the peer. Blank VPN fills both addresses and automatically uses the OPNsense Tailscale interface. For an existing gateway on Ethernet or VLAN, select its link under **Tailscale Settings → Use a separate Tailscale gateway**. Access to the dashboard still follows the OPNsense firewall and Tailscale grants.
+In Blank VPN open **Tailscale Settings** to check readiness. Then open **Network Settings → Only Devices I choose**, save and enable routing, expand **Tailscale devices**, and select the peer. Blank VPN automatically uses the OPNsense Tailscale interface. If the peer is missing from the list, choose **Add by Tailscale IP** and enter its IPv4 address from the Tailscale app. OPNsense verifies both addresses when you save. A green **Disable SNAT checked** label confirms the saved checkbox. The readiness message confirms whether the running daemon can forward through the kernel interface. For an existing gateway on Ethernet or VLAN, select its link under **Tailscale Settings → Use a separate Tailscale gateway**. Access to the dashboard still follows the OPNsense firewall and Tailscale grants.
 
 Test the public IPv4 from the peer, verify local management access, then test with the VPN disconnected and Kill Switch on. The routed mode supports IPv4 VPN egress and blocks public IPv6 for a protected one-server rule. Multi-Path learning requires DNS queries visible to the OPNsense packet filter. Tailscale can forward DNS internally through its exit-node resolver, so confirm DNS classification on the client before relying on it. [Tailscale DNS preferences](https://tailscale.com/docs/features/client/manage-preferences)
 

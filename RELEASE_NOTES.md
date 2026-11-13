@@ -1,4 +1,3 @@
-- Added per-peer routing through the OPNsense Tailscale exit node in kernel mode. Blank VPN selects `tailscale0` automatically.
-- Made the Network Settings Tailscale device list collapsible.
-- Removed the Reconnect checkbox. Active device rule changes already reset the affected states.
-- Added Mullvad batches directly to VPN tunnels with search and per-server tests.
+- Tailscale setup shows the saved Disable SNAT state and explains what is blocking per-device routing.
+- The underlined Tailscale device list includes an option to look up a missing peer by its Tailscale IPv4 address.
+- Mullvad uses individual server selection. Previously configured tunnels stay available.

@@ -154,36 +154,95 @@ final class Diagnostics
 
     public function tailnetStatus(): array
     {
-        $output = Resolver::command(['/usr/bin/timeout', '2', '/usr/local/bin/tailscale', 'status', '--json'], false);
+        $output = Resolver::command(['/bin/timeout', '3', '/usr/local/bin/tailscale', 'status', '--json', '--peers=true'], false);
         $status = json_decode($output, true);
         return is_array($status) ? $status : [];
     }
 
-    public function nativeTailnetReady(array $status): bool
+    public function nativeTailnetSetup(array $status): array
     {
-        if (!Policy::nativeTailnetConfigured() || ($status['BackendState'] ?? '') !== 'Running' ||
-            ($status['TUN'] ?? false) !== true ||
-            !preg_match('/^([0-9]+\.[0-9]+\.[0-9]+)(?:[+-][^\s]+)?$/D', $status['Version'] ?? '', $match) ||
-            version_compare($match[1], '1.104.2', '<')) {
+        $settings = $this->config->OPNsense->tailscale->settings ?? null;
+        $disableSnat = (string)($settings->disableSNAT ?? '') === '1';
+        $reason = $status === [] ? 'Blank VPN could not read Tailscale status. Check the Tailscale service in OPNsense, then refresh.'
+            : 'Connect OPNsense to Tailscale.';
+        if (($status['BackendState'] ?? '') === 'Running') {
+            if (!preg_match('/^([0-9]+\.[0-9]+\.[0-9]+)(?:[+-][^\s]+)?$/D', $status['Version'] ?? '', $match) ||
+                version_compare($match[1], '1.104.2', '<')) {
+                $reason = 'Update the OPNsense Tailscale package to 1.104.2 or newer.';
+            } elseif ((string)($settings->enabled ?? '') !== '1' ||
+                (string)($settings->advertiseExitNode ?? '') !== '1') {
+                $reason = 'Enable Advertise Exit Node in OPNsense Tailscale settings and apply.';
+            } elseif (!$disableSnat) {
+                $reason = 'Check Disable SNAT in OPNsense Tailscale advanced settings and apply from the LAN.';
+            } else {
+                $reason = $this->nativeTailnetInterfaceReady($status)
+                    ? '' : 'The Tailscale kernel interface is not ready. Apply Tailscale settings from the LAN, then refresh.';
+            }
+        }
+        return ['ready' => $reason === '', 'disableSnat' => $disableSnat, 'reason' => $reason];
+    }
+
+    private function nativeTailnetInterfaceReady(array $status): bool
+    {
+        if (($status['TUN'] ?? false) !== true) {
             return false;
         }
-        $pid = trim(Resolver::command(['/usr/bin/pgrep', '-x', 'tailscaled'], false));
+        $pid = trim((string)@file_get_contents('/var/run/tailscaled.pid'));
+        if (!ctype_digit($pid) || (int)$pid < 2) {
+            $pid = trim(Resolver::command(['/bin/pgrep', '-x', 'tailscaled'], false));
+        }
         if (!ctype_digit($pid) || (int)$pid < 2) {
             return false;
         }
-        $process = Resolver::command(['/bin/ps', '-eww', '-p', $pid, '-o', 'command='], false);
-        if (!preg_match('/(?:^|\s)TS_DEBUG_NETSTACK_SUBNETS=(?:0|false)(?:\s|$)/D', $process)) {
+        $environment = Resolver::command(['/usr/bin/procstat', '-e', $pid], false);
+        if (!preg_match('/^[ \t]*' . $pid . '[ \t]+tailscaled[ \t]+(?:[^\r\n]*[ \t])?TS_DEBUG_NETSTACK_SUBNETS=(?:0|false)(?:\s|$)/m', $environment)) {
             return false;
         }
-        $addresses = $this->read('interface list ifconfig')[Policy::TAILSCALE_DEVICE]['ipv4'] ?? [];
-        $own = $status['TailscaleIPs'] ?? [];
-        foreach ($addresses as $row) {
-            $ip = $row['ipaddr'] ?? '';
-            if (Policy::tailnetAddress($ip) && in_array($ip, $own, true)) {
+        $interface = (net_get_interfaces() ?: [])[Policy::TAILSCALE_DEVICE] ?? [];
+        foreach ($interface['unicast'] ?? [] as $entry) {
+            $address = $entry['address'] ?? '';
+            if (!empty($interface['up']) && Policy::tailnetAddress($address) &&
+                in_array($address, $status['TailscaleIPs'] ?? [], true)) {
                 return true;
             }
         }
         return false;
+    }
+
+    public function tailnetPeer(string $ip, array $status): ?array
+    {
+        if (!Policy::tailnetAddress($ip) || ($status['BackendState'] ?? '') !== 'Running' ||
+            in_array($ip, $status['TailscaleIPs'] ?? [], true)) {
+            return null;
+        }
+        foreach (self::tailnetPeers($status) as $peer) {
+            if ($peer['ipv4'] === $ip && $peer['ipv6'] !== []) {
+                return $peer;
+            }
+        }
+        $output = Resolver::command(['/bin/timeout', '3', '/usr/local/bin/tailscale', 'whois', '--json', $ip], false);
+        $response = json_decode($output, true);
+        $node = $response['Node'] ?? null;
+        return is_array($node) ? self::tailnetPeerFromWhois($ip, $node) : null;
+    }
+
+    public static function tailnetPeerFromWhois(string $ip, array $node): ?array
+    {
+        $addresses = [];
+        foreach (is_array($node['Addresses'] ?? null) ? $node['Addresses'] : [] as $prefix) {
+            if (is_string($prefix) && preg_match('~^(.+)/(32|128)$~D', $prefix, $match) &&
+                Policy::tailnetAddress($match[1], $match[2] === '128')) {
+                $addresses[] = self::ip($match[1]);
+            }
+        }
+        if (!Policy::tailnetAddress($ip) || !in_array($ip, $addresses, true)) {
+            return null;
+        }
+        $peers = self::tailnetPeers(['BackendState' => 'Running', 'Peer' => [[
+            'DNSName' => $node['Name'] ?? '', 'TailscaleIPs' => $addresses
+        ]]]);
+        $peer = $peers[0] ?? null;
+        return $peer !== null && $peer['ipv4'] === $ip && $peer['ipv6'] !== [] ? $peer : null;
     }
 
     public static function tailnetPeers(array $status): array
@@ -193,11 +252,12 @@ final class Diagnostics
         }
         $peers = [];
         foreach (array_slice($status['Peer'], 0, self::DEVICE_LIMIT) as $peer) {
-            if (!is_array($peer) || !is_array($peer['TailscaleIPs'] ?? null)) {
+            if (!is_array($peer)) {
                 continue;
             }
+            $ips = is_array($peer['TailscaleIPs'] ?? null) ? $peer['TailscaleIPs'] : [];
             $addresses = array_values(array_filter(array_map(
-                static fn ($ip) => is_string($ip) ? self::ip($ip) : null, $peer['TailscaleIPs']
+                static fn ($ip) => is_string($ip) ? self::ip($ip) : null, $ips
             )));
             $v4 = current(array_filter($addresses, static fn ($ip) => Policy::tailnetAddress($ip))) ?: '';
             $v6 = current(array_filter($addresses, static fn ($ip) => Policy::tailnetAddress($ip, true))) ?: '';

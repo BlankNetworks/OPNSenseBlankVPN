@@ -54,6 +54,26 @@ namespace {
     check(count($peers) === 2 && $peers[0]['ipv4'] === '100.100.1.2' && $peers[0]['ipv6'] === ['fd7a:115c:a1e0::2'] &&
         $peers[1]['name'] === 'laptop', 'Display only known peers and their actual Tailscale addresses.');
 
+    $node = ['Name' => 'travel-ipad.example.ts.net.', 'Addresses' => [
+        '100.100.1.4/32', 'fd7a:115c:a1e0::4/128', '100.100.0.0/16'
+    ]];
+    $manualPeer = Diagnostics::tailnetPeerFromWhois('100.100.1.4', $node);
+    check($manualPeer !== null && $manualPeer['name'] === 'travel-ipad' &&
+        $manualPeer['ipv6'] === ['fd7a:115c:a1e0::4'] &&
+        Diagnostics::tailnetPeerFromWhois('100.100.1.5', $node) === null,
+        'Only verify the requested Tailscale address and its matching peer.');
+    $tailnetConfig = new SimpleXMLElement('<opnsense><OPNsense><tailscale><settings><enabled>1</enabled>'
+        . '<advertiseExitNode>1</advertiseExitNode><disableSNAT>0</disableSNAT></settings></tailscale></OPNsense></opnsense>');
+    $tailnetDiagnostics = new Diagnostics(new Backend([]), $tailnetConfig);
+    $status = ['BackendState' => 'Running', 'Version' => '1.104.5', 'TUN' => false];
+    $unchecked = $tailnetDiagnostics->nativeTailnetSetup($status);
+    check(!$unchecked['ready'] && !$unchecked['disableSnat'] && str_contains($unchecked['reason'], 'Check Disable SNAT'),
+        'The setup message must identify the unchecked SNAT option.');
+    $tailnetConfig->OPNsense->tailscale->settings->disableSNAT = '1';
+    $checked = $tailnetDiagnostics->nativeTailnetSetup($status);
+    check(!$checked['ready'] && $checked['disableSnat'] && str_contains($checked['reason'], 'kernel interface'),
+        'Saved SNAT setting must be separate from the live kernel status.');
+
     $config = new SimpleXMLElement(<<<'XML'
         <opnsense>
           <interfaces>

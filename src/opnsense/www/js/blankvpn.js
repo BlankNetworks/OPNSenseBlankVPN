@@ -29,7 +29,6 @@
             editingService: null,
             domainRead: 0,
             relays: [],
-            mullvadBatches: {worldwide: false, countries: [], cities: []},
             tests: new Map(),
             proxyTestRunning: false,
             nameEditor: null,
@@ -294,7 +293,7 @@
             byId('device-guide').hidden = wholeNetwork;
             const managed = list(state.settings?.interfaces);
             const transit = list(state.settings?.tailscaleInterfaces);
-            const nativeTailnet = state.settings?.tailscaleNativeReady === true;
+            const nativeTailnet = state.settings?.tailscaleSetup?.ready === true;
             const seen = new Set();
             const rows = [];
             for (const device of [...state.devices, ...state.tailnetDevices]) {
@@ -305,7 +304,7 @@
                 if (assignment) {
                     seen.add(assignment.id);
                 }
-                if (!wholeNetwork || assignment) {
+                if (!wholeNetwork || assignment || tailnet) {
                     rows.push({device, assignment});
                 }
             }
@@ -325,7 +324,7 @@
                 const routableV6 = ipv6.filter(address => !address.toLowerCase().startsWith('fe80:'));
                 const interfaceId = assignment?.interface || device?.interface ||
                     (tailnet && nativeTailnet ? 'tailscale0' : (tailnet && transit.length === 1 ? transit[0] : ''));
-                const reserved = tailnet ? Boolean(ip && ipv6.length) : device?.stable === true;
+                const reserved = tailnet ? Boolean(ip && (nativeTailnet || ipv6.length)) : device?.stable === true;
                 const reserveIp = !tailnet && !reserved && Boolean(device?.leaseProvider);
                 const canUseInterface = tailnet ? nativeTailnet || transit.length > 0 : managed.includes(interfaceId);
                 const blocked = assignment?.killSwitchActive === true;
@@ -364,15 +363,19 @@
             if (!body.rows.length) {
                 empty(body, wholeNetwork ? 'No saved LAN rules.' : 'No active LAN devices found. Press Refresh.', 6);
             }
-            byId('tailnet-devices').hidden = wholeNetwork || (!state.settings?.tailscaleInstalled && tailnetBody.rows.length === 0);
+            byId('tailnet-devices').hidden = !state.settings?.tailscaleInstalled && tailnetBody.rows.length === 0;
+            byId('add-tailnet-peer').hidden = wholeNetwork || !nativeTailnet;
             if (!tailnetBody.rows.length) {
-                empty(tailnetBody, 'No Tailscale peers found.', 6);
+                empty(tailnetBody, nativeTailnet && !wholeNetwork
+                    ? 'No Tailscale peers listed. Add a device by its Tailscale IP.'
+                    : 'No Tailscale peers listed.', 6);
             }
             const online = state.tailnetDevices.filter(device => device.online).length;
             byId('tailnet-count').textContent = state.tailnetDevices.length ? ' · ' + online + ' online' : '';
-            byId('tailnet-routing-hint').textContent = nativeTailnet ? 'Uses the OPNsense exit node.'
-                : transit.length ? 'Uses the configured gateway link.'
-                    : 'Enable Advertise Exit Node and Disable SNAT in OPNsense Tailscale settings, then refresh.';
+            byId('tailnet-routing-hint').textContent = wholeNetwork
+                ? 'Choose Only Devices I choose to assign a Tailscale device.'
+                : nativeTailnet ? 'Uses the OPNsense exit node.' : transit.length ? 'Uses the configured gateway link.'
+                    : state.settings?.tailscaleSetup?.reason || 'Check Tailscale Settings for exit node setup.';
             const count = wholeNetwork ? 0 : state.devices.length + state.tailnetDevices.length;
             const counts = [];
             if (!wholeNetwork) {
@@ -385,24 +388,11 @@
         function renderProfiles() {
             const body = byId('profile-list');
             const vpns = state.profiles.filter((profile) => profile.kind !== 'proxy');
-            const saved = savedBatchScopes();
-            const configured = new Set(vpns.map(profile => profile.relay).filter(Boolean));
-            const batch = saved.length ? state.relays.filter(relay =>
-                !configured.has(relay.id) && saved.some(scope => batchIncludes(relay, scope))) : [];
-            const search = byId('tunnel-search');
-            byId('tunnel-search-field').hidden = !saved.length;
-            byId('batch-servers-note').hidden = !saved.length;
-            const query = saved.length ? search.value.trim().toLowerCase() : '';
-            const matches = (...fields) => !query || fields.filter(Boolean).join(' ').toLowerCase().includes(query);
-            const tunnels = vpns.filter(profile => matches(profile.name, profile.relay, profile.interface));
-            const relays = batch.filter(relay => matches(relay.id, relay.hostname, relay.city, relay.country));
-            if (!tunnels.length && !relays.length) {
-                empty(body, query ? 'No servers match your search.'
-                    : saved.length ? (state.catalogLoaded ? 'No saved Mullvad servers are in the current catalog.'
-                        : 'Loading saved Mullvad servers…') : 'No VPN tunnels have been added.', 6);
+            if (!vpns.length) {
+                empty(body, 'No VPN tunnels have been added.');
             } else {
                 body.replaceChildren();
-                for (const profile of tunnels) {
+                for (const profile of vpns) {
                     const row = body.insertRow();
                     const used = state.assignments.filter((assignment) =>
                         [assignment.profile, assignment.backup].includes(profile.id)).length;
@@ -448,24 +438,6 @@
                         }
                         actions.append(remove);
                     }
-                }
-            }
-
-            for (const relay of relays) {
-                const row = body.insertRow();
-                const name = relay.hostname || relay.id;
-                cell(row, name);
-                cell(row, [relay.city, relay.country].filter(Boolean).join(', '));
-                cell(row, '—');
-                cell(row, '—');
-                cell(row, relay.active === false ? 'Unavailable' : 'Ready to activate');
-                const actions = row.insertCell();
-                if (state.canManage) {
-                    appendConnectionTest(actions, 'testRelay', relay.id, name, '', relay.active === false);
-                    const use = button('Use', (event) => void mutate(event.currentTarget,
-                        () => api('register', {relay: relay.id}), 'Enabled ' + name + '.'), 'Use ' + name);
-                    use.disabled = !state.mullvadSignedIn || relay.active === false;
-                    actions.append(use);
                 }
             }
 
@@ -633,9 +605,13 @@
             byId('native-tailscale').hidden = !settings.tailscaleInstalled;
             const selected = list(settings.tailscaleInterfaces);
             byId('add-tailnet-device').hidden = settings.coverage === 'network' || selected.length === 0;
-            byId('native-tailnet-status').textContent = settings.tailscaleNativeReady
+            byId('native-tailnet-status').textContent = settings.tailscaleSetup?.ready
                 ? 'Ready. Select a peer under Network Settings → Tailscale devices.'
-                : 'Setup needed. Update Tailscale to 1.104.2 or newer and apply the settings below.';
+                : settings.tailscaleSetup?.reason || '';
+            const snat = byId('native-snat-status');
+            snat.textContent = settings.tailscaleSetup?.disableSnat ? '✓ Disable SNAT checked' : 'Disable SNAT unchecked';
+            snat.classList.toggle('bv-setting-checked', settings.tailscaleSetup?.disableSnat === true);
+            snat.hidden = !settings.tailscaleInstalled;
             if (!state.tailscaleDirty) {
                 byId('hostname').value = settings.hostname || 'blankvpn.home.arpa';
                 byId('dashboard-bind').value = settings.dashboardBind || 'lan';
@@ -955,9 +931,6 @@
             try {
                 const data = await api('dashboard');
                 state.profiles = array(data.profiles);
-                if (data.mullvadBatches) {
-                    state.mullvadBatches = data.mullvadBatches;
-                }
                 state.assignments = array(data.assignments);
                 state.devices = array(data.devices);
                 state.tailnetDevices = array(data.tailnetDevices);
@@ -1003,8 +976,6 @@
                 renderProfiles();
                 if (state.catalogLoaded) {
                     renderRelays();
-                } else if (savedBatchScopes().length && state.canManage) {
-                    void loadRelays();
                 }
                 renderServices();
                 renderProxyCatalog();
@@ -1036,10 +1007,11 @@
                 list(state.settings?.tailscaleInterfaces).length === 0);
             byId('assignment-interface-field').hidden = automatic;
             interfaceField.required = !automatic;
-            byId('save-device').disabled = automatic && !state.settings?.tailscaleNativeReady;
+            byId('save-device').disabled = automatic && !state.settings?.tailscaleSetup?.ready;
             byId('mac-field').hidden = tailnet;
             byId('mac').required = !tailnet;
-            byId('ipv6').required = tailnet;
+            byId('ipv6-field').hidden = automatic;
+            byId('ipv6').required = tailnet && !automatic;
             byId('profile-field').hidden = !full;
             byId('profile').required = full;
             const kill = byId('device-kill');
@@ -1057,7 +1029,9 @@
             const interfaceId = byId('interface').value.trim();
             const notes = [];
             if (tailnet) {
-                notes.push(automatic ? 'Traffic uses this rule when the device selects OPNsense as its exit node.'
+                notes.push(automatic ? (state.settings?.tailscaleSetup?.ready
+                    ? 'Traffic uses this rule when the device selects OPNsense as its exit node.'
+                    : state.settings?.tailscaleSetup?.reason || 'Check Tailscale Settings for exit node setup.')
                     : 'Use the peer addresses seen on the configured gateway link.');
             }
             if (mode === 'multi') {
@@ -1075,7 +1049,7 @@
             }
             if (mode === 'full' || mode === 'blocked' || killSwitch) {
                 const strict = list(state.settings?.strictInterfaces).includes(interfaceId);
-                if (!strict && !byId('ipv6').value.trim()) {
+                if (!automatic && !strict && !byId('ipv6').value.trim()) {
                     notes.push('Enter a stable IPv6 address to cover it too.');
                 }
             }
@@ -1089,14 +1063,14 @@
             const choices = availablePorts().filter((port) => managed.includes(port.id)
                 && (peer ? tailnet.includes(port.id) : !tailnet.includes(port.id)))
                 .map((port) => ({value: port.id, label: networkName(port.id)}));
-            if (peer && (state.settings?.tailscaleNativeReady || previous === 'tailscale0')) {
+            if (peer && (state.settings?.tailscaleSetup?.ready || previous === 'tailscale0')) {
                 choices.unshift({value: 'tailscale0', label: networkName('tailscale0')});
             }
             if (state.editing && previous && !choices.some((choice) => choice.value === previous)) {
                 choices.push({value: previous, label: networkName(previous)});
             }
             options(byId('interface'), choices, choices.length ? 'Choose an interface' : 'Enable an interface first',
-                previous || (peer && state.settings?.tailscaleNativeReady ? 'tailscale0'
+                previous || (peer && state.settings?.tailscaleSetup?.ready ? 'tailscale0'
                     : (choices.length === 1 ? choices[0].value : '')));
         }
 
@@ -1133,15 +1107,15 @@
                 ? (assignment.killSwitch ?? assignment.failure === 'block') : true;
             updateFailure();
             byId('backup').value = assignment?.backup || '';
-            byId('identity').textContent = discovered && !discovered.canUseInterface
-                ? (kind === 'tailnet' ? 'Finish OPNsense exit node setup in Tailscale Settings, then refresh.'
-                    : 'Select this interface under Routing coverage and save, then refresh.')
+            byId('identity').textContent = discovered && !discovered.canUseInterface && kind !== 'tailnet'
+                ? 'Select this interface under Routing coverage and save, then refresh.'
                 : state.reserveIp ? 'Save this device’s current address as a DHCP reservation and apply the rule.'
                 : discovered && !discovered.reserved
                     ? (kind === 'tailnet' ? 'This peer needs both Tailscale addresses.'
                         : 'Create a DHCP reservation for this address and MAC in OPNsense, then refresh.')
-                    : discovered ? '' : byId('device-kind').value === 'tailnet' ? ''
-                    : 'Use the device’s reserved DHCP address and MAC.';
+                    : discovered ? '' : byId('device-kind').value === 'tailnet'
+                        ? 'Use the device’s IPv4 address from the Tailscale app. OPNsense verifies the peer when you save.'
+                        : 'Use the device’s reserved DHCP address and MAC.';
             byId('remove-assignment').hidden = !assignment;
             byId('assignment-title').focus();
         }
@@ -1188,92 +1162,8 @@
             return relay.country + ' / ' + relay.city;
         }
 
-        function batchIncludes(relay, scope) {
-            const [country, city] = scope.split(':');
-            return !country || country === 'all' || (relay.countryCode === country && (!city || relay.cityCode === city));
-        }
-
-        function savedBatchScopes() {
-            const {worldwide, countries, cities = []} = state.mullvadBatches;
-            return [...(worldwide ? ['all'] : []), ...countries, ...cities];
-        }
-
-        function renderMullvadBatches() {
-            const saved = savedBatchScopes();
-            const labels = new Map([['all', 'Worldwide · all servers']]);
-            const counts = new Map();
-            for (const relay of state.relays) {
-                if (!relay.countryCode) {
-                    continue;
-                }
-                labels.set(relay.countryCode, relay.country || relay.countryCode.toUpperCase());
-                if (relay.cityCode) {
-                    labels.set(relay.countryCode + ':' + relay.cityCode, relay.city + ', ' + relay.country);
-                }
-                for (const value of [relay.countryCode, relay.countryCode + ':' + relay.cityCode]) {
-                    counts.set(value, (counts.get(value) || 0) + 1);
-                }
-            }
-            for (const value of saved) {
-                if (!labels.has(value)) {
-                    labels.set(value, value.toUpperCase());
-                }
-            }
-            const choices = [...labels].map(([value, label]) => ({
-                value, label: label + ' · ' + (value === 'all' ? state.relays.length : counts.get(value) || 0),
-                group: value === 'all' ? '' : value.includes(':') ? 'Cities' : 'Countries'
-            })).sort((left, right) => left.label.localeCompare(right.label));
-            options(byId('relay-list'), choices.filter(({value}) => saved.includes(value))
-                .map((choice) => ({...choice, group: 'Saved batches'})), 'Mullvad catalog');
-            options(byId('batch-scope'), choices, 'Choose a batch');
-            renderBatchChoice();
-        }
-
-        function renderBatchChoice() {
-            const scope = byId('batch-scope').value;
-            const {worldwide, countries, cities = []} = state.mullvadBatches;
-            const saved = scope === 'all' ? worldwide : [...countries, ...cities].includes(scope);
-            const count = scope ? state.relays.filter((relay) => batchIncludes(relay, scope)).length : 0;
-            byId('save-batch').hidden = saved;
-            byId('save-batch').disabled = !state.mullvadSignedIn || count === 0;
-            byId('remove-batch').hidden = !saved;
-            byId('remove-batch').disabled = !state.mullvadSignedIn;
-            byId('browse-batch').disabled = !saved || !count;
-            byId('batch-status').textContent = scope ? count + ' server' + (count === 1 ? '' : 's')
-                + (saved ? ' · Saved' : '') : '';
-        }
-
-        async function saveMullvadBatch(control, action) {
-            const scope = byId('batch-scope').value;
-            if (!scope || !state.mullvadSignedIn) {
-                return;
-            }
-            const [country, city = ''] = scope === 'all' ? [''] : scope.split(':');
-            await mutate(control, () => api('saveMullvadBatch', {country, city, action}),
-                action === 'add' ? 'Batch added to VPN tunnels.' : 'Mullvad batch removed.', (result) => {
-                    state.mullvadBatches = result.batches;
-                    renderMullvadBatches();
-                    if (action === 'add') {
-                        viewMullvadBatch();
-                    }
-                });
-            renderBatchChoice();
-        }
-
-        function viewMullvadBatch() {
-            byId('relay-list').value = byId('batch-scope').value;
-            byId('country').value = '';
-            byId('city').value = '';
-            byId('relay').value = '';
-            byId('tunnel-search').value = '';
-            renderRelays();
-            byId('vpn-tunnels-title').focus();
-        }
-
         function renderRelays() {
-            renderMullvadBatches();
-            const batch = byId('relay-list').value;
-            const relays = state.relays.filter((relay) => batchIncludes(relay, batch));
+            const relays = state.relays;
             const countries = [...new Set(relays.map((item) => item.country).filter(Boolean))].sort();
             options(byId('country'), countries.map((value) => ({value, label: value})), 'All countries');
             const country = byId('country').value;
@@ -1298,7 +1188,6 @@
                 byId('relay').value = '';
             }
             renderRelayChoice();
-            renderProfiles();
         }
 
         function renderRelayChoice() {
@@ -1325,7 +1214,7 @@
         }
 
         function appendConnectionTest(actions, action, id, name, nodeId = '', disabled = false) {
-            const key = action === 'testRelay' ? 'relay:' + id : nodeId ? 'proxy:' + nodeId : 'exit:' + id;
+            const key = nodeId ? 'proxy:' + nodeId : 'exit:' + id;
             const status = document.createElement('small');
             status.className = 'bv-test-result';
             status.setAttribute('role', 'status');
@@ -1390,16 +1279,11 @@
             state.mullvadSignedIn = signedIn;
             byId('login-form').hidden = signedIn || insecureWebGui;
             byId('register-form').hidden = !signedIn;
-            byId('mullvad-batches').hidden = !signedIn;
             byId('restore-login').hidden = insecureWebGui || signedIn || !state.mullvadLoginSaved;
             byId('sign-out').hidden = insecureWebGui || (!signedIn && !state.mullvadLoginSaved);
             byId('sign-out').textContent = state.mullvadLoginSaved
                 ? (signedIn ? 'Sign out and forget login' : 'Forget saved login') : 'Sign out';
             renderRelayChoice();
-            renderBatchChoice();
-            if (savedBatchScopes().length && state.catalogLoaded) {
-                renderProfiles();
-            }
             if (signedIn && !state.catalogLoaded) {
                 void loadRelays();
             }
@@ -1563,6 +1447,7 @@
             }
         });
         byId('add-device').addEventListener('click', () => openAssignment());
+        byId('add-tailnet-peer').addEventListener('click', () => openAssignment(null, 'tailnet'));
         byId('close-assignment').addEventListener('click', () => {
             byId('assignment').hidden = true;
             state.editing = null;
@@ -1628,17 +1513,6 @@
         }
         setMullvadSignedIn(false);
         byId('refresh-relays').addEventListener('click', () => void loadRelays(true));
-        byId('relay-list').addEventListener('change', () => {
-            byId('country').value = '';
-            byId('city').value = '';
-            byId('relay').value = '';
-            renderRelays();
-        });
-        byId('batch-scope').addEventListener('change', renderBatchChoice);
-        byId('save-batch').addEventListener('click', (event) => void saveMullvadBatch(event.currentTarget, 'add'));
-        byId('remove-batch').addEventListener('click', (event) => void saveMullvadBatch(event.currentTarget, 'remove'));
-        byId('browse-batch').addEventListener('click', viewMullvadBatch);
-        byId('tunnel-search').addEventListener('input', renderProfiles);
         byId('country').addEventListener('change', renderRelays);
         byId('city').addEventListener('change', renderRelays);
         byId('relay').addEventListener('change', renderRelayChoice);
