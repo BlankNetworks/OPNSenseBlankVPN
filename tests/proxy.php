@@ -6,8 +6,9 @@ use OPNsense\BlankVpn\ProxyCatalog;
 use OPNsense\BlankVpn\ProxyCores;
 use OPNsense\BlankVpn\ProxyImport;
 use OPNsense\BlankVpn\ProxyRuntime;
+use OPNsense\BlankVpn\VpnProviders;
 
-foreach (['Policy', 'ProxyCatalog', 'ProxyCores', 'ProxyImport', 'ProxyRuntime'] as $file) {
+foreach (['Policy', 'ProxyCatalog', 'ProxyCores', 'ProxyImport', 'ProxyRuntime', 'VpnProviders'] as $file) {
     require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/' . $file . '.php';
 }
 
@@ -119,6 +120,45 @@ $replaceNodes->invokeArgs(null, [&$catalogData, 'feed', [$id => $savedNode], []]
 assertProxy($catalogData['nodes'][$id]['disabled'] === true, 'Subscription refresh must preserve a disabled server.');
 assertProxy(ProxyCatalog::serverName('  My SOCKS5 server  ') === 'My SOCKS5 server', 'Trim a custom server name.');
 
+$nordIdentity = ['privateKey' => base64_encode(str_repeat('n', 32)), 'address' => '10.5.0.2/32',
+    'dns' => ['103.86.96.100', '103.86.99.100']];
+$nordRelay = ['name' => 'Nord Chicago', 'ipv4' => '1.0.0.1', 'port' => 51820,
+    'publicKey' => base64_encode(str_repeat('c', 32))];
+$chicago = VpnProviders::nordProxyNode($nordIdentity, $nordRelay, 'us123.nordvpn.com');
+$tokyo = VpnProviders::nordProxyNode($nordIdentity, array_replace($nordRelay, [
+    'name' => 'Nord Tokyo', 'ipv4' => '1.1.1.1', 'publicKey' => base64_encode(str_repeat('t', 32)),
+]), 'jp456.nordvpn.com');
+assertProxy($chicago['id'] !== $tokyo['id'] && $chicago['config']['ip'] === $tokyo['config']['ip'] &&
+    $chicago['config']['private-key'] === $tokyo['config']['private-key'] &&
+    $chicago['config']['udp'] && $chicago['config']['remote-dns-resolve'],
+    'Distinct NordVPN relays must retain the same address and identity inside independent UDP-capable WireGuard stacks.');
+assertProxy($chicago['providerLocation'] === 'us123.nordvpn.com' && $chicago['providerServer'] === 'Nord Chicago',
+    'Save the verified server hostname and display name separately.');
+
+$managedData = ['nodes' => []];
+$chicagoId = $chicago['id'];
+$tokyoId = $tokyo['id'];
+$manualNord = array_diff_key($chicago, array_flip(['provider', 'providerLocation', 'providerServer']));
+$replaceNodes->invokeArgs(null, [&$managedData, 'manual', [$chicagoId => $manualNord], []]);
+$replaceNodes->invokeArgs(null, [&$managedData, 'managed-nord', [$chicagoId => $chicago], []]);
+$replaceNodes->invokeArgs(null, [&$managedData, 'managed-nord', [$tokyoId => $tokyo], []]);
+$replaceNodes->invokeArgs(null, [&$managedData, 'feed', [$tokyoId => ['name' => 'Feed name'] + $tokyo], []]);
+$managedNodes = new ReflectionMethod(ProxyCatalog::class, 'managedNordNodes');
+$managed = $managedNodes->invoke(null, $managedData, null);
+assertProxy(count($managed) === 2 && $managed[$tokyoId]['name'] === 'Nord Tokyo' &&
+    $managed[$tokyoId]['provider'] === 'nord' && $managed[$tokyoId]['sources'] === ['managed-nord'] &&
+    !str_contains(json_encode($managed, JSON_THROW_ON_ERROR), $nordIdentity['privateKey']) &&
+    !isset($managed[$tokyoId]['config']), 'Show managed NordVPN metadata without accepting feed changes or exposing credentials.');
+assertProxy(array_keys($managedNodes->invoke(null, $managedData, 'us123.nordvpn.com')) === [$chicagoId],
+    'Look up a saved managed exit by server hostname.');
+
+$dropManagedNord = new ReflectionMethod(ProxyCatalog::class, 'dropManagedNord');
+$dropManagedNord->invokeArgs(null, [&$managedData, $chicagoId]);
+$dropManagedNord->invokeArgs(null, [&$managedData, $tokyoId]);
+assertProxy($managedData['nodes'][$chicagoId]['sources'] === ['manual'] &&
+    !isset($managedData['nodes'][$chicagoId]['provider'], $managedData['nodes'][$tokyoId]),
+    'Removing a managed exit must retain a pre-existing manual import and delete a managed-only exit.');
+
 $subscriptionEndpoint = new ReflectionMethod(ProxyCatalog::class, 'endpoint');
 $subscriptionAddresses = new ReflectionMethod(ProxyCatalog::class, 'publicAddresses');
 assertProxy($subscriptionEndpoint->invoke(null, 'https://Example.com:8443/feed?token=private') ===
@@ -163,6 +203,15 @@ assertProxy(ProxyCores::uses(['core' => 'xray'], 'mihomo') && !ProxyCores::uses(
     'A core update must only affect the exits that use it.');
 
 $route = ProxyRuntime::route('proxy-exit', 0, proxyNode($ss)['id'], 'test', 'mihomo', 'ss');
+$chicagoRoute = ProxyRuntime::route('nord-chicago', 1, $chicagoId, 'Nord Chicago', 'mihomo', 'wireguard');
+$tokyoRoute = ProxyRuntime::route('nord-tokyo', 2, $tokyoId, 'Nord Tokyo', 'mihomo', 'wireguard');
+$chicagoConfig = ProxyRuntime::configuration($chicagoRoute, $chicago)['mihomo'];
+$tokyoConfig = ProxyRuntime::configuration($tokyoRoute, $tokyo)['mihomo'];
+assertProxy($chicagoRoute['address'] !== $tokyoRoute['address'] &&
+    $chicagoConfig['socks-port'] !== $tokyoConfig['socks-port'] &&
+    $chicagoConfig['dns']['listen'] !== $tokyoConfig['dns']['listen'] &&
+    $chicagoConfig['proxies'][0]['server'] !== $tokyoConfig['proxies'][0]['server'],
+    'Keep router-visible addresses, listeners and NordVPN endpoints isolated across exits.');
 $ssConfig = ProxyRuntime::configuration($route, proxyNode($ss));
 assertProxy($ssConfig['mihomo']['rules'] === ['MATCH,blankvpn-upstream'], 'Single exit without direct fallback.');
 assertProxy($ssConfig['mihomo']['allow-lan'] === false && !$ssConfig['mihomo']['tun']['enable'], 'No core-managed routing or exposed SOCKS port.');
@@ -195,7 +244,8 @@ if (isset($argv[1])) {
     foreach (['ss' => $ssConfig['mihomo'], 'ssr' => ProxyRuntime::configuration($route, proxyNode($legacy))['mihomo'],
         'vmess' => ProxyRuntime::configuration($route, proxyNode($vmess))['mihomo'],
         'ss2022' => ProxyRuntime::configuration($route, proxyNode($ss2022))['mihomo'], 'reality' => $realityConfig,
-        'adapter-bridge' => $xray['mihomo'], 'xray' => $xray['adapter'], 'sing-box' => $sing['adapter']] as $name => $config) {
+        'adapter-bridge' => $xray['mihomo'], 'nord-chicago' => $chicagoConfig, 'nord-tokyo' => $tokyoConfig,
+        'xray' => $xray['adapter'], 'sing-box' => $sing['adapter']] as $name => $config) {
         file_put_contents($dir . '/' . $name . '.json', json_encode($config, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     }
 }

@@ -14,8 +14,9 @@ class VpnProviders
         'azire' => ['name' => 'AzireVPN', 'login' => 'token', 'guide' => 'https://www.azirevpn.com/docs/api/authentication'],
         'express' => ['name' => 'ExpressVPN', 'guide' => 'https://www.expressvpn.com/support/manage-account/find-manual-configuration-credentials/'],
         'hide' => ['name' => 'hide.me', 'guide' => 'https://hide.me/en/help/how-to-connect-via-wireguard-configuration-file/'],
-        'ivpn' => ['name' => 'IVPN', 'guide' => 'https://www.ivpn.net/setup/router/opnsense-wireguard/'],
+        'ivpn' => ['name' => 'IVPN', 'login' => 'account', 'guide' => 'https://www.ivpn.net/setup/router/opnsense-wireguard/'],
         'mullvad' => ['name' => 'Mullvad', 'login' => 'mullvad', 'guide' => 'https://mullvad.net/en/account/wireguard-config'],
+        'mysterium' => ['name' => 'Mysterium VPN', 'login' => 'browser', 'guide' => 'https://help.mysteriumvpn.com/en/articles/16010679-how-to-generate-wireguard-configuration-file'],
         'nord' => ['name' => 'NordVPN', 'login' => 'token', 'guide' => 'https://support.nordvpn.com/hc/en-us/articles/45535038276753-How-to-generate-a-NordVPN-login-token-to-connect-to-a-VPN-server-on-a-router'],
         'ovpn' => ['name' => 'OVPN', 'guide' => 'https://www.ovpn.com/en/guides/wireguard/opnsense'],
         'pia' => ['name' => 'Private Internet Access', 'login' => 'password', 'guide' => 'https://github.com/pia-foss/manual-connections'],
@@ -191,7 +192,7 @@ class VpnProviders
         foreach ($data as $server) {
             $host = $server['hostname'] ?? '';
             $ip = $server['station'] ?? '';
-            if (!is_string($host) || !preg_match('/^[a-z0-9-]+\.nordvpn\.com$/D', $host) ||
+            if (!self::nordServerId($host) ||
                 !self::publicIpv4($ip) || ($server['status'] ?? 'online') !== 'online') {
                 continue;
             }
@@ -265,6 +266,41 @@ class VpnProviders
         }
         $identity['publicKey'] ??= $wireGuard->derivePublicKey($identity['privateKey']);
         return [$identity, $server];
+    }
+
+    public static function nordProxyNode(array $identity, array $relay, string $serverId): array
+    {
+        $privateKey = $identity['privateKey'] ?? null;
+        $peerKey = $relay['publicKey'] ?? null;
+        $endpoint = $relay['ipv4'] ?? null;
+        if (!self::nordServerId($serverId) || !self::publicIpv4($endpoint) ||
+            !self::wireGuardKey($privateKey) || !self::wireGuardKey($peerKey)) {
+            throw new DomainException('NordVPN did not return a usable WireGuard identity and server.');
+        }
+
+        $name = self::label($relay['name'] ?? '', '', $serverId);
+        $options = [
+            'name' => $name,
+            'type' => 'wireguard',
+            'server' => $endpoint,
+            'port' => ProxyImport::port($relay['port'] ?? 51820),
+            'ip' => self::hostAddress($identity['address'] ?? ''),
+            'private-key' => $privateKey,
+            'public-key' => $peerKey,
+            'persistent-keepalive' => 25,
+            'remote-dns-resolve' => true,
+            'dns' => self::ipv4Dns($identity['dns'] ?? []),
+            'udp' => true,
+        ];
+        $nodes = ProxyImport::parse(json_encode(['proxies' => [$options]], JSON_THROW_ON_ERROR))['nodes'];
+        return reset($nodes) + [
+            'provider' => 'nord', 'providerLocation' => $serverId, 'providerServer' => $name,
+        ];
+    }
+
+    public static function nordServerId(mixed $serverId): bool
+    {
+        return is_string($serverId) && preg_match('/^[a-z0-9-]{1,63}\.nordvpn\.com$/D', $serverId) === 1;
     }
 
     private function azireIdentity(array $auth, string $location): array

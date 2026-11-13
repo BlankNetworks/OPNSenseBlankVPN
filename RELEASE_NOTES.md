@@ -1,5 +1,6 @@
-- VPN Login adds a service picker and independent saved sign-ins for AzireVPN, Mullvad, NordVPN, and Private Internet Access.
-- Import compatible WireGuard profiles or attach OPNsense VPN gateways for additional providers. Routing menus group VPN and proxy servers alphabetically by service.
-- Multi-Path accepts top-level domain suffixes such as .cn and *.cn. Each saved list has its own Destination dropdown and Save button.
-- Bypass sends DNS-learned destinations through the regular OPNsense policy under Whole-Network coverage through one VPN or proxy. The Kill Switch also covers bypass destinations during an outage.
-- Provider sign-in and routing changes were exercised with fixtures. Live paid-account onboarding and forwarding still need validation on OPNsense.
+- VPN Login has a VPN Service picker, an Add server action and a separate Saved VPN servers list. LAN and Tailscale assignments are managed in Network Settings.
+- Adding another Mullvad server preserves existing tunnels and rules. Removed tunnels make their device keys available for reuse.
+- Saved VPN servers show Standby, Ready, Error or Disabled. Error banners and failed tunnel test details can be dismissed.
+- Mysterium VPN supports browser approval and location selection. IVPN supports account-ID sign-in and authenticator codes. Each allows one account-provisioned tunnel at a time.
+- Additional NordVPN servers use isolated WireGuard sessions in the bundled Mihomo runtime.
+- Browser, provider and routing fixtures exercise setup and state changes. Live paid-account sign-ins and simultaneous forwarding still require router testing.

@@ -24,6 +24,15 @@ final class WireGuard
     private const HANDSHAKE_WINDOW = 300;
 
     /** Stage objects under the caller's configuration lock. The caller commits and applies them. */
+    public static function identityKeys(): array
+    {
+        $keys = [];
+        foreach ((new Server())->servers->server->iterateItems() as $instance) {
+            $keys[] = (string)$instance->pubkey;
+        }
+        return $keys;
+    }
+
     public static function create(string $id, array $identity, array $relay): array
     {
         if (!self::uuid($id)) {

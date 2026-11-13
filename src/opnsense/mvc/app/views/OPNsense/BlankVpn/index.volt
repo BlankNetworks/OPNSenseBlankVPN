@@ -22,157 +22,183 @@
         <button type="button" data-bv-section="tailscale" aria-controls="bv-tailscale-page" aria-pressed="false">Tailscale Settings</button>
     </nav>
 
-    <div id="bv-message" role="status" aria-live="polite" aria-atomic="true" hidden>
-        <strong id="bv-message-title" hidden>Action failed</strong>
-        <span id="bv-message-detail"></span>
+    <div id="bv-message" hidden>
+        <div role="status" aria-live="polite" aria-atomic="true">
+            <strong id="bv-message-title" hidden>Action failed</strong>
+            <span id="bv-message-detail"></span>
+        </div>
+        <button id="bv-message-dismiss" type="button" aria-label="Dismiss error" hidden>×</button>
     </div>
     <ul id="bv-warnings" class="alert alert-warning bv-warnings" hidden></ul>
 
-    <section id="bv-tunnels" data-bv-panel="vpns" aria-labelledby="bv-vpn-page-title">
-        <section class="bv-panel" data-manage-only>
-            <h2 id="bv-vpn-page-title">VPN Login</h2>
+    <section id="bv-tunnels" data-bv-panel="vpns" aria-label="VPN Login">
+        <section class="bv-panel" aria-labelledby="bv-vpn-page-title" data-manage-only>
+            <h2 id="bv-vpn-page-title">VPN Service</h2>
             <form id="bv-provider-picker" class="bv-inline-form">
-                <label>VPN service
-                    <select id="bv-provider" class="form-control" required>
-                        <option value="mullvad">Mullvad</option>
-                    </select>
-                </label>
+                <label for="bv-provider" class="sr-only">VPN service</label>
+                <select id="bv-provider" class="form-control" required>
+                    <option value="mullvad">Mullvad</option>
+                </select>
                 <button type="submit" class="btn btn-primary">Apply</button>
             </form>
-        </section>
-        <section class="bv-panel" id="bv-mullvad-provider" data-manage-only>
-            <div class="bv-heading">
-                <h2 id="bv-vpn-title">Mullvad VPN</h2>
-                <div class="bv-actions">
-                    <button id="bv-restore-login" type="button" class="btn btn-default" hidden>Use saved login</button>
-                    <button id="bv-sign-out" type="button" class="btn btn-default" hidden>Sign out</button>
+            <div class="bv-vpn-provider" id="bv-mullvad-provider">
+                <div class="bv-heading">
+                    <h3 id="bv-vpn-title">Mullvad VPN</h3>
+                    <div class="bv-actions">
+                        <button id="bv-restore-login" type="button" class="btn btn-default" hidden>Use saved login</button>
+                        <button id="bv-sign-out" type="button" class="btn btn-default" hidden>Sign out</button>
+                    </div>
                 </div>
-            </div>
-            <p id="bv-login-http" class="bv-callout" hidden>
-                Mullvad sign-in requires an HTTPS connection to OPNsense.
-                <a id="bv-secure-link">Open this page over HTTPS</a>, or enable HTTPS under
-                System → Settings → Administration if the router uses HTTP.
-            </p>
-            <form id="bv-login-form">
-                <label for="bv-account">Mullvad account number</label>
-                <div class="bv-inline-form">
-                    <input id="bv-account" type="password" class="form-control" inputmode="numeric" autocomplete="off"
-                        maxlength="23" placeholder="16-digit account number" required>
-                    <button id="bv-inspect-account" type="submit" class="btn btn-primary">Sign in</button>
-                </div>
-                <label class="bv-check bv-save-login"><input id="bv-save-login" type="checkbox" checked> Save login on this router</label>
-            </form>
-            <div id="bv-account-status" class="bv-account-status" role="status" aria-live="polite"></div>
+                <p id="bv-login-http" class="bv-callout" hidden>
+                    Mullvad sign-in requires an HTTPS connection to OPNsense.
+                    <a id="bv-secure-link">Open this page over HTTPS</a>, or enable HTTPS under
+                    System → Settings → Administration if the router uses HTTP.
+                </p>
+                <form id="bv-login-form">
+                    <label for="bv-account">Mullvad account number</label>
+                    <div class="bv-inline-form">
+                        <input id="bv-account" type="password" class="form-control" inputmode="numeric" autocomplete="off"
+                            maxlength="23" placeholder="16-digit account number" required>
+                        <button id="bv-inspect-account" type="submit" class="btn btn-primary">Sign in</button>
+                    </div>
+                    <label class="bv-check bv-save-login"><input id="bv-save-login" type="checkbox" checked> Save login on this router</label>
+                </form>
+                <div id="bv-account-status" class="bv-account-status" role="status" aria-live="polite"></div>
 
-            <form id="bv-register-form" hidden>
-                <div class="bv-heading bv-relay-heading">
-                    <h3>Choose a server</h3>
-                    <button id="bv-refresh-relays" type="button" class="btn btn-default">Refresh servers</button>
-                </div>
-                <p id="bv-relay-status" class="text-muted" aria-live="polite"></p>
-                <div class="bv-fields">
-                    <label>Country <select id="bv-country" class="form-control"><option value="">All countries</option></select></label>
-                    <label>City <select id="bv-city" class="form-control"><option value="">All cities</option></select></label>
-                    <label>Server <select id="bv-relay" class="form-control" required><option value="">Select a server</option></select></label>
-                </div>
-                <div class="bv-actions">
-                    <p id="bv-relay-choice" class="text-muted" aria-live="polite"></p>
-                    <button id="bv-test-relay" type="button" class="btn btn-default" disabled>Ping server</button>
-                    <small id="bv-relay-test" class="bv-test-result" role="status"></small>
-                </div>
-                <div class="bv-fields">
-                    <label>Tunnel name <input id="bv-register-name" type="text" class="form-control" maxlength="64"
-                        placeholder="Defaults to server name"></label>
-                </div>
-                <div class="bv-actions">
-                    <button id="bv-register" type="submit" class="btn btn-primary" disabled>Use server</button>
-                    <p class="text-muted">Blank VPN reuses this router’s Mullvad device registration when you switch servers.</p>
-                </div>
-            </form>
-        </section>
-        <section id="bv-provider-panel" class="bv-panel" data-manage-only hidden>
-            <div class="bv-heading">
-                <h2 id="bv-provider-title"></h2>
-                <button id="bv-provider-logout" type="button" class="btn btn-default" hidden>Sign out</button>
+                <form id="bv-register-form" hidden>
+                    <div class="bv-heading bv-relay-heading">
+                        <h4>Choose a server</h4>
+                        <button id="bv-refresh-relays" type="button" class="btn btn-default">Refresh servers</button>
+                    </div>
+                    <p id="bv-relay-status" class="text-muted" aria-live="polite"></p>
+                    <div class="bv-fields">
+                        <label>Country <select id="bv-country" class="form-control"><option value="">All countries</option></select></label>
+                        <label>City <select id="bv-city" class="form-control"><option value="">All cities</option></select></label>
+                        <label>Server <select id="bv-relay" class="form-control" required><option value="">Select a server</option></select></label>
+                    </div>
+                    <div class="bv-actions">
+                        <p id="bv-relay-choice" class="text-muted" aria-live="polite"></p>
+                        <button id="bv-test-relay" type="button" class="btn btn-default" disabled>Ping server</button>
+                        <small id="bv-relay-test" class="bv-test-result" role="status"></small>
+                    </div>
+                    <div class="bv-fields">
+                        <label>Tunnel name <input id="bv-register-name" type="text" class="form-control" maxlength="64"
+                            placeholder="Defaults to server name"></label>
+                    </div>
+                    <div class="bv-actions">
+                        <button id="bv-register" type="submit" class="btn btn-primary" disabled>Add server</button>
+                        <p class="text-muted">Each saved Mullvad server has its own tunnel. Assign it in Network Settings.</p>
+                    </div>
+                </form>
             </div>
-            <p><a id="bv-provider-guide" target="_blank" rel="noopener noreferrer">Provider setup guide</a></p>
-            <p id="bv-provider-status" role="status"></p>
-            <form id="bv-provider-login" hidden>
-                <div class="bv-fields">
-                    <label id="bv-provider-user-field">PIA username
-                        <input id="bv-provider-user" type="text" maxlength="32" autocomplete="off" class="form-control">
-                    </label>
-                    <label><span id="bv-provider-secret-label">Access token</span>
-                        <input id="bv-provider-secret" type="password" maxlength="512" autocomplete="off" class="form-control" required>
-                    </label>
+            <div id="bv-provider-panel" class="bv-vpn-provider" hidden>
+                <div class="bv-heading">
+                    <h3 id="bv-provider-title"></h3>
+                    <button id="bv-provider-logout" type="button" class="btn btn-default" hidden>Sign out</button>
                 </div>
-                <button type="submit" class="btn btn-primary">Sign in and save</button>
-            </form>
-            <form id="bv-provider-server-form" hidden>
-                <div class="bv-fields">
-                    <label id="bv-provider-country-field">Country code
-                        <input id="bv-provider-country" type="text" maxlength="2" pattern="[A-Za-z]{2}" placeholder="Optional, e.g. JP" class="form-control">
-                    </label>
-                    <label>Server
-                        <select id="bv-provider-server" class="form-control" required></select>
-                    </label>
-                    <label>Tunnel name
-                        <input id="bv-provider-name" type="text" maxlength="64" placeholder="Defaults to server name" class="form-control">
-                    </label>
+                <p><a id="bv-provider-guide" target="_blank" rel="noopener noreferrer">Provider setup guide</a></p>
+                <p id="bv-provider-status" role="status"></p>
+                <div id="bv-myst-login" class="bv-actions" hidden>
+                    <button id="bv-myst-begin" type="button" class="btn btn-primary">Sign in to Mysterium VPN</button>
+                    <a id="bv-myst-approve" class="btn btn-default" target="_blank" rel="noopener noreferrer" hidden>Approve sign-in</a>
+                    <button id="bv-myst-poll" type="button" class="btn btn-default" hidden>Check approval</button>
                 </div>
-                <div class="bv-actions">
-                    <button id="bv-provider-reload" type="button" class="btn btn-default">Load servers</button>
-                    <button id="bv-provider-save" type="submit" class="btn btn-primary" disabled>Save server</button>
-                </div>
-                <p id="bv-provider-server-status" class="text-muted" role="status"></p>
-            </form>
-            <details id="bv-provider-manual">
-                <summary>Use a VPN configuration</summary>
-                <form id="bv-provider-import">
+                <form id="bv-ivpn-login" hidden>
                     <div class="bv-fields">
-                        <label>Tunnel name
-                            <input id="bv-import-name" type="text" maxlength="64" class="form-control" required>
+                        <label>IVPN account ID
+                            <input id="bv-ivpn-account" type="password" maxlength="64" autocomplete="off" class="form-control" required>
                         </label>
-                        <label>WireGuard file
-                            <input id="bv-import-file" type="file" accept=".conf,.txt" class="form-control">
-                        </label>
-                        <label>IPv4 DNS override
-                            <input id="bv-import-dns" type="text" maxlength="128" class="form-control">
+                        <label id="bv-ivpn-confirmation-field" hidden>Authenticator code
+                            <input id="bv-ivpn-confirmation" type="text" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" class="form-control">
                         </label>
                     </div>
-                    <label>WireGuard configuration
-                        <textarea id="bv-import-config" maxlength="16384" rows="5" spellcheck="false" class="form-control bv-config-text" required></textarea>
-                    </label>
-                    <button type="submit" class="btn btn-primary">Import WireGuard</button>
+                    <button type="submit" class="btn btn-primary">Sign in and save</button>
                 </form>
-                <form id="bv-provider-native">
-                    <p class="text-muted">For OpenVPN or an existing WireGuard tunnel, configure it in OPNsense and assign it an IPv4 gateway.</p>
+                <form id="bv-provider-login" hidden>
                     <div class="bv-fields">
-                        <label>Tunnel name
-                            <input id="bv-native-name" type="text" maxlength="64" class="form-control" required>
+                        <label id="bv-provider-user-field">PIA username
+                            <input id="bv-provider-user" type="text" maxlength="32" autocomplete="off" class="form-control">
                         </label>
-                        <label>OPNsense VPN gateway
-                            <select id="bv-native-gateway" class="form-control" required></select>
-                        </label>
-                        <label>Tunnel IPv4 DNS
-                            <input id="bv-native-dns" type="text" maxlength="64" class="form-control" required>
+                        <label><span id="bv-provider-secret-label">Access token</span>
+                            <input id="bv-provider-secret" type="password" maxlength="512" autocomplete="off" class="form-control" required>
                         </label>
                     </div>
-                    <button type="submit" class="btn btn-primary">Add tunnel</button>
+                    <button type="submit" class="btn btn-primary">Sign in and save</button>
                 </form>
-            </details>
+                <form id="bv-provider-server-form" hidden>
+                    <div class="bv-fields">
+                        <label id="bv-myst-type-field" hidden>IP type
+                            <select id="bv-myst-type" class="form-control">
+                                <option value="hosting">Hosting</option>
+                                <option value="residential">Residential</option>
+                            </select>
+                        </label>
+                        <label id="bv-provider-country-field">Country code
+                            <input id="bv-provider-country" type="text" maxlength="2" pattern="[A-Za-z]{2}" placeholder="Optional, e.g. JP" class="form-control">
+                        </label>
+                        <label>Server
+                            <select id="bv-provider-server" class="form-control" required></select>
+                        </label>
+                        <label>Tunnel name
+                            <input id="bv-provider-name" type="text" maxlength="64" placeholder="Defaults to server name" class="form-control">
+                        </label>
+                    </div>
+                    <label id="bv-myst-dns-field" hidden>IPv4 DNS override
+                        <input id="bv-myst-dns" type="text" maxlength="64" class="form-control">
+                    </label>
+                    <div class="bv-actions">
+                        <button id="bv-provider-reload" type="button" class="btn btn-default">Load servers</button>
+                        <button id="bv-provider-save" type="submit" class="btn btn-primary" disabled>Add server</button>
+                    </div>
+                    <p id="bv-provider-server-status" class="text-muted" role="status"></p>
+                </form>
+                <details id="bv-provider-manual">
+                    <summary>Add from a VPN configuration</summary>
+                    <form id="bv-provider-import">
+                        <div class="bv-fields">
+                            <label>Tunnel name
+                                <input id="bv-import-name" type="text" maxlength="64" class="form-control" required>
+                            </label>
+                            <label>WireGuard file
+                                <input id="bv-import-file" type="file" accept=".conf,.txt" class="form-control">
+                            </label>
+                            <label>IPv4 DNS override
+                                <input id="bv-import-dns" type="text" maxlength="128" class="form-control">
+                            </label>
+                        </div>
+                        <label>WireGuard configuration
+                            <textarea id="bv-import-config" maxlength="16384" rows="5" spellcheck="false" class="form-control bv-config-text" required></textarea>
+                        </label>
+                        <button type="submit" class="btn btn-primary">Import WireGuard</button>
+                    </form>
+                    <form id="bv-provider-native">
+                        <p class="text-muted">For OpenVPN or an existing WireGuard tunnel, configure it in OPNsense and assign it an IPv4 gateway.</p>
+                        <div class="bv-fields">
+                            <label>Tunnel name
+                                <input id="bv-native-name" type="text" maxlength="64" class="form-control" required>
+                            </label>
+                            <label>OPNsense VPN gateway
+                                <select id="bv-native-gateway" class="form-control" required></select>
+                            </label>
+                            <label>Tunnel IPv4 DNS
+                                <input id="bv-native-dns" type="text" maxlength="64" class="form-control" required>
+                            </label>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Add tunnel</button>
+                    </form>
+                </details>
+            </div>
         </section>
-        <section class="bv-panel" aria-label="Saved VPN tunnels">
-            <h2>VPN tunnels</h2>
+        <section class="bv-panel" aria-labelledby="bv-saved-vpn-title">
+            <h2 id="bv-saved-vpn-title">Saved VPN servers</h2>
+            <p class="text-muted">Use Network Settings to assign a saved server to devices or a whole network.</p>
             <div class="bv-scroll">
                 <table class="table bv-table bv-profiles">
                     <thead>
                         <tr>
                             <th scope="col">Profile</th>
                             <th scope="col">VPN service and server</th>
-                            <th scope="col">Tunnel</th>
-                            <th scope="col">Latest handshake</th>
-                            <th scope="col">Observed status</th>
+                            <th scope="col">Status</th>
                             <th scope="col"><span class="sr-only">Actions</span></th>
                         </tr>
                     </thead>
@@ -317,7 +343,7 @@
                             <option value="disabled">Use regular internet</option>
                         </select>
                     </label>
-                    <label id="bv-network-profile-field" hidden>Server
+                    <label id="bv-network-profile-field" hidden>Saved server
                         <select id="bv-network-profile" class="form-control"></select>
                     </label>
                 </div>
@@ -414,7 +440,7 @@
                             <option value="blocked">Blocked</option>
                         </select>
                     </label>
-                    <label id="bv-profile-field">Server <select id="bv-profile" class="form-control"></select></label>
+                    <label id="bv-profile-field">Saved server <select id="bv-profile" class="form-control"></select></label>
                     <label id="bv-failure-field">If the server fails
                         <select id="bv-failure" class="form-control">
                             <option value="backup">Use a backup server</option>

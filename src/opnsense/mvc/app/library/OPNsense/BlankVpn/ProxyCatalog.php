@@ -11,6 +11,7 @@ final class ProxyCatalog
 {
     public const MAX_URL_BYTES = 8192;
     private const FILE = 'proxy-catalog.json';
+    private const MANAGED_NORD = 'managed-nord';
     private const MAX_FEEDS = 12;
     private const MAX_CATALOG_BYTES = 25165824;
     private const REFRESH_INTERVAL = 21600;
@@ -47,13 +48,94 @@ final class ProxyCatalog
     {
         $data = self::read();
         return [
-            'nodes' => array_values(array_map(static fn (array $node): array =>
-                array_intersect_key($node, array_flip(['id', 'name', 'core', 'protocol', 'host', 'port', 'legacy', 'sources', 'disabled'])),
-                $data['nodes'])),
+            'nodes' => array_values(array_map(self::publicNode(...), $data['nodes'])),
             'feeds' => array_values(array_map(static fn (array $feed): array =>
                 array_intersect_key($feed, array_flip(['id', 'name', 'auto', 'updated', 'error', 'skipped', 'count', 'usage'])),
                 $data['feeds']))
         ];
+    }
+
+    private static function publicNode(array $node): array
+    {
+        $public = array_intersect_key($node, array_flip([
+            'id', 'name', 'core', 'protocol', 'host', 'port', 'legacy', 'sources', 'disabled',
+        ]));
+        if (self::isManagedNord($node)) {
+            $public += array_intersect_key($node, array_flip(['provider', 'providerLocation', 'providerServer']));
+        }
+        return $public;
+    }
+
+    public static function managedNord(?string $location = null): array
+    {
+        return self::managedNordNodes(self::read(), $location);
+    }
+
+    private static function managedNordNodes(array $data, ?string $location): array
+    {
+        $nodes = array_filter($data['nodes'], static fn (array $node): bool =>
+            self::isManagedNord($node) && ($location === null || $node['providerLocation'] === $location));
+        return array_map(self::publicNode(...), $nodes);
+    }
+
+    public static function saveManagedNord(array $node): array
+    {
+        $id = $node['id'] ?? '';
+        $location = $node['providerLocation'] ?? null;
+        if (($node['provider'] ?? '') !== 'nord' || ($node['core'] ?? '') !== 'mihomo' ||
+            ($node['protocol'] ?? '') !== 'wireguard' || !VpnProviders::nordServerId($location) ||
+            !is_string($id) || preg_match('/^[a-f0-9]{64}$/D', $id) !== 1) {
+            throw new DomainException('The NordVPN server configuration is invalid.');
+        }
+
+        $data = self::read();
+        $saved = self::managedNordNodes($data, $location);
+        if ($saved !== []) {
+            $savedId = array_key_first($saved);
+            if (!empty($data['nodes'][$savedId]['disabled'])) {
+                unset($data['nodes'][$savedId]['disabled']);
+                self::save($data);
+            }
+            return self::publicNode($data['nodes'][$savedId]);
+        }
+        if (self::isManagedNord($data['nodes'][$id] ?? [])) {
+            throw new DomainException('An equivalent NordVPN exit is already saved under a different server name.');
+        }
+
+        $node['providerServer'] = self::serverName((string)($node['providerServer'] ?? $location));
+        self::replaceNodes($data, self::MANAGED_NORD, [$id => $node], []);
+        unset($data['nodes'][$id]['disabled']);
+        self::save($data);
+        return self::publicNode($data['nodes'][$id]);
+    }
+
+    public static function removeManagedNord(string $id): void
+    {
+        $data = self::read();
+        self::dropManagedNord($data, $id);
+        self::save($data);
+    }
+
+    private static function dropManagedNord(array &$data, string $id): void
+    {
+        $node = $data['nodes'][$id] ?? [];
+        if (!self::isManagedNord($node)) {
+            throw new DomainException('This NordVPN server is no longer saved.');
+        }
+        $node['sources'] = array_values(array_diff($node['sources'], [self::MANAGED_NORD]));
+        if ($node['sources'] === []) {
+            unset($data['nodes'][$id]);
+            return;
+        }
+        unset($node['provider'], $node['providerLocation'], $node['providerServer']);
+        $data['nodes'][$id] = $node;
+    }
+
+    private static function isManagedNord(array $node): bool
+    {
+        return ($node['provider'] ?? '') === 'nord' &&
+            in_array(self::MANAGED_NORD, $node['sources'] ?? [], true) &&
+            VpnProviders::nordServerId($node['providerLocation'] ?? null);
     }
 
     public static function import(string $body, string $name = ''): array
@@ -213,7 +295,7 @@ final class ProxyCatalog
     private static function replaceNodes(array &$data, string $source, array $nodes, array $pinned): void
     {
         foreach ($data['nodes'] as $id => &$entry) {
-            if ($source !== 'manual' && !isset($nodes[$id])) {
+            if (!in_array($source, ['manual', self::MANAGED_NORD], true) && !isset($nodes[$id])) {
                 $entry['sources'] = array_values(array_diff($entry['sources'], [$source]));
                 if ($entry['sources'] === [] && !in_array($id, $pinned, true)) {
                     unset($data['nodes'][$id]);
@@ -223,6 +305,13 @@ final class ProxyCatalog
         unset($entry);
         foreach ($nodes as $id => $node) {
             $existing = $data['nodes'][$id] ?? [];
+            if ($source !== self::MANAGED_NORD) {
+                if (self::isManagedNord($existing)) {
+                    // A generic import of the same endpoint cannot replace the managed exit.
+                    continue;
+                }
+                unset($node['provider'], $node['providerLocation'], $node['providerServer']);
+            }
             if (empty($node['customName']) && !empty($existing['customName'])) {
                 $node['name'] = $existing['name'];
                 $node['customName'] = true;

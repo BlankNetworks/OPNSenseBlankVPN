@@ -77,30 +77,34 @@ Choose **Tailscale address** and save to use the router’s MagicDNS hostname an
 
 ## VPN Login
 
-Choose a service and select **Apply** to open its setup. For account-based services, sign in over HTTPS and save a server. Your saved login belongs to your WebGUI user and stays on the router when you choose a different service or upgrade the plug-in. **Sign out** removes the saved login for that service. Saved tunnels stay available until you remove them. Credentials are kept in private router files outside the OPNsense configuration export. Provider tokens can expire or be revoked.
+Choose a service in **VPN Service** and select **Apply**. Sign in or add a compatible configuration, select a server and choose **Add server**. The server appears in **Saved VPN servers**. Select **Test** to check it or **Remove** to delete it once it is clear of routing rules. Open **Network Settings** to assign a saved server to LAN or Tailscale devices, or to enable Whole-Network coverage.
+
+Account-based setup requires the HTTPS WebGUI. Saved logins belong to your WebGUI user and persist across provider changes and plug-in upgrades. Blank VPN keeps login credentials in private router files outside the OPNsense configuration export. Provider credentials and sessions can expire or be revoked.
 
 | Service | Setup in Blank VPN |
 | --- | --- |
-| AzireVPN | Use an [AzireVPN API token](https://www.azirevpn.com/docs/api/tokens) with access to your account and IP allocations. Load locations and save a WireGuard server. |
-| Mullvad | Use your account number and select a server. |
-| NordVPN | Generate a [NordVPN router login token](https://support.nordvpn.com/hc/en-us/articles/45535038276753-How-to-generate-a-NordVPN-login-token-to-connect-to-a-VPN-server-on-a-router). Load NordLynx recommendations, optionally using a two-letter country code. The fixed tunnel address allows one Blank VPN-managed NordLynx tunnel at a time. |
-| Private Internet Access | Use your PIA username and password, then choose a region. Blank VPN generates a local WireGuard key and registers it with the selected region. PIA can expire the registration after inactivity or server restart. Re-add the tunnel if needed. [PIA manual connections](https://github.com/pia-foss/manual-connections) |
-| AirVPN, hide.me, IVPN, OVPN, Proton VPN, Windscribe | Generate a compatible WireGuard profile in the provider portal, then use **Import WireGuard**. You can also attach an existing OPNsense VPN gateway. |
-| ExpressVPN, VyprVPN, Other VPN | Attach a compatible OpenVPN or WireGuard tunnel that is configured in OPNsense and has an assigned IPv4 gateway. Use the provider setup guide in the picker. |
+| AzireVPN | Sign in with an [AzireVPN API token](https://www.azirevpn.com/docs/api/tokens) that can access your account and IP allocations. |
+| IVPN | Sign in with your account ID and enter your authenticator code when prompted. If IVPN requires CAPTCHA, use its account portal to export a WireGuard profile. Blank VPN allows one account-provisioned IVPN tunnel at a time. Remove it before changing locations or signing out. [IVPN CLI guide](https://www.ivpn.net/knowledgebase/general/command-line-client-faq/) |
+| Mullvad | Sign in with your account number. Each added server has a separate tunnel and uses an available Mullvad device registration. |
+| Mysterium VPN | Start sign-in, approve it in Mysterium's browser flow, then select **Check approval**. Choose a location and IP type. Blank VPN allows one managed Mysterium tunnel at a time. If browser setup fails, import a WireGuard configuration from the Mysterium account portal. [Router configuration guide](https://help.mysteriumvpn.com/en/articles/16010679-how-to-generate-wireguard-configuration-file) |
+| NordVPN | Sign in with a [NordVPN router login token](https://support.nordvpn.com/hc/en-us/articles/45535038276753-How-to-generate-a-NordVPN-login-token-to-connect-to-a-VPN-server-on-a-router). The first NordLynx server uses native WireGuard. Additional NordLynx servers use isolated WireGuard sessions in Mihomo, with TCP/UDP forwarding and the same eight active slots shared with proxies. |
+| Private Internet Access | Sign in with your PIA username and password. Choose a region to register a local WireGuard key. PIA can expire a registration after inactivity or server restart. Re-add the tunnel if needed. [PIA manual connections](https://github.com/pia-foss/manual-connections) |
+| AirVPN, hide.me, OVPN, Proton VPN, Windscribe | Generate a compatible WireGuard profile in the provider portal, then use **Import WireGuard**. You can also attach an existing OPNsense VPN gateway. |
+| ExpressVPN, VyprVPN, Other VPN | Attach a compatible OpenVPN or WireGuard tunnel configured in OPNsense with an assigned IPv4 gateway. Use the provider setup guide in the picker. |
 
-VPN and proxy servers appear together in **Network Settings**, grouped alphabetically by service or proxy core. Devices can use different servers at the same time.
+VPN and proxy servers appear together in **Network Settings**, grouped alphabetically by service or proxy core. LAN and Tailscale devices can use different servers at the same time, subject to provider limits.
 
-### Enable a Mullvad server
+### Add Mullvad servers
 
-1. Open **VPN Login**, enter your Mullvad account number, and sign in. Select **Save login on this router** to restore sign-in in future WebGUI sessions. The router stores the account number in a private file scoped to your WebGUI user, outside the OPNsense configuration export.
-2. Pick a country, city, and server, then choose **Use server**. The tunnel is available for routing immediately. Disable an unused Mullvad server to pause its tunnel and keep its registration. For the first tunnel on the account, Blank VPN generates a local WireGuard key and registers its public key with Mullvad.
-3. To change locations, select a new server. Blank VPN reuses the router’s registration. Blank VPN automatically reuses an available registration from a tunnel with no routing assignments. Free a tunnel first if all existing tunnels are assigned.
-
-The router retains the registration key in private storage across upgrades and tunnel removal. Existing Mullvad tunnels from earlier releases stay available. Mullvad allows up to five registered devices per account. [Mullvad device limits](https://mullvad.net/en/help/using-mullvad-vpn-app#too-many-devices)
+1. Open **VPN Login**, enter your Mullvad account number, and sign in. Select **Save login on this router** to restore sign-in in future WebGUI sessions.
+2. Pick a country, city and server, then choose **Add server**. Repeat to add another server and keep the existing ones.
+3. Test the saved server, then open **Network Settings** to assign it. Each simultaneously saved Mullvad tunnel uses its own device key. Removing a tunnel makes its registered key available for another server. Mullvad allows up to five registered devices per account. [Mullvad device limits](https://mullvad.net/en/help/using-mullvad-vpn-app#too-many-devices)
 
 ### Test servers
 
-Use **Ping server** beside the selected Mullvad server to check ICMP from OPNsense. Use **Test** beside a VPN tunnel or proxy server to verify HTTPS. Results appear on the tested row. The VPN test can run with device routing off and requires a verified firewall route with a fallback block. Proxy tests try HTTPS targets in different regions. For a basic SOCKS5 server, a failed test can also report upstream TCP, SOCKS5 authentication, or TLS errors.
+In **Saved VPN servers**, a new server shows **Standby**. Select **Test** to check HTTPS from the router through that server. A passing test shows **Ready**, and a failed test shows **Error**. Use **×** to dismiss the error details. Routing is configured separately in **Network Settings**.
+
+Use **Ping server** next to a selected Mullvad relay to check ICMP from OPNsense. **Test** can run with device routing off. Native VPN tests use a verified firewall route with a fallback block. Proxy tests try HTTPS targets in different regions. For basic SOCKS5 servers, a failed test can also report upstream TCP, SOCKS5 authentication or TLS errors.
 
 ## Add proxy servers and subscriptions
 

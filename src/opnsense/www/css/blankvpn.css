@@ -94,6 +94,7 @@
 }
 
 .blankvpn h3,
+.blankvpn h4,
 .blankvpn summary {
     font-size: 1.05em;
     font-weight: 650;
@@ -190,6 +191,16 @@
 
 #bv-provider-picker label {
     margin-bottom: 0;
+}
+
+.blankvpn .bv-vpn-provider {
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--bv-line);
+}
+
+.blankvpn .bv-relay-heading h4 {
+    margin: 0;
 }
 
 #bv-provider-manual form {
@@ -365,6 +376,46 @@
     color: var(--bv-error-ink);
 }
 
+.blankvpn #bv-message {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: .75rem;
+}
+
+.blankvpn #bv-message-dismiss {
+    display: grid;
+    flex: 0 0 2.75rem;
+    min-height: 2.75rem;
+    place-items: center;
+    margin: -.35rem -.5rem 0 0;
+    border: 0;
+    border-radius: .35rem;
+    background: transparent;
+    color: inherit;
+    font: 600 1.65rem/1 system-ui, sans-serif;
+    cursor: pointer;
+}
+
+.blankvpn #bv-message-dismiss:is(:hover, :focus-visible) {
+    background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.blankvpn .bv-test-dismiss {
+    margin-inline-start: .45rem;
+    padding: 0 .35rem;
+    border: 0;
+    border-radius: .3rem;
+    background: transparent;
+    color: inherit;
+    font: 600 1.25rem/1.2 system-ui, sans-serif;
+    cursor: pointer;
+}
+
+.blankvpn .bv-test-dismiss:is(:hover, :focus-visible) {
+    background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
 .blankvpn #bv-message-title {
     display: block;
     margin-bottom: .2rem;
@@ -392,6 +443,10 @@
     background-color: transparent;
     border-color: var(--bv-line);
     vertical-align: middle;
+}
+
+.blankvpn .bv-vpn-status {
+    font-weight: 650;
 }
 
 .blankvpn .bv-table thead th {

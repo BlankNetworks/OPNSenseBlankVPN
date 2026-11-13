@@ -1,5 +1,6 @@
 const requests = [];
 let settingsError = null;
+let exitTestError = null;
 const reply = {
     dashboard: {
         devices: [{ipv4: '10.0.0.20', ipv4Addresses: ['10.0.0.20', '10.0.0.21'], ipv6: ['fd00::20'], mac:'02:00:00:00:00:20', interface:'lan', interfaceName:'LAN', name:'<b>Device</b>', lastSeen:'2026-11-12T13:30:00Z', stable:true}],
@@ -11,7 +12,8 @@ const reply = {
         canManageCores: true,
         mullvadSignedIn: false,
         vpnProviders: {mullvad:{name:'Mullvad',login:'mullvad'}, pia:{name:'Private Internet Access',login:'password'},
-            hide:{name:'hide.me'}, azire:{name:'AzireVPN',login:'token'}},
+            hide:{name:'hide.me'}, azire:{name:'AzireVPN',login:'token'}, nord:{name:'NordVPN',login:'token'},
+            mysterium:{name:'Mysterium VPN',login:'browser'}, ivpn:{name:'IVPN',login:'account'}},
         providerAccounts: {pia:false,azire:true},
         proxyCores: {mihomo:true,tun2socks:true,xray:true,"sing-box":true},
         servicePresets: {Netflix:['netflix.com','nflxvideo.net']},
@@ -60,9 +62,45 @@ window.jQuery.ajax = async (request) => {
     if (action === 'providerLogin' || action === 'providerLogout') {
         reply.dashboard.providerAccounts[data.provider] = action === 'providerLogin';
     }
+    if (action === 'mystBeginAuth') {
+        reply.dashboard.mystAuth = {pending:true, status:'pending',
+            approvalUrl:'https://app.mysteriumvpn.com/oauth/authorize?request_id=test'};
+        return {ok:true, ...reply.dashboard.mystAuth};
+    }
+    if (action === 'mystPollAuth') {
+        reply.dashboard.mystAuth = {authenticated:true, status:'authenticated'};
+        reply.dashboard.providerAccounts.mysterium = true;
+        return {ok:true, ...reply.dashboard.mystAuth};
+    }
+    if (action === 'mystLocations') {
+        return {ok:true, locations:[{id:'myst-loc', name:'United States · New York'}]};
+    }
+    if (action === 'ivpnLogin') {
+        const authorized = data.confirmation === '123456';
+        reply.dashboard.ivpnAuth = authorized ? {authenticated:true, saved:true, status:'authenticated'}
+            : {authenticated:false, status:'pending', challenge:'totp', message:'Enter your authenticator code.'};
+        reply.dashboard.providerAccounts.ivpn = authorized;
+        return {ok:true, ...reply.dashboard.ivpnAuth};
+    }
+    if (action === 'ivpnServers') {
+        return {ok:true, servers:[{id:'ivpn-loc', name:'Canada · Toronto'}]};
+    }
+    if (action === 'addMystExit' || action === 'addIvpnExit') {
+        const provider = action === 'addMystExit' ? 'mysterium' : 'ivpn';
+        reply.dashboard.profiles.push({id:provider + '1', name:data.name, provider, providerLocation:data.server,
+            interface:'wg4', dns:['9.9.9.9']});
+    }
     if (action === 'addProviderExit') {
         reply.dashboard.profiles.push({id:'pia1',name:data.name,provider:data.provider,providerLocation:data.server,
             interface:'wg2',dns:['10.0.0.2']});
+    }
+    if (action === 'register') {
+        reply.dashboard.profiles.push({id:'vpn2',name:data.name,provider:'mullvad',relay:data.relay,
+            interface:'wg3',dns:['10.64.0.1']});
+        return {ok:true, profile:'vpn2'};
+    }
+    if (action === 'removeProfile') {
+        reply.dashboard.profiles = reply.dashboard.profiles.filter(profile => profile.id !== data.id);
     }
     if (action === 'setServiceDestination') {
         reply.dashboard.services.find(x => x.id === data.id).profile = data.profile;
@@ -84,6 +122,9 @@ window.jQuery.ajax = async (request) => {
     }
     if (action === 'testDeviceRoute') {
         return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:'seen', usingBackup:false};
+    }
+    if (action === 'testExit' && exitTestError) {
+        return {ok:true, reachable:false, detail:exitTestError};
     }
     if (action === 'renameProxyNode') {
         reply.proxyCatalog.nodes.find(x => x.id === data.id).name = data.name;
@@ -131,6 +172,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('appearance').dispatchEvent(new Event('change'));
     assert(getComputedStyle(document.getElementById('blankvpn')).colorScheme === 'light', 'day theme did not apply');
     assert(!bv('tunnels').hidden && !bv('login-form').hidden && bv('register-form').hidden, 'login is not the starting page');
+    assert(document.querySelector('[data-bv-section="vpns"]').textContent === 'VPN Login' &&
+        bv('vpn-page-title').textContent === 'VPN Service' &&
+        bv('provider').labels[0].classList.contains('sr-only') &&
+        bv('vpn-page-title').closest('section').contains(bv('register-form')) &&
+        bv('vpn-page-title').closest('section').contains(bv('provider-server-form')) &&
+        bv('saved-vpn-title').textContent === 'Saved VPN servers' &&
+        bv('saved-vpn-title').closest('section').contains(bv('profile-list')) &&
+        bv('saved-vpn-title').nextElementSibling.textContent.includes('Network Settings'),
+        'Adding and managing saved servers must appear in separate VPN Login sections.');
     assert(!requests.some(x => x.action === 'relays'), 'server list loaded before sign-in');
     assert(getComputedStyle(bv('appearance')).backgroundImage === 'none', 'host select decoration was not suppressed');
     document.querySelector('[data-bv-section="network"]').click();
@@ -192,15 +242,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('relay').value = 'ca-test-wg-001';
     bv('relay').dispatchEvent(new Event('change'));
     assert(bv('relay-choice').textContent.includes('Canada') && bv('register').disabled &&
-        bv('register').textContent === 'Enabled', 'an already configured Mullvad server must show Enabled');
+        bv('register').textContent === 'Already added', 'an already saved server must show Already added');
     bv('test-relay').click();
     await wait();
     assert(bv('relay-test').textContent.includes('12.345 ms') &&
         requests.some(x => x.action === 'testRelay' && x.data.relay === 'ca-test-wg-001'), 'per-relay ping missing');
     assert(bv('profile-list').querySelector('button').textContent === 'Test', 'VPN button must say Test');
+    const vpnStatus = (id) => bv('profile-list').querySelector('[data-vpn-status="' + id + '"]')?.textContent;
+    assert(vpnStatus('vpn1') === 'Standby' &&
+        bv('profile-list').closest('table').tHead.rows[0].cells[2].textContent === 'Status' &&
+        !bv('profile-list').textContent.includes('Tunnel counters'), 'untested VPN row must display a simple Standby status');
     bv('profile-list').querySelector('button').click();
     await wait();
-    assert(bv('profile-list').querySelector('[data-test-result]').textContent.includes('45.2 ms'), 'exit HTTPS test missing');
+    assert(vpnStatus('vpn1') === 'Ready' &&
+        bv('profile-list').querySelector('[data-test-result]').textContent.includes('45.2 ms'), 'exit HTTPS test missing Ready status');
     bv('profile-list').querySelector('[aria-label="Edit name for Canada"]').click();
     const vpnName = bv('profile-list').querySelector('.bv-name-editor');
     vpnName.querySelector('input').value = 'Canada home';
@@ -209,23 +264,52 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'renameProfile' && x.data.id === 'vpn1' && x.data.name === 'Canada home') &&
         bv('profile-list').textContent.includes('Canada home') &&
         bv('profile-list').querySelector('[data-test-result]').textContent.includes('45.2 ms'), 'VPN rename lost the row or its result');
+    exitTestError = 'HTTPS probe failed.';
+    bv('profile-list').querySelector('button').click();
+    await wait();
+    assert(vpnStatus('vpn1') === 'Error' &&
+        bv('profile-list').querySelector('[data-test-result] span').textContent === exitTestError, 'failed test did not set Error status');
+    bv('profile-list').querySelector('.bv-test-dismiss').click();
+    assert(bv('profile-list').querySelector('[data-test-result]').hidden && vpnStatus('vpn1') === 'Error',
+        'Dismissing the error details must preserve the server status.');
+    exitTestError = null;
     [...bv('profile-list').querySelectorAll('button')].find(button => button.textContent === 'Disable').click();
     await wait();
-    assert(reply.dashboard.profiles[0].disabled && ![...bv('network-profile').options].some(option => option.value === 'vpn1'),
-        'A disabled Mullvad server must leave the routing picker.');
+    assert(reply.dashboard.profiles[0].disabled && vpnStatus('vpn1') === 'Disabled' &&
+        bv('register').disabled && bv('register').textContent === 'Already added' &&
+        ![...bv('network-profile').options].some(option => option.value === 'vpn1'),
+        'A disabled Mullvad server must stay saved and leave the routing picker.');
     [...bv('profile-list').querySelectorAll('button')].find(button => button.textContent === 'Enable').click();
     await wait();
-    assert(!reply.dashboard.profiles[0].disabled, 'The existing Mullvad tunnel must be re-enabled.');
+    assert(!reply.dashboard.profiles[0].disabled && vpnStatus('vpn1') === 'Standby',
+        'The existing Mullvad tunnel must be re-enabled without stale test status.');
     assert(bv('account').value === '', 'successful sign-in retained account input');
     bv('country').value = 'Japan';
     bv('country').dispatchEvent(new Event('change'));
     bv('relay').value = 'jp-test-wg-001';
     bv('relay').dispatchEvent(new Event('change'));
-    assert(bv('register').textContent === 'Use server' && !bv('retarget'), 'Mullvad should offer automatic tunnel selection');
+    bv('register-name').value = 'Japan home';
+    assert(bv('register').textContent === 'Add server' && !bv('register').disabled && !bv('retarget'),
+        'Mullvad should offer an independent Add server action.');
+    const routingBeforeAdd = structuredClone({assignments:reply.dashboard.assignments, settings:reply.dashboard.settings});
+    const requestCountBeforeAdd = requests.length;
     bv('register-form').requestSubmit(bv('register'));
     await wait();
-    assert(requests.some(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001' &&
-        !Object.hasOwn(x.data, 'account')), 'registration payload failed');
+    const addRequests = requests.slice(requestCountBeforeAdd).filter(request => request.method === 'POST');
+    assert(addRequests.length === 1 && addRequests[0].action === 'register' &&
+        Object.keys(addRequests[0].data).sort().join(',') === 'name,relay' &&
+        addRequests[0].data.relay === 'jp-test-wg-001' && addRequests[0].data.name === 'Japan home',
+        'Add server should send only the selected relay and name.');
+    assert(reply.dashboard.profiles[0].relay === 'ca-test-wg-001' &&
+        bv('profile-list').textContent.includes('Japan home') &&
+        [...bv('network-profile').options].some(option => option.value === 'vpn2') &&
+        JSON.stringify(routingBeforeAdd) === JSON.stringify({assignments:reply.dashboard.assignments, settings:reply.dashboard.settings}),
+        'Adding a server must preserve the prior server and routing assignments.');
+    bv('profile-list').querySelector('[aria-label="Remove Japan home"]').click();
+    await wait();
+    assert(requests.some(x => x.action === 'removeProfile' && x.data.id === 'vpn2') &&
+        !bv('profile-list').textContent.includes('Japan home') && bv('profile-list').textContent.includes('Canada home'),
+        'Removing a saved server must keep the other saved server.');
     document.querySelector('[data-bv-section="smart"]').click();
     bv('service-preset').value = 'Netflix';
     bv('service-preset').dispatchEvent(new Event('change'));
@@ -301,7 +385,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'testProxyNode' && x.data.id === 'proxy-1') &&
         bv('proxy-list').querySelector('[data-test-result]').textContent.includes('The proxy connection timed out.'), 'saved proxy test did not report its failure');
 
-    assert([...bv('proxy-list').querySelectorAll('button')].map(button => button.textContent).join(',') === 'Test,Edit,Disable,Remove',
+    assert([...bv('proxy-list').querySelectorAll('button:not(.bv-test-dismiss)')].map(button => button.textContent).join(',') === 'Test,Edit,Disable,Remove',
         'proxy row actions must use simple labels');
     const failedTest = bv('proxy-list').querySelector('[data-result="fail"]');
     assert(getComputedStyle(failedTest).backgroundColor === 'rgb(255, 240, 241)' &&
@@ -507,6 +591,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('appearance').value = 'night';
     bv('appearance').dispatchEvent(new Event('change'));
     assert(getComputedStyle(bv('message')).color === 'rgb(255, 211, 221)', 'Night error text lost contrast.');
+    const dismiss = bv('message-dismiss');
+    assert(!dismiss.hidden && dismiss.textContent === '×' && dismiss.getAttribute('aria-label') === 'Dismiss error',
+        'Errors need a visible and labeled dismiss control.');
+    dismiss.focus();
+    dismiss.click();
+    assert(bv('message').hidden && dismiss.hidden && bv('network-profile').value === 'proxy1' &&
+        document.activeElement === document.querySelector('[data-bv-section="network"]'),
+        'Dismissing the error must preserve the form and move focus to the current page.');
+    bv('settings-form').requestSubmit(bv('save-routing'));
+    await wait();
+    assert(!bv('message').hidden && !dismiss.hidden && bv('message-detail').textContent === settingsError,
+        'A later failure must reopen the error banner.');
     bv('appearance').value = 'day';
     bv('appearance').dispatchEvent(new Event('change'));
     settingsError = null;
@@ -516,6 +612,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         x.data.networkMode === 'full' && x.data.networkProfile === 'proxy1' && x.data.networkKillSwitch === true) &&
         bv('add-device').hidden && reply.dashboard.settings.networkProfile === 'proxy1',
         'Whole-Network proxy coverage settings did not apply.');
+    assert(dismiss.hidden, 'Success messages must hide the error dismiss control.');
     assert(bv('disable-routing').parentElement.contains(bv('settings-title')) &&
         getComputedStyle(bv('disable-routing')).backgroundColor === 'rgb(177, 40, 60)',
         'Disable VPN must be red at the top of routing settings.');
@@ -547,10 +644,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('provider-server').value = 'chicago';
     bv('provider-server').dispatchEvent(new Event('change'));
     bv('provider-name').value = 'A Chicago server';
+    assert(bv('provider-save').textContent === 'Add server', 'Other providers must offer Add server.');
     bv('provider-save').click();
     await wait();
     assert(requests.some(x => x.action === 'addProviderExit' && x.data.provider === 'pia' && x.data.server === 'chicago'),
-        'Save did not use the selected provider server.');
+        'Add server did not use the selected provider server.');
     bv('provider').value = 'azire';
     bv('provider-picker').requestSubmit();
     await wait();
@@ -564,6 +662,56 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(groups.includes('Mullvad') && groups.includes('Private Internet Access') &&
         groups.indexOf('Mullvad') < groups.indexOf('Private Internet Access') &&
         [...bv('network-profile').options].some(x => x.value === 'pia1'), 'Routing choices must group by VPN service.');
+    bv('provider').value = 'mysterium';
+    bv('provider-picker').requestSubmit();
+    assert(!bv('myst-login').hidden && bv('provider-login').hidden, 'Mysterium must use browser approval.');
+    bv('myst-begin').click();
+    await wait();
+    assert(!bv('myst-approve').hidden && bv('myst-approve').href.startsWith('https://app.mysteriumvpn.com/'),
+        'Missing Mysterium approval link.');
+    bv('myst-poll').click();
+    await wait();
+    bv('provider-server').value = 'myst-loc';
+    bv('provider-server').dispatchEvent(new Event('change'));
+    bv('provider-name').value = 'Mysterium New York';
+    bv('provider-save').click();
+    await wait();
+    assert(requests.some(x => x.action === 'addMystExit' && x.data.server === 'myst-loc' && x.data.ipType === 'hosting') &&
+        bv('profile-list').textContent.includes('Mysterium New York'), 'Mysterium location did not reach the saved tunnel list.');
+    bv('provider').value = 'ivpn';
+    bv('provider-picker').requestSubmit();
+    assert(!bv('ivpn-login').hidden && bv('provider-login').hidden, 'IVPN account login did not open.');
+    bv('ivpn-account').value = 'i-ABCD-EFGH-IJKL';
+    bv('ivpn-login').querySelector('button').click();
+    await wait();
+    assert(!bv('ivpn-confirmation-field').hidden && bv('ivpn-confirmation').required, 'IVPN confirmation field missing.');
+    assert(bv('ivpn-account').value === '' && !bv('ivpn-account').required, 'IVPN account ID must not remain visible.');
+    bv('ivpn-confirmation').value = '123456';
+    bv('ivpn-login').querySelector('button').click();
+    await wait();
+    bv('provider-server').value = 'ivpn-loc';
+    bv('provider-server').dispatchEvent(new Event('change'));
+    bv('provider-name').value = 'IVPN Toronto';
+    bv('provider-save').click();
+    await wait();
+    assert(requests.some(x => x.action === 'addIvpnExit' && x.data.server === 'ivpn-loc') &&
+        bv('profile-list').textContent.includes('IVPN Toronto'), 'IVPN server did not reach the saved tunnel list.');
+    const nordNode = 'b'.repeat(64);
+    reply.dashboard.profiles.push({id:'proxy-' + nordNode, node:nordNode, kind:'proxy', provider:'nord',
+        providerLocation:'jp100.nordvpn.com', providerServer:'Japan', name:'Nord Japan'});
+    bv('refresh').click();
+    await wait();
+    assert(bv('profile-list').textContent.includes('Nord Japan') &&
+        [...bv('network-profile').querySelectorAll('optgroup')].some(group =>
+            group.label === 'NordVPN' && group.querySelector('option').value === 'proxy-' + nordNode),
+        'A userspace Nord tunnel must appear in both VPN Login and the NordVPN routing group.');
+    document.querySelector('[data-bv-section="network"]').click();
+    bv('add-tailnet-peer').click();
+    assert([...bv('profile').options].some(option => option.value === 'mysterium1') &&
+        [...bv('profile').options].some(option => option.value === 'ivpn1') &&
+        [...bv('profile').options].some(option => option.value === 'proxy-' + nordNode),
+        'Provider tunnels must be available to a Tailscale device.');
+    bv('close-assignment').click();
     assert(document.documentElement.scrollWidth <= window.innerWidth, 'document has horizontal overflow');
     document.querySelector('[data-bv-section="network"]').click();
     const expected = window.innerWidth < 768 ? 'block' : 'table';

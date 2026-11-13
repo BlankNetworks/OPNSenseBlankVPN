@@ -29,6 +29,9 @@
             provider: 'mullvad',
             vpnProviders: {},
             providerAccounts: {},
+            mystAuth: {},
+            ivpnAuth: {},
+            ivpnConfirmationAccount: '',
             nativeGateways: [],
             providerLocations: new Map(),
             serviceDestinations: new Map(),
@@ -91,7 +94,7 @@
 
         async function api(action, payload, path = '', controller = 'service') {
             const method = payload === undefined ? 'GET' : 'POST';
-            if (insecureWebGui && ['addProxyNode', 'addSubscription', 'importProxies', 'providerLogin', 'importProfile'].includes(action)) {
+            if (insecureWebGui && ['addProxyNode', 'addSubscription', 'importProxies', 'providerLogin', 'ivpnLogin', 'importProfile'].includes(action)) {
                 throw new Error('Open the OPNsense WebGUI over HTTPS before submitting credentials or configuration files.');
             }
             const request = {
@@ -125,7 +128,8 @@
                 }
                 throw new Error('The router did not return a readable result.');
             }
-            const catalogWithCache = ['relays', 'refreshRelays'].includes(action) && Array.isArray(response?.relays);
+            const catalogWithCache = (['relays', 'refreshRelays'].includes(action) && Array.isArray(response?.relays))
+                || (action === 'mystLocations' && Array.isArray(response?.locations) && response.locations.length > 0);
             if (response?.ok === false || (response?.error && !catalogWithCache)) {
                 throw new Error(response.error || 'The operation failed.');
             }
@@ -140,6 +144,7 @@
             status.dataset.kind = type;
             byId('message-title').hidden = type !== 'danger';
             byId('message-detail').textContent = text;
+            byId('message-dismiss').hidden = type !== 'danger' || !text;
             status.hidden = !text;
         }
 
@@ -247,11 +252,14 @@
         }
 
         function providerName(profile) {
+            if (state.vpnProviders[profile.provider]) {
+                return state.vpnProviders[profile.provider].name;
+            }
             if (profile.kind === 'proxy') {
                 const core = {mihomo: 'Mihomo', xray: 'Xray', 'sing-box': 'sing-box'}[profile.core];
                 return core ? core + ' proxies' : 'Proxy servers';
             }
-            return state.vpnProviders[profile.provider]?.name || (profile.relay ? 'Mullvad' : 'Other VPN');
+            return profile.relay ? 'Mullvad' : 'Other VPN';
         }
 
         function compareServers(a, b) {
@@ -270,6 +278,8 @@
             const signedIn = state.providerAccounts[provider] === true && !insecureWebGui;
             const supportedLogin = Boolean(details?.login);
             const password = details?.login === 'password';
+            const browserLogin = details?.login === 'browser';
+            const ivpn = provider === 'ivpn';
             const nodes = byId('provider-panel');
             byId('mullvad-provider').hidden = !mullvad;
             nodes.hidden = mullvad || !details;
@@ -280,23 +290,44 @@
             const guide = byId('provider-guide');
             guide.parentElement.hidden = !details.guide;
             guide.href = details.guide || '#';
-            byId('provider-login').hidden = signedIn || insecureWebGui || !supportedLogin;
+            byId('provider-login').hidden = signedIn || insecureWebGui || !supportedLogin || browserLogin || ivpn;
+            byId('ivpn-login').hidden = !ivpn || signedIn || insecureWebGui;
+            const totp = ivpn && state.ivpnAuth.challenge === 'totp';
+            byId('ivpn-confirmation-field').hidden = !totp;
+            byId('ivpn-confirmation').required = totp;
+            byId('ivpn-account').required = !totp || !state.ivpnConfirmationAccount;
+            byId('myst-login').hidden = signedIn || insecureWebGui || !browserLogin;
+            const approve = byId('myst-approve');
+            const approvalUrl = state.mystAuth.approvalUrl;
+            const pending = state.mystAuth.pending === true && typeof approvalUrl === 'string'
+                && approvalUrl.startsWith('https://app.mysteriumvpn.com/oauth/authorize?');
+            approve.hidden = !pending;
+            approve.href = pending ? approvalUrl : '#';
+            byId('myst-poll').hidden = !pending;
+            byId('myst-begin').hidden = pending;
             byId('provider-user-field').hidden = !password;
             byId('provider-user').required = password;
             byId('provider-secret-label').textContent = password ? 'PIA password'
                 : provider === 'azire' ? 'AzireVPN API token' : 'NordVPN router login token';
             byId('provider-status').textContent = supportedLogin
                 ? insecureWebGui ? 'Open the OPNsense WebGUI over HTTPS to sign in.'
-                    : signedIn ? 'Login saved on this router.' : 'Sign in to load the provider’s WireGuard servers.'
+                    : signedIn ? (ivpn && state.ivpnAuth.message ? state.ivpnAuth.message : 'Login saved on this router.')
+                    : browserLogin && pending ? 'Approve the sign-in in Mysterium VPN, then select Check approval.'
+                    : browserLogin && state.mystAuth.status === 'expired' ? 'The approval link expired. Sign in again.'
+                    : ivpn && state.ivpnAuth.message ? state.ivpnAuth.message
+                    : 'Sign in to load the provider’s WireGuard servers.'
                 : 'Import a WireGuard profile or add a VPN tunnel already configured in OPNsense.';
             byId('provider-logout').hidden = !signedIn;
             byId('provider-server-form').hidden = !signedIn;
-            byId('provider-country-field').hidden = provider !== 'nord';
-            byId('provider-country').disabled = provider !== 'nord';
+            byId('myst-type-field').hidden = !browserLogin;
+            byId('myst-dns-field').hidden = !browserLogin;
+            byId('provider-country-field').hidden = provider !== 'nord' && !ivpn;
+            byId('provider-country').disabled = provider !== 'nord' && !ivpn;
             byId('provider-import').hidden = insecureWebGui || ['express', 'vypr'].includes(provider);
             const saved = new Set(state.profiles.filter((item) => item.provider === provider).map((item) => item.providerLocation));
             const current = state.providerLocations.get(provider);
-            const country = byId('provider-country').disabled ? '' : byId('provider-country').value.trim().toUpperCase();
+            const country = browserLogin ? byId('myst-type').value
+                : byId('provider-country').disabled ? '' : byId('provider-country').value.trim().toUpperCase();
             const choices = current?.country === country ? current.servers.map((server) => ({
                 value: server.id, label: server.name + (saved.has(server.id) ? ' (saved)' : '')
             })) : [];
@@ -307,7 +338,7 @@
             })), 'Choose a tunnel gateway');
         }
 
-        async function loadProviderServers() {
+        async function loadProviderServers(refresh = false) {
             const provider = state.provider;
             if (provider === 'mullvad' || !state.providerAccounts[provider] || insecureWebGui) {
                 return;
@@ -316,7 +347,8 @@
             if (!field.reportValidity()) {
                 return;
             }
-            const country = field.disabled ? '' : field.value.trim().toUpperCase();
+            const myst = provider === 'mysterium';
+            const country = myst ? byId('myst-type').value : field.disabled ? '' : field.value.trim().toUpperCase();
             const reload = byId('provider-reload');
             if (reload.disabled) {
                 return;
@@ -325,16 +357,20 @@
             reload.disabled = true;
             status.textContent = 'Loading servers…';
             try {
-                const result = await api('providerServers', {provider, country});
-                const servers = array(result.servers);
+                const result = myst ? await api('mystLocations', {ipType: country, refresh})
+                    : provider === 'ivpn' ? await api('ivpnServers', {country})
+                    : await api('providerServers', {provider, country});
+                const servers = array(myst ? result.locations : result.servers);
                 state.providerLocations.set(provider, {country, servers});
                 if (provider === state.provider) {
-                    status.textContent = servers.length + ' servers available.';
+                    status.textContent = servers.length + (myst ? ' locations available.' : ' servers available.')
+                        + (result.stale ? ' Showing the last available list.' : '');
                     renderProvider();
                 }
             } catch (error) {
                 if (provider === state.provider) {
-                    status.textContent = errorMessage(error, 'The server list could not be loaded.');
+                    status.textContent = '';
+                    notice(errorMessage(error, 'The server list could not be loaded.'), 'danger');
                 }
             } finally {
                 reload.disabled = false;
@@ -501,11 +537,25 @@
             byId('observed').textContent = counts.join(' · ');
         }
 
+        function vpnStatus(profile) {
+            if (profile.disabled) {
+                return 'Disabled';
+            }
+            const test = state.tests.get(profile.node ? 'proxy:' + profile.node : 'exit:' + profile.id);
+            if (test?.kind === 'fail') {
+                return 'Error';
+            }
+            if (test?.kind === 'pass' || ['router probe succeeded', 'proxy probe succeeded'].includes(profile.reachability)) {
+                return 'Ready';
+            }
+            return 'Standby';
+        }
+
         function renderProfiles() {
             const body = byId('profile-list');
-            const vpns = state.profiles.filter((profile) => profile.kind !== 'proxy').sort(compareServers);
+            const vpns = state.profiles.filter((profile) => profile.kind !== 'proxy' || profile.provider === 'nord').sort(compareServers);
             if (!vpns.length) {
-                empty(body, 'No VPN tunnels have been added.');
+                empty(body, 'No VPN servers have been added.', 4);
             } else {
                 body.replaceChildren();
                 for (const profile of vpns) {
@@ -517,19 +567,10 @@
                     cell(row, profile.name || profile.relay, '', used + ' device assignment' + (used === 1 ? '' : 's')
                         + ' · ' + services + ' service' + (services === 1 ? '' : 's'));
                     cell(row, providerName(profile), '', profile.relay || profile.providerServer || profile.gateway || profile.protocol || 'Imported WireGuard');
-                    cell(row, profile.interface, '', profile.ipv6 ? 'IPv6 configured' : '');
-                    cell(row, date(profile.handshake ?? profile.latestHandshake));
-                    const received = formatBytes(profile.receivedBytes ?? profile.received);
-                    const sent = formatBytes(profile.sentBytes ?? profile.sent);
-                    const transfer = received || sent
-                        ? 'Tunnel counters · ' + (received || '—') + ' received · ' + (sent || '—') + ' sent'
-                        : '';
-                    const status = [
-                        shown(profile.status),
-                        profile.reachability,
-                        transfer
-                    ].filter(Boolean);
-                    cell(row, status.shift(), '', status.join(' · '));
+                    const status = cell(row, vpnStatus(profile));
+                    status.className = 'bv-vpn-status';
+                    status.dataset.vpnStatus = profile.id;
+                    status.setAttribute('aria-live', 'polite');
                     const actions = row.insertCell();
                     const remove = button('Remove', (event) => removeProfile(profile, event.currentTarget),
                         'Remove ' + profileName(profile.id));
@@ -538,9 +579,11 @@
                         remove.title = 'Remove this server from routing policies first.';
                     }
                     if (state.canManage) {
-                        appendConnectionTest(actions, 'testExit', profile.id, profileName(profile.id), '', profile.disabled === true);
-                        const edit = nameEditor(row, profile.name || profile.relay, profile.id, 'renameProfile',
-                            renderProfiles, (name) => { profile.name = name; });
+                        const dormant = profile.node && profile.id.startsWith('proxy-');
+                        appendConnectionTest(actions, dormant ? 'testProxyNode' : 'testExit',
+                            dormant ? profile.node : profile.id, profileName(profile.id), profile.node, profile.disabled === true);
+                        const edit = nameEditor(row, profile.name || profile.relay, profile.node || profile.id,
+                            profile.node ? 'renameProxyNode' : 'renameProfile', renderProfiles, (name) => { profile.name = name; });
                         if (edit) {
                             actions.append(edit);
                         }
@@ -548,7 +591,8 @@
                             const disabled = profile.disabled === true;
                             const toggle = button(disabled ? 'Enable' : 'Disable', (event) =>
                                 void mutate(event.currentTarget, () => api('setMullvadEnabled', {id: profile.id, enabled: disabled}),
-                                    disabled ? 'Mullvad server enabled.' : 'Mullvad server disabled.'));
+                                    disabled ? 'Mullvad server enabled.' : 'Mullvad server disabled.',
+                                    () => state.tests.delete('exit:' + profile.id)));
                             toggle.disabled = remove.disabled && !disabled;
                             actions.append(toggle);
                         }
@@ -695,7 +739,7 @@
                 disabled: 'Devices use your normal OPNsense routing.'
             };
             byId('coverage-note').textContent = network ? summary[mode]
-                : 'Select the interfaces to manage, then choose a LAN or Tailscale device below.';
+                : 'Select the interfaces to manage, then assign a saved server to a LAN or Tailscale device below.';
             const saved = state.settings;
             const active = Object.entries(saved?.networkRouting || {}).map(([id, route]) => {
                 const server = state.profiles.find((profile) => profile.interface === route.gateway);
@@ -1009,8 +1053,9 @@
             }
 
             const query = byId('proxy-search').value.trim().toLowerCase();
-            const filtered = state.proxyNodes.filter((node) => [node.name, node.host, proxyProtocol(node), node.core]
-                .some((value) => typeof value === 'string' && value.toLowerCase().includes(query)));
+            const filtered = state.proxyNodes.filter((node) => node.provider !== 'nord'
+                && [node.name, node.host, proxyProtocol(node), node.core]
+                    .some((value) => typeof value === 'string' && value.toLowerCase().includes(query)));
             const protocol = byId('proxy-filter').value;
             const matches = filtered.filter((node) => !protocol || proxyProtocol(node) === protocol);
             const pages = Math.max(1, Math.ceil(matches.length / 50));
@@ -1110,6 +1155,8 @@
                 state.presets = data.servicePresets || {};
                 state.vpnProviders = data.vpnProviders || {mullvad: {name: 'Mullvad'}};
                 state.providerAccounts = data.providerAccounts || {};
+                state.mystAuth = data.mystAuth || {};
+                state.ivpnAuth = data.ivpnAuth || {};
                 state.nativeGateways = array(data.nativeGateways);
                 const providers = Object.entries(state.vpnProviders).map(([value, details]) => ({value, label: details.name}))
                     .sort((a, b) => serviceOrder.compare(a.label, b.label));
@@ -1128,7 +1175,7 @@
                     state.mullvadLoginSaved = saved;
                     if (state.mullvadSignedIn && !signedIn) {
                         byId('account-status').textContent = saved ? 'Reconnecting saved Mullvad login…'
-                            : 'Mullvad sign-in expired. Sign in again to enable servers.';
+                            : 'Mullvad sign-in expired. Sign in again to add servers.';
                     }
                     setMullvadSignedIn(signedIn);
                     if (signedIn && !byId('account-status').textContent) {
@@ -1331,7 +1378,16 @@
             if (!window.confirm('Remove “' + profileName(profile.id) + '” from this router?')) {
                 return;
             }
-            void mutate(control, () => api('removeProfile', {id: profile.id}), 'Tunnel removed.');
+            const operation = profile.node && profile.provider === 'nord'
+                ? () => api('removeManagedNord', {id: profile.node})
+                : () => api('removeProfile', {id: profile.id});
+            void mutate(control, operation, 'VPN server removed.', () => {
+                if (profile.node) {
+                    state.proxyNodes = state.proxyNodes.filter((node) => node.id !== profile.node);
+                    state.proxyCatalogLoaded = false;
+                }
+                state.tests.delete(profile.node ? 'proxy:' + profile.node : 'exit:' + profile.id);
+            });
         }
 
         function relayCity(relay) {
@@ -1375,10 +1431,9 @@
             byId('relay-test').textContent = result?.text || '';
             byId('relay-test').dataset.result = result?.kind || '';
             const register = byId('register');
-            register.disabled = !relay || !state.mullvadSignedIn;
-            const enabled = relay && state.profiles.some((profile) => profile.relay === relay.id && !profile.disabled);
-            register.textContent = enabled ? 'Enabled' : 'Use server';
-            register.disabled ||= Boolean(enabled);
+            const saved = relay && state.profiles.some((profile) => profile.relay === relay.id);
+            register.textContent = saved ? 'Already added' : 'Add server';
+            register.disabled = !relay || !state.mullvadSignedIn || Boolean(saved);
             byId('test-relay').disabled = !relay || !state.mullvadSignedIn ||
                 state.tests.get('relay:' + relay.id)?.kind === 'pending';
         }
@@ -1393,7 +1448,22 @@
             const key = nodeId ? 'proxy:' + nodeId : (action === 'testDeviceRoute' ? 'device:' : 'exit:') + id;
             const status = document.createElement('small');
             status.className = 'bv-test-result';
-            status.setAttribute('role', 'status');
+            const detail = document.createElement('span');
+            detail.setAttribute('role', 'status');
+            const dismiss = document.createElement('button');
+            dismiss.type = 'button';
+            dismiss.className = 'bv-test-dismiss';
+            dismiss.textContent = '×';
+            dismiss.setAttribute('aria-label', 'Dismiss test error for ' + name);
+            dismiss.addEventListener('click', () => {
+                const result = state.tests.get(key);
+                if (result?.kind === 'fail') {
+                    result.dismissed = true;
+                    updateConnectionTest(control, status);
+                    control.focus();
+                }
+            });
+            status.append(detail, dismiss);
             const control = button(title, () => void testConnection(action, id, key, Boolean(nodeId)), title + ' ' + name);
             control.dataset.testKey = key;
             control.dataset.proxyTest = String(Boolean(nodeId));
@@ -1406,8 +1476,9 @@
         function updateConnectionTest(control, status) {
             const result = state.tests.get(control.dataset.testKey);
             control.disabled = control.dataset.disabled === 'true' || result?.kind === 'pending' || (control.dataset.proxyTest === 'true' && state.proxyTestRunning);
-            status.hidden = !result;
-            status.textContent = result?.text || '';
+            status.hidden = !result || result.dismissed === true;
+            status.firstElementChild.textContent = result?.text || '';
+            status.lastElementChild.hidden = result?.kind !== 'fail';
             status.dataset.result = result?.kind || '';
         }
 
@@ -1462,6 +1533,14 @@
                 refreshConnectionTests();
                 if (relay) {
                     renderRelayChoice();
+                } else if (action === 'testExit' || action === 'testProxyNode') {
+                    const profile = state.profiles.find((item) =>
+                        item.id === id || (item.node && 'proxy:' + item.node === key));
+                    const status = [...byId('profile-list').querySelectorAll('[data-vpn-status]')]
+                        .find((cell) => cell.dataset.vpnStatus === profile?.id);
+                    if (status && profile) {
+                        status.textContent = vpnStatus(profile);
+                    }
                 }
             }
         }
@@ -1548,7 +1627,8 @@
                 renderMullvadAccount(response);
             } catch (error) {
                 setMullvadSignedIn(false);
-                target.textContent = errorMessage(error, 'Account information is unavailable.');
+                target.textContent = '';
+                notice(errorMessage(error, 'Account information is unavailable.'), 'danger');
             } finally {
                 state.signingIn = false;
                 control.disabled = false;
@@ -1563,7 +1643,8 @@
             const expiry = response.expiresAt ?? response.expiry;
             target.textContent = (state.mullvadLoginSaved ? 'Signed in to Mullvad. Login saved. ' : 'Signed in to Mullvad. ') + devices.length + (limit ? ' of ' + limit : '') + ' device slots used.'
                 + (expiry ? (response.expired ? ' Account expired ' : ' Account expires ') + date(expiry) + '.' : '')
-                + (response.canAddDevices === false ? ' Mullvad reports that this account cannot add a device.' : '');
+                + (!response.expired && (response.canAddDevices === false || response.availableSlots === 0)
+                    ? ' New registrations are unavailable. A registration from a removed server may be reusable.' : '');
             if (devices.length) {
                 const names = document.createElement('ul');
                 for (const device of devices) {
@@ -1618,6 +1699,13 @@
             return size.toFixed(1) + ' ' + units[unit];
         }
 
+        byId('message-dismiss').addEventListener('click', (event) => {
+            const focused = document.activeElement === event.currentTarget;
+            notice('');
+            if (focused) {
+                root.querySelector('[data-bv-section][aria-pressed="true"]')?.focus();
+            }
+        });
         byId('refresh').addEventListener('click', async (event) => {
             const control = event.currentTarget;
             control.disabled = true;
@@ -1714,10 +1802,13 @@
             }
             if (provider !== state.provider) {
                 state.provider = provider;
-                for (const id of ['provider-login', 'provider-server-form', 'provider-import', 'provider-native']) {
+                state.ivpnConfirmationAccount = '';
+                for (const id of ['provider-login', 'ivpn-login', 'provider-server-form', 'provider-import', 'provider-native']) {
                     byId(id).reset();
                 }
-                byId('provider-country').value = state.providerLocations.get(provider)?.country || '';
+                const locationFilter = state.providerLocations.get(provider)?.country;
+                byId('provider-country').value = ['nord', 'ivpn'].includes(provider) ? locationFilter || '' : '';
+                byId('myst-type').value = provider === 'mysterium' ? locationFilter || 'hosting' : 'hosting';
                 byId('provider-server-status').textContent = '';
                 byId('provider-manual').open = !state.vpnProviders[provider].login;
                 byId('account').value = '';
@@ -1746,16 +1837,68 @@
                 void loadProviderServers();
             });
         });
+        function updateMystAuth(result) {
+            state.mystAuth = result;
+            state.providerAccounts.mysterium = result.authenticated === true;
+            renderProvider();
+            if (result.authenticated) {
+                void loadProviderServers();
+            }
+        }
+
+        byId('myst-begin').addEventListener('click', (event) => {
+            void mutate(event.currentTarget, () => api('mystBeginAuth', {}), 'Mysterium approval link created.', updateMystAuth);
+        });
+        byId('myst-poll').addEventListener('click', (event) => {
+            void mutate(event.currentTarget, async () => {
+                const result = await api('mystPollAuth', {});
+                return {...result, message: result.authenticated ? 'Mysterium VPN login saved.'
+                    : result.pending ? 'Mysterium is still waiting for approval.' : 'Start a new Mysterium sign-in.'};
+            }, 'Mysterium VPN sign-in checked.', updateMystAuth);
+        });
+        byId('myst-type').addEventListener('change', () => {
+            renderProvider();
+            void loadProviderServers();
+        });
+        byId('ivpn-login').addEventListener('submit', (event) => {
+            event.preventDefault();
+            if (state.busy || insecureWebGui) {
+                return;
+            }
+            const account = byId('ivpn-account');
+            const confirmation = byId('ivpn-confirmation');
+            const payload = {account: account.value.trim() || state.ivpnConfirmationAccount, confirmation: confirmation.value.trim()};
+            account.value = '';
+            confirmation.value = '';
+            void mutate(event.submitter, async () => {
+                const result = await api('ivpnLogin', payload);
+                return {...result, message: result.message || (result.authenticated ? 'IVPN login saved.' : 'Finish signing in to IVPN.')};
+            }, 'IVPN sign-in checked.', (result) => {
+                state.ivpnAuth = result;
+                state.ivpnConfirmationAccount = result.challenge === 'totp' ? payload.account : '';
+                state.providerAccounts.ivpn = result.saved === true;
+                renderProvider();
+                if (result.saved) {
+                    void loadProviderServers();
+                }
+            });
+        });
         byId('provider-logout').addEventListener('click', (event) => {
             const provider = state.provider;
             void mutate(event.currentTarget, () => api('providerLogout', {provider}), 'Signed out. Saved tunnels can still be used.', () => {
                 state.providerAccounts[provider] = false;
+                if (provider === 'mysterium') {
+                    state.mystAuth = {};
+                } else if (provider === 'ivpn') {
+                    state.ivpnAuth = {};
+                    state.ivpnConfirmationAccount = '';
+                }
                 state.providerLocations.delete(provider);
                 byId('provider-server-status').textContent = '';
                 renderProvider();
             });
         });
-        byId('provider-reload').addEventListener('click', () => void loadProviderServers());
+        byId('provider-reload').addEventListener('click', () => void loadProviderServers(true));
         byId('provider-country').addEventListener('input', renderProvider);
         byId('provider-server').addEventListener('change', renderProvider);
         byId('provider-server-form').addEventListener('submit', (event) => {
@@ -1765,7 +1908,11 @@
                 provider, server: byId('provider-server').value, name: byId('provider-name').value.trim(),
                 country: byId('provider-country').disabled ? '' : byId('provider-country').value.trim().toUpperCase()
             };
-            void mutate(event.submitter, () => api('addProviderExit', payload), 'VPN server saved.', () => {
+            const operation = provider === 'mysterium' ? () => api('addMystExit', {
+                server: payload.server, name: payload.name, ipType: byId('myst-type').value, dns: byId('myst-dns').value.trim()
+            }) : provider === 'ivpn' ? () => api('addIvpnExit', {server: payload.server, name: payload.name, country: payload.country})
+                : () => api('addProviderExit', payload);
+            void mutate(event.submitter, operation, 'VPN server added.', () => {
                 byId('provider-name').value = '';
                 byId('provider-server').value = '';
             }).then(renderProvider);
@@ -1830,7 +1977,7 @@
                 return;
             }
             const payload = {relay: byId('relay').value, name: byId('register-name').value.trim()};
-            void mutate(event.submitter, () => api('register', payload), 'Enabled ' + payload.relay + '.', (result) => {
+            void mutate(event.submitter, () => api('register', payload), 'Mullvad server added.', (result) => {
                 if (result.profile) {
                     state.tests.delete('exit:' + result.profile);
                 }

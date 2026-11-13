@@ -13,6 +13,8 @@ final class FixtureMullvad extends Mullvad
     public array $deviceRecords = [];
     public int $relayCalls = 0;
     public int $creates = 0;
+    public int $maxDevices = 1;
+    private int $keys = 0;
     public bool $catalogOffline = false;
     public bool $expireAccount = false;
     public bool $responseLost = false;
@@ -51,7 +53,7 @@ final class FixtureMullvad extends Mullvad
                 'id' => '00000000-0000-4000-8000-000000000000',
                 'expiry' => gmdate(DATE_ATOM, time() + ($this->expireAccount ? -3600 : 3600)),
                 'can_add_devices' => true,
-                'max_devices' => 1,
+                'max_devices' => $this->maxDevices,
             ];
         }
         check($path === '/accounts/v1/devices', 'Unexpected account API endpoint.');
@@ -61,11 +63,11 @@ final class FixtureMullvad extends Mullvad
         check(array_keys($body) === ['pubkey', 'hijack_dns'] && $body['hijack_dns'] === false, 'Only the public key and DNS option should leave the router.');
         $this->creates++;
         $device = [
-            'id' => '00000000-0000-4000-8000-000000000001',
+            'id' => sprintf('00000000-0000-4000-8000-%012d', count($this->deviceRecords) + 1),
             'name' => 'Fixture Key',
             'pubkey' => $body['pubkey'],
-            'ipv4_address' => '10.64.0.9/32',
-            'ipv6_address' => 'fc00:bbbb:bbbb:bb01::9/128',
+            'ipv4_address' => '10.64.0.' . (9 + count($this->deviceRecords)) . '/32',
+            'ipv6_address' => 'fc00:bbbb:bbbb:bb01::' . (9 + count($this->deviceRecords)) . '/128',
         ];
         $this->deviceRecords[] = $device;
         if ($this->responseLost) {
@@ -80,7 +82,7 @@ final class FixtureMullvad extends Mullvad
             return parent::wireGuardKey($command, $privateKey);
         }
         // Exercise the registration protocol on development machines without WireGuard.
-        return $command === 'genkey' ? base64_encode(str_repeat('p', 32)) : base64_encode(hash('sha256', $privateKey, true));
+        return $command === 'genkey' ? base64_encode(hash('sha256', spl_object_id($this) . ':' . ++$this->keys, true)) : base64_encode(hash('sha256', $privateKey, true));
     }
 }
 
@@ -184,6 +186,23 @@ try {
         check($reused['id'] === $identity['id'] && $reused['publicKey'] === $identity['publicKey'] &&
             $restarted->creates === 0, 'Changing servers and reloading the package must preserve the registered identity.');
     }
+
+    expectFailure(fn () => $restarted->registerRouterWithToken($token, 'jp-tyo-wg-001',
+        [$identity['publicKey']]), '1 of 1 device slots');
+    $restarted->maxDevices = 2;
+    // Skip the legacy key while it belongs to a saved tunnel. Preserve a second key across a lost response.
+    $restarted->responseLost = true;
+    expectFailure(fn () => $restarted->registerRouterWithToken($token, 'jp-tyo-wg-001',
+        [$identity['publicKey']]), 'available for retrying');
+    $restarted->responseLost = false;
+    $second = $restarted->registerRouterWithToken($token, 'jp-tyo-wg-001', [$identity['publicKey']]);
+    check($second['publicKey'] !== $identity['publicKey'] && $second['address'] !== $identity['address'] &&
+        $restarted->creates === 1, 'A second saved server needs its own address and a recoverable device registration.');
+    expectFailure(fn () => $restarted->registerRouterWithToken($token, 'us-chi-wg-001',
+        [$identity['publicKey'], $second['publicKey']]), '2 of 2 device slots');
+    $reused = $restarted->registerRouterWithToken($token, 'us-chi-wg-001', [$second['publicKey']]);
+    check($reused['publicKey'] === $identity['publicKey'] && $restarted->creates === 1,
+        'Removing a saved tunnel must make its registered key reusable even when the account is full.');
 
     $privateKey = base64_encode(str_repeat('p', 32));
     $publicKey = base64_encode(str_repeat('r', 32));
