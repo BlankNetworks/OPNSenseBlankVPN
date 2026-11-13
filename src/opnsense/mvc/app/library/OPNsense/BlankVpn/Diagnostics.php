@@ -435,6 +435,17 @@ final class Diagnostics
         return in_array(['interface' => $interface, 'ip' => $ip, 'mac' => $mac], $this->reservations(), true);
     }
 
+    public function hasRoutedTraffic(string $ip, string $rule): bool
+    {
+        foreach ($this->connections($ip)['connections'] as $session) {
+            if ($session['source'] === $ip && $session['rule'] === $rule &&
+                ($session['packets'][0] ?? 0) > 0 && ($session['packets'][1] ?? 0) > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public function connections(string $ip): array
     {
         $ip = self::ip($ip);
@@ -463,6 +474,7 @@ final class Diagnostics
                 'stateId' => $validKey ? $parts[1] : null,
                 'creatorId' => $validKey ? $parts[2] : null,
                 'source' => $source,
+                'rule' => self::label($state['label'] ?? ''),
                 'sourcePort' => self::port($state['src_port'] ?? null),
                 'destination' => $destination,
                 'destinationPort' => self::port($state['dst_port'] ?? null),

@@ -369,7 +369,7 @@ final class ProxyCores
         try {
             if ($live) {
                 Firewall::reload($model);
-                foreach (Policy::assignments($model) as $assignment) {
+                foreach (Policy::assignments($model, true) as $assignment) {
                     if ($assignment['failure'] !== 'wan' &&
                         (isset($affected[$assignment['profile']]) || isset($affected[$assignment['backup']]))) {
                         Operations::resetKillSwitch($assignment['ip']);

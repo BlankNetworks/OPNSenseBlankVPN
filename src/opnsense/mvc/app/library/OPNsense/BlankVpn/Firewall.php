@@ -151,8 +151,8 @@ final class Firewall
             $interface = $row['interface'];
             $ip = $row['ip'];
             if (
-                !in_array($interface, $settings['interfaces'], true) || empty($interfaces[$interface]['if']) ||
-                !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+                Policy::assignmentPaused($row) || !in_array($interface, $settings['interfaces'], true) ||
+                empty($interfaces[$interface]['if']) || !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
             ) {
                 continue;
             }
@@ -353,7 +353,7 @@ final class Firewall
                 if ($row['interface'] !== $interface) {
                     continue;
                 }
-                $mode = Policy::mode($row);
+                $mode = Policy::assignmentPaused($row) ? 'disabled' : Policy::mode($row);
                 $included = $mode === 'multi' && $diagnostics !== null &&
                     self::hasAssignmentIdentity($settings, $row, $diagnostics);
                 if ($assignedOnly ? !$included : ($included || $mode === 'default')) {
@@ -366,6 +366,8 @@ final class Firewall
                     $sources[] = $source;
                     if ($assignedOnly) {
                         self::redirectDns($firewall, $interface, $source, SmartRouting::PORT, $id, 64, false, $family);
+                    } elseif (Policy::assignmentPaused($row)) {
+                        self::bypassSmartDns($firewall, $interface, $source, $family);
                     }
                 }
             }
@@ -626,7 +628,7 @@ final class Firewall
         if (!$settings['enabled']) {
             return;
         }
-        $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model) : [];
+        $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model, true) : [];
         foreach ($assignments as $id => $row) {
             $mode = Policy::mode($row);
             if (($mode === 'blocked' || ($mode === 'full' && $row['failure'] !== 'wan')) &&

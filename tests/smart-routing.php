@@ -286,6 +286,8 @@ namespace {
         'kind' => 'tailnet', 'interface' => Policy::TAILSCALE_DEVICE, 'ip' => '100.101.102.103',
         'ipv6' => 'fd7a:115c:a1e0::103', 'mac' => ''
     ]);
+    checkRouting(!Policy::assignmentPaused($tailnet) && Policy::assignmentPaused($tailnet + ['paused' => '1']) &&
+        !Policy::assignmentPaused($assignment + ['paused' => '1']), 'Saved LAN and legacy Tailscale rules stay enabled.');
     $tailnetSettings = array_replace($settings, ['interfaces' => [Policy::TAILSCALE_DEVICE], 'tailscaleInterfaces' => []]);
     $tailnetInterfaces = [Policy::TAILSCALE_DEVICE => ['if' => Policy::TAILSCALE_DEVICE]];
     $nativePeer = new Plugin();
@@ -296,6 +298,11 @@ namespace {
         $tailnetPass['gateway'] === 'VPN' && $nativePeer->nat[0]['from'] === $tailnet['ip'] &&
         $nativePeer->rules[Policy::marker('kill_v6', 'native-peer')]['from'] === $tailnet['ipv6'],
         'A native peer routes through its VPN and blocks IPv6 with a kill switch.');
+    $pausedPeer = new Plugin();
+    $compileDevice->invoke(null, $pausedPeer, $tailnetSettings, $tailnetInterfaces,
+        ['native-peer' => $tailnet + ['paused' => '1']], $profiles, [], $diag);
+    checkRouting($pausedPeer->rules === [] && $pausedPeer->nat === [] && $pausedPeer->dns === [],
+        'A paused Tailscale rule must produce no route, DNS redirect, or kill switch.');
     $native->disableSNAT = '0';
     $userspace = new Plugin();
     $compileDevice->invoke(null, $userspace, $tailnetSettings, $tailnetInterfaces,

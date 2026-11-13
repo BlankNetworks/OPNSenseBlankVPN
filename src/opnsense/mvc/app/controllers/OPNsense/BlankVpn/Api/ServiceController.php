@@ -118,6 +118,7 @@ class ServiceController extends ApiControllerBase
                     });
                 $row['mode'] = $mode;
                 $row['killSwitch'] = Policy::killSwitch($row);
+                $row['paused'] = Policy::assignmentPaused($row);
                 $assignments[$id] = $row + [
                     'device' => $row['interface'] . '/' . (($row['kind'] ?? '') === 'tailnet' ? $row['ip'] : $row['mac']),
                     'verified' => false,
@@ -215,28 +216,71 @@ class ServiceController extends ApiControllerBase
             if ($route === null) {
                 throw new \DomainException('Select a configured exit.');
             }
-            if (($route['kind'] ?? '') === 'proxy') {
-                return ProxyRuntime::testNode($route['node'], $route);
+            return $this->probeExit($model, $route);
+        }), true, true);
+    }
+
+    public function testDeviceRouteAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $model = new BlankVpn();
+            $settings = Policy::settings($model);
+            $id = $this->input('id', 64);
+            $assignment = Policy::assignments($model, true)[$id] ?? null;
+            if (!$settings['enabled'] || $settings['coverage'] !== 'device' || $assignment === null ||
+                Policy::mode($assignment) !== 'full') {
+                throw new \DomainException('Enable a one-server device rule to test its route.');
             }
-            if (!self::routeConfigured($route)) {
-                $detail = ($route['kind'] ?? '') === 'native' ? 'The attached OPNsense gateway changed.'
-                    : (WireGuard::check($route)['error'] ?? 'The WireGuard configuration is unavailable.');
-                throw new \DomainException($detail);
+            $routes = Policy::routes($model);
+            $assigned = $routes[$assignment['profile']] ?? null;
+            if ($assigned === null) {
+                throw new \DomainException('The assigned VPN or proxy is unavailable.');
             }
+            $marker = Policy::marker('device', $id);
             $loaded = Firewall::loadedRules();
+            $gateway = $loaded[$marker]['gateway'] ?? null;
+            $backup = $assignment['failure'] === 'backup' ? ($routes[$assignment['backup']] ?? null) : null;
+            $usingBackup = $gateway !== null && $gateway === ($backup['interface'] ?? null);
+            $route = $usingBackup ? $backup : $assigned;
+            $ruleLoaded = $gateway !== null && $gateway === ($route['interface'] ?? null);
+            $probe = $this->probeExit($model, $route);
+            $observed = 'inactive';
             if ($loaded === null) {
-                throw new \RuntimeException('Blank VPN could not read the active firewall rules from configd.');
-            }
-            if (!Firewall::probePathInstalled($route, $loaded)) {
-                Firewall::reload($model);
-                if (!Firewall::probePathInstalled($route, Firewall::loadedRules() ?? [])) {
-                    throw new \RuntimeException('OPNsense did not load the protected test route. Check the exit gateway and firewall status.');
+                $observed = 'unavailable';
+            } elseif ($ruleLoaded) {
+                try {
+                    $observed = (new Diagnostics())->hasRoutedTraffic($assignment['ip'], $marker) ? 'seen' : 'unseen';
+                } catch (\RuntimeException) {
+                    $observed = 'unavailable';
                 }
             }
-            return ($route['kind'] ?? '') === 'native'
-                ? WireGuard::probeSource($route['address'])
-                : WireGuard::probe($route, true);
+            return $probe + ['deviceTraffic' => $observed, 'usingBackup' => $usingBackup];
         }), true, true);
+    }
+
+    private function probeExit(BlankVpn $model, array $route): array
+    {
+        if (($route['kind'] ?? '') === 'proxy') {
+            return ProxyRuntime::testNode($route['node'], $route);
+        }
+        if (!self::routeConfigured($route)) {
+            $detail = ($route['kind'] ?? '') === 'native' ? 'The attached OPNsense gateway changed.'
+                : (WireGuard::check($route)['error'] ?? 'The WireGuard configuration is unavailable.');
+            throw new \DomainException($detail);
+        }
+        $loaded = Firewall::loadedRules();
+        if ($loaded === null) {
+            throw new \RuntimeException('Blank VPN could not read the active firewall rules from configd.');
+        }
+        if (!Firewall::probePathInstalled($route, $loaded)) {
+            Firewall::reload($model);
+            if (!Firewall::probePathInstalled($route, Firewall::loadedRules() ?? [])) {
+                throw new \RuntimeException('OPNsense did not load the protected test route. Check the exit gateway and firewall status.');
+            }
+        }
+        return ($route['kind'] ?? '') === 'native'
+            ? WireGuard::probeSource($route['address'])
+            : WireGuard::probe($route, true);
     }
 
     public function testProxyNodeAction()
@@ -712,7 +756,8 @@ class ServiceController extends ApiControllerBase
                     if ($mode === 'multi' && in_array($row['interface'], $strict, true)) {
                         throw new \DomainException('Remove Multi-Path device rules before enabling Block devices without a rule on their interface.');
                     }
-                    if ($enabled && $coverage === 'device' && (!$before['enabled'] || $before['coverage'] !== 'device') &&
+                    if ($enabled && $coverage === 'device' && !Policy::assignmentPaused($row) &&
+                        (!$before['enabled'] || $before['coverage'] !== 'device') &&
                         ($nativeTailnet || $mode === 'blocked' ||
                         ($mode === 'full' && $row['failure'] !== 'wan') || Policy::killSwitch($row))) {
                         $reset[] = $row['ip'];
@@ -961,9 +1006,10 @@ class ServiceController extends ApiControllerBase
                     ($prior['backup'] ?? '') !== ($failure === 'backup' ? $backup : '') ||
                     ($prior['failure'] ?? '') !== $failure ||
                     Policy::killSwitch($prior) !== Policy::killSwitch(Policy::fields($node));
+                $live = $settings['enabled'] && !Policy::assignmentPaused($prior);
                 return [
-                    'settings' => $settings, 'reload' => $settings['enabled'], 'dhcpProvider' => $provider,
-                    'killSwitchReset' => $settings['enabled'] && $changed ?
+                    'settings' => $settings, 'reload' => $live, 'dhcpProvider' => $provider,
+                    'killSwitchReset' => $live && $changed ?
                         array_values(array_unique(array_filter([$ip, $ipv6, $prior['ip'] ?? '', $prior['ipv6'] ?? '']))) : []
                 ];
             });
@@ -980,6 +1026,41 @@ class ServiceController extends ApiControllerBase
                 }
             }
             return $result;
+        }), true, true);
+    }
+
+    public function setTailnetRuleEnabledAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $id = $this->input('id', 64);
+            if (!$this->request->hasPost('enabled')) {
+                throw new \DomainException('Choose whether to enable or disable this Tailscale rule.');
+            }
+            $enable = $this->flag('enabled');
+            $result = Operations::change(function (BlankVpn $model) use ($id, $enable) {
+                $row = Policy::assignments($model)[$id] ?? null;
+                if (($row['kind'] ?? '') !== 'tailnet') {
+                    throw new \DomainException('Select a saved Tailscale rule.');
+                }
+                if (Policy::assignmentPaused($row) === !$enable) {
+                    return ['killSwitchReset' => []];
+                }
+                $settings = Policy::settings($model);
+                $live = $settings['enabled'] && $settings['coverage'] === 'device';
+                if ($enable && $live && $row['interface'] === Policy::TAILSCALE_DEVICE) {
+                    $diagnostics = new Diagnostics();
+                    $setup = $diagnostics->nativeTailnetSetup($diagnostics->tailnetStatus());
+                    if (!$setup['ready']) {
+                        throw new \DomainException($setup['reason']);
+                    }
+                }
+                $model->assignments->assignment->getChild($id)->paused = $enable ? '0' : '1';
+                return [
+                    'reload' => $live,
+                    'killSwitchReset' => $live ? array_values(array_filter([$row['ip'], $row['ipv6'] ?? ''])) : []
+                ];
+            });
+            return ['killSwitchReset' => $result['killSwitchReset'] !== []];
         }), true, true);
     }
 

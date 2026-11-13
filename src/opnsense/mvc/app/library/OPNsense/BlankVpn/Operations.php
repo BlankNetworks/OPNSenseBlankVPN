@@ -163,7 +163,7 @@ final class Operations
             throw new \RuntimeException('The Blank VPN proxy exits could not be reconciled.');
         }
         $settings = Policy::effectiveRouting($model);
-        $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model) : [];
+        $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model, true) : [];
         $watchOutages = self::watchMultiPathOutages($settings, $assignments);
         $before = $watchOutages ? Firewall::loadedRules() : null;
         // Load DNS destination tables before a resolver can begin filling them.

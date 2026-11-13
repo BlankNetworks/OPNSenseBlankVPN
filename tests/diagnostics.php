@@ -127,7 +127,7 @@ namespace {
             ['id' => '0000000012345678/abcdef01', 'src_addr' => '192.168.10.5', 'src_port' => '10000',
                 'dst_addr' => '198.51.100.2', 'dst_port' => '443', 'proto' => 'tcp', 'iface' => 'igc0',
                 'direction' => 'out', 'state' => 'ESTABLISHED:ESTABLISHED', 'age' => '00:04:05',
-                'bytes' => [321, 4321], 'pkts' => [4, 5], 'route-to' => '10.10.0.2'],
+                'bytes' => [321, 4321], 'pkts' => [4, 5], 'route-to' => '10.10.0.2', 'label' => 'blankvpn_device_fixture'],
             ['id' => '0000000012345679/abcdef01', 'src_addr' => '192.168.10.6', 'dst_addr' => '198.51.100.4',
                 'nat_addr' => '192.168.10.5'],
         ]],
@@ -169,6 +169,11 @@ namespace {
     check($sessions['connections'][0]['bytes'] === [321, 4321], 'Directional firewall counters');
     check($sessions['connections'][0]['stateId'] === '0000000012345678'
         && $sessions['connections'][0]['creatorId'] === 'abcdef01', 'Native PF state identifiers');
+
+    check($diagnostics->hasRoutedTraffic('192.168.10.5', 'blankvpn_device_fixture') &&
+        !$diagnostics->hasRoutedTraffic('192.168.10.5', 'blankvpn_other_rule') &&
+        !$diagnostics->hasRoutedTraffic('192.168.10.6', 'blankvpn_device_fixture'),
+        'A device probe requires both the saved address and the policy rule label.');
 
     $tunnels = $diagnostics->tunnels();
     check($tunnels['wg4']['handshakeRecent'] && $tunnels['wg4']['reachability'] === 'unverified', 'Handshake and path status');

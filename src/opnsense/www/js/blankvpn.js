@@ -328,8 +328,9 @@
                 const reserveIp = !tailnet && !reserved && Boolean(device?.leaseProvider);
                 const canUseInterface = tailnet ? nativeTailnet || transit.length > 0 : managed.includes(interfaceId);
                 const blocked = assignment?.killSwitchActive === true;
+                const paused = assignment?.paused === true;
                 const status = assignment
-                    ? (wholeNetwork ? 'Paused by Whole-Network coverage' : !state.settings?.enabled
+                    ? (paused ? 'Disabled' : wholeNetwork ? 'Paused by Whole-Network coverage' : !state.settings?.enabled
                         ? 'Saved · Routing off' : assignment.appliedRoute || 'Rule saved')
                     : !canUseInterface ? (tailnet ? 'Exit node setup needed' : 'Interface outside coverage')
                         : !reserved && !reserveIp ? (tailnet ? 'Both Tailscale addresses needed' : 'DHCP reservation needed')
@@ -344,13 +345,29 @@
                 }
                 cell(row, assignment ? modes[assignment.mode] || 'Regular internet' : 'No rule', 'Rule',
                     assignment?.profile ? profileName(assignment.profile) : '');
-                cell(row, status, 'Status', wholeNetwork ? '' : blocked ? 'Kill Switch blocking internet'
+                cell(row, status, 'Status', wholeNetwork || paused ? '' : blocked ? 'Kill Switch blocking internet'
                     : assignment?.killSwitch ? 'Kill Switch on' : '');
                 const actions = row.insertCell();
                 actions.setAttribute('role', 'cell');
                 if (state.canManage && !wholeNetwork) {
                     if (assignment) {
                         actions.append(button('Edit', () => openAssignment(assignment), 'Edit ' + name));
+                        if (state.settings?.enabled && !paused && assignment.mode === 'full' && assignment.profile) {
+                            appendConnectionTest(actions, 'testDeviceRoute', assignment.id, name, '', false, 'Ping');
+                        }
+                        if (tailnet) {
+                            const action = paused ? 'Enable' : 'Disable';
+                            actions.append(button(action, (event) => {
+                                if (!paused && assignment.killSwitch &&
+                                    !window.confirm('Disable this Tailscale rule? Its Kill Switch will also pause.')) {
+                                    return;
+                                }
+                                void mutate(event.currentTarget,
+                                    () => api('setTailnetRuleEnabled', {id: assignment.id, enabled: paused}),
+                                    paused ? 'Tailscale rule enabled.' : 'Tailscale rule disabled.',
+                                    () => state.tests.delete('device:' + assignment.id));
+                            }, action + ' ' + name));
+                        }
                     } else {
                         actions.append(button('Select', () => openAssignment(null, tailnet ? 'tailnet' : 'lan', {
                             ip, ipv6: tailnet || routableV6.length === 1 ? routableV6[0] : '',
@@ -1213,12 +1230,12 @@
             await testConnection('testRelay', relay, key, false);
         }
 
-        function appendConnectionTest(actions, action, id, name, nodeId = '', disabled = false) {
-            const key = nodeId ? 'proxy:' + nodeId : 'exit:' + id;
+        function appendConnectionTest(actions, action, id, name, nodeId = '', disabled = false, title = 'Test') {
+            const key = nodeId ? 'proxy:' + nodeId : (action === 'testDeviceRoute' ? 'device:' : 'exit:') + id;
             const status = document.createElement('small');
             status.className = 'bv-test-result';
             status.setAttribute('role', 'status');
-            const control = button('Test', () => void testConnection(action, id, key, Boolean(nodeId)), 'Test ' + name);
+            const control = button(title, () => void testConnection(action, id, key, Boolean(nodeId)), title + ' ' + name);
             control.dataset.testKey = key;
             control.dataset.proxyTest = String(Boolean(nodeId));
             control.dataset.disabled = String(disabled);
@@ -1256,6 +1273,21 @@
             }
             try {
                 const result = await api(action, relay ? {relay: id} : {id});
+                if (action === 'testDeviceRoute') {
+                    const target = result.usingBackup ? 'Backup server' : 'Assigned server';
+                    const reachability = result.reachable === true
+                        ? target + ' · router HTTPS ' + result.milliseconds + ' ms'
+                        : target + ' · ' + (result.detail || 'router HTTPS failed');
+                    const observation = {
+                        seen: 'Device traffic seen in both directions',
+                        unseen: 'No matching device traffic yet. Open a new page on the device and try again.',
+                        inactive: 'Device rule has no active VPN path',
+                        unavailable: 'Device traffic status unavailable'
+                    };
+                    state.tests.set(key, {kind: result.reachable === true && result.deviceTraffic === 'seen' ? 'pass' : 'fail',
+                        text: reachability + ' · ' + observation[result.deviceTraffic]});
+                    return;
+                }
                 state.tests.set(key, relay ? (result.replied
                     ? {kind: 'pass', text: 'ICMP reply · ' + result.milliseconds + ' ms'}
                     : {kind: 'fail', text: 'No ICMP reply. The WireGuard service may still be available.'})
@@ -1488,6 +1520,9 @@
                 failure: byId('device-kill').checked || byId('mode').value !== 'full' ? 'block' : byId('failure').value
             };
             void mutate(event.submitter, () => api('assign', payload), 'Device assignment saved.', () => {
+                if (state.editing) {
+                    state.tests.delete('device:' + state.editing.id);
+                }
                 byId('assignment').hidden = true;
                 state.editing = null;
             });

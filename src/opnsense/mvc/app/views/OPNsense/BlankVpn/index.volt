@@ -206,7 +206,11 @@
 
     <div id="bv-network-page" data-bv-panel="network" hidden>
         <section class="bv-panel" aria-labelledby="bv-settings-title" data-manage-only>
-            <h2 id="bv-settings-title">Routing coverage</h2>
+            <div class="bv-heading">
+                <h2 id="bv-settings-title">Routing coverage</h2>
+                <button type="button" id="bv-disable-routing" class="btn btn-danger" hidden>Disable VPN</button>
+            </div>
+            <p id="bv-current-routing" class="bv-callout" aria-live="polite"></p>
             <form id="bv-settings-form">
                 <label class="bv-coverage-choice">Who should use these routing rules?
                     <select id="bv-coverage" class="form-control">
@@ -235,7 +239,6 @@
                     </label>
                 </div>
                 <p id="bv-coverage-note" class="text-muted" aria-live="polite"></p>
-                <p id="bv-current-routing" class="bv-callout" aria-live="polite"></p>
 
                 <details class="bv-advanced" id="bv-advanced">
                     <summary>More routing options</summary>
@@ -254,7 +257,6 @@
                 <div class="bv-actions">
                     <button type="submit" id="bv-save-routing" class="btn btn-primary">Save and Enable VPN</button>
                     <span id="bv-routing-enabled" role="status" hidden>VPN routing enabled</span>
-                    <button type="button" id="bv-disable-routing" class="btn btn-default" hidden>Disable VPN</button>
                 </div>
             </form>
         </section>
@@ -288,6 +290,7 @@
             </div>
             <details id="bv-tailnet-devices" class="bv-advanced">
                 <summary><span class="bv-disclosure-link">Tailscale devices</span> <span id="bv-tailnet-count" class="text-muted"></span></summary>
+                <p id="bv-tailnet-snat-note" class="text-muted">* For per-device routing through the OPNsense exit node, check <strong>Disable SNAT</strong> under <strong>VPN → Tailscale → Settings → Advanced</strong> and click <strong>Apply</strong>.</p>
                 <p id="bv-tailnet-routing-hint" class="text-muted"></p>
                 <button type="button" id="bv-add-tailnet-peer" class="btn btn-default" data-manage-only hidden>Add by Tailscale IP</button>
                 <div class="bv-scroll">

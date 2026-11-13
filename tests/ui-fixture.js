@@ -59,6 +59,18 @@ window.jQuery.ajax = async (request) => {
     if (action === 'setMullvadEnabled') {
         reply.dashboard.profiles.find(x => x.id === data.id).disabled = !data.enabled;
     }
+    if (action === 'assign' && data.kind === 'tailnet') {
+        const existing = reply.dashboard.assignments.find(row => row.id === 'tailnet1');
+        const fields = {...data, label: data.label || 'Remote iPad', ipv6: data.ipv6 || 'fd7a:115c:a1e0::104'};
+        if (existing) Object.assign(existing, fields);
+        else reply.dashboard.assignments.push({id:'tailnet1', ...fields});
+    }
+    if (action === 'setTailnetRuleEnabled') {
+        reply.dashboard.assignments.find(row => row.id === data.id).paused = !data.enabled;
+    }
+    if (action === 'testDeviceRoute') {
+        return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:'seen', usingBackup:false};
+    }
     if (action === 'renameProxyNode') {
         reply.proxyCatalog.nodes.find(x => x.id === data.id).name = data.name;
     }
@@ -372,6 +384,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         getComputedStyle(bv('tailnet-devices').querySelector('.bv-disclosure-link')).textDecorationLine === 'underline',
         'Tailscale device list must be collapsible with an underlined label.');
     bv('tailnet-devices').open = true;
+    assert(bv('tailnet-snat-note').textContent.trim().startsWith('*') &&
+        bv('tailnet-snat-note').textContent.includes('Disable SNAT') &&
+        bv('tailnet-snat-note').textContent.includes('Apply'),
+        'The expanded list must show the Disable SNAT step.');
     bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
     assert(bv('ip').value === '100.101.102.104' && bv('ipv6').value === 'fd7a:115c:a1e0::104' &&
         bv('interface').value === 'opt2' && bv('device-kind').value === 'tailnet', 'Existing gateway link rules must remain available.');
@@ -412,6 +428,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'assign' && x.data.kind === 'tailnet' &&
         x.data.ip === '100.101.102.104' && x.data.ipv6 === '' && x.data.profile === 'vpn1'),
         'A missing peer must be looked up by IPv4 when saving the chosen server.');
+    const tailnetTable = bv('tailnet-device-list');
+    tailnetTable.querySelector('[aria-label="Ping Remote iPad"]').click();
+    await wait();
+    assert(tailnetTable.querySelector('[data-test-result="device:tailnet1"]').textContent.includes('Device traffic seen') &&
+        requests.some(x => x.action === 'testDeviceRoute' && x.data.id === 'tailnet1'), 'Tailscale rule Ping must display an inline result.');
+    tailnetTable.querySelector('[aria-label="Disable Remote iPad"]').click();
+    await wait();
+    assert(tailnetTable.textContent.includes('Disabled') && !tailnetTable.querySelector('[aria-label="Ping Remote iPad"]') &&
+        reply.dashboard.assignments.find(row => row.id === 'tailnet1').profile === 'vpn1',
+        'Pausing a Tailscale rule must retain the server and hide Ping.');
+    tailnetTable.querySelector('[aria-label="Enable Remote iPad"]').click();
+    await wait();
+    assert(tailnetTable.querySelector('[aria-label="Ping Remote iPad"]') &&
+        requests.some(x => x.action === 'setTailnetRuleEnabled' && x.data.id === 'tailnet1' && x.data.enabled),
+        'Re-enabling a Tailscale rule restores the saved route and Ping.');
+    Object.assign(reply.dashboard.assignments[0], {mode:'full',profile:'vpn1'});
+    bv('refresh').click();
+    await wait();
+    bv('device-list').querySelector('[aria-label="Ping <b>Device rule</b>"]').click();
+    await wait();
+    assert(bv('device-list').querySelector('[data-test-result="device:device1"]').textContent.includes('22.4 ms') &&
+        requests.some(x => x.action === 'testDeviceRoute' && x.data.id === 'device1'), 'LAN rules use the same Ping check.');
     bv('coverage').value = 'network';
     bv('network-mode').value = 'full';
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
@@ -447,6 +485,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         x.data.networkMode === 'full' && x.data.networkProfile === 'proxy1' && x.data.networkKillSwitch === true) &&
         bv('add-device').hidden && reply.dashboard.settings.networkProfile === 'proxy1',
         'Whole-Network proxy coverage settings did not apply.');
+    assert(bv('disable-routing').parentElement.contains(bv('settings-title')) &&
+        getComputedStyle(bv('disable-routing')).backgroundColor === 'rgb(177, 40, 60)',
+        'Disable VPN must be red at the top of routing settings.');
     bv('disable-routing').click();
     await wait();
     assert(requests.some(x => x.action === 'disable') && bv('routing-enabled').hidden &&

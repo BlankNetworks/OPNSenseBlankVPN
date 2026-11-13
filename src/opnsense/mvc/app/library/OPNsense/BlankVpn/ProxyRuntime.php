@@ -49,7 +49,7 @@ final class ProxyRuntime
                 $selected[] = $settings['networkProfile'];
             }
         } else {
-            foreach (Policy::assignments($model) as $assignment) {
+            foreach (Policy::assignments($model, true) as $assignment) {
                 if (Policy::mode($assignment) === 'full') {
                     array_push($selected, $assignment['profile'], $assignment['backup']);
                 }

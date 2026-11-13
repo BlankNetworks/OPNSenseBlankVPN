@@ -1,6 +1,6 @@
 <model>
     <mount>//OPNsense/BlankVpn</mount>
-    <version>1.8.0</version>
+    <version>1.9.0</version>
     <description>Blank VPN configuration and native object ownership</description>
     <items>
         <settings>
@@ -57,6 +57,7 @@
                 <interface type="TextField"><Required>Y</Required></interface>
                 <mac type="TextField"/>
                 <ipv6 type="TextField"/>
+                <paused type="BooleanField"><Default>0</Default></paused>
                 <kind type="TextField"/>
                 <mode type="TextField"/>
                 <label type="TextField"/>

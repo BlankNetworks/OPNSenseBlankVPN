@@ -47,7 +47,7 @@ final class Policy
         if ($settings['coverage'] !== 'device') {
             return $settings;
         }
-        $assignments = self::assignments($model);
+        $assignments = self::assignments($model, true);
         if (in_array(self::TAILSCALE_DEVICE, array_column($assignments, 'interface'), true)) {
             $settings['interfaces'][] = self::TAILSCALE_DEVICE;
         }
@@ -94,13 +94,21 @@ final class Policy
         return self::profiles($model) + NativeVpn::routes($model) + ProxyRuntime::routes($model);
     }
 
-    public static function assignments(BlankVpn $model): array
+    public static function assignments(BlankVpn $model, bool $activeOnly = false): array
     {
         $assignments = [];
         foreach ($model->assignments->assignment->iterateItems() as $id => $node) {
-            $assignments[$id] = ['id' => $id] + self::fields($node);
+            $row = self::fields($node);
+            if (!$activeOnly || !self::assignmentPaused($row)) {
+                $assignments[$id] = ['id' => $id] + $row;
+            }
         }
         return $assignments;
+    }
+
+    public static function assignmentPaused(array $row): bool
+    {
+        return ($row['kind'] ?? '') === 'tailnet' && ($row['paused'] ?? '') === '1';
     }
 
     public static function mode(array $assignment): string

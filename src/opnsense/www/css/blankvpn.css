@@ -249,6 +249,12 @@
     color: #fff;
 }
 
+.blankvpn #bv-disable-routing {
+    background: #b1283c;
+    border: 1px solid #b1283c;
+    color: #fff;
+}
+
 .blankvpn #bv-native-snat-status.bv-setting-checked {
     display: inline-block;
     border-radius: .35rem;

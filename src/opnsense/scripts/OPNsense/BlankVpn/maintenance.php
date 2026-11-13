@@ -108,7 +108,7 @@ try {
                     }
                 }
                 $loaded = Firewall::loadedRules();
-                $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model) : [];
+                $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model, true) : [];
                 $watchOutages = Operations::watchMultiPathOutages($settings, $assignments);
                 $watchedExits = $watchOutages
                     ? array_fill_keys(array_column(SmartRouting::boundServices(SmartRouting::services($model)), 'profile'), true)

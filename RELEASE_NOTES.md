@@ -1,3 +1,6 @@
 - Tailscale setup shows the saved Disable SNAT state and explains what is blocking per-device routing.
-- The underlined Tailscale device list includes an option to look up a missing peer by its Tailscale IPv4 address.
+- The underlined Tailscale device list includes an option to look up a missing peer by its Tailscale IPv4 address and a reminder to check Disable SNAT.
 - Mullvad uses individual server selection. Previously configured tunnels stay available.
+- Saved Tailscale rules can be disabled and enabled without deleting their settings.
+- Ping on LAN and Tailscale rules checks the selected VPN or proxy and reports matching firewall traffic.
+- The red Disable VPN button is next to the routing status in Network Settings.
