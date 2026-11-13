@@ -1,4 +1,4 @@
-# Blank VPN 0.8.5
+# Blank VPN 0.8.6
 
 Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Multi-Path keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
@@ -41,7 +41,7 @@ The package and SHA-256 file are written to `dist/`. To reproduce the bundled re
 3. Transfer the matching package and its SHA-256 file to the router. Run these commands one line at a time as root from the same directory. For ARM64, replace `amd64` with `aarch64`.
 
    ```sh
-   sha256sum -c os-blank-vpn-0.8.5-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.5-amd64.pkg
+   sha256sum -c os-blank-vpn-0.8.6-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.6-amd64.pkg
    pkg info os-blank-vpn
    ```
 
@@ -86,9 +86,11 @@ Use **Ping server** beside the selected Mullvad relay to send one ICMP echo from
 
 The GitHub release includes Mihomo, tun2socks, Xray, sing-box, and the Clash YAML parser. The source build can also use independently installed runtimes. Review [PROXY_SUPPORT.md](PROXY_SUPPORT.md) for formats and protocol coverage.
 
-1. Open **Proxies** over HTTPS. Add a single server with **Add a proxy manually**, paste its share link, or import a base64 list, Clash YAML, Xray JSON, or sing-box JSON.
+1. Open **Proxies** over HTTPS. Add a single server with **Add a proxy manually**, paste its share link with an optional server name, or import a base64 list, Clash YAML, Xray JSON, or sing-box JSON.
 2. For a provider feed, add its direct HTTPS subscription URL. The router follows public HTTPS redirects after validating each destination and reports DNS, TLS, HTTP, timeout, or format errors. The list shows reported traffic allowance, usage, and expiry when the provider sends those fields. New subscriptions enable automatic refresh every six hours. Change the setting per saved subscription. An enabled exit retains its server if a later refresh removes it.
 3. Choose **Test server** to check HTTPS through a saved proxy before enabling it. Choose **Enable exit** on a server to make it available for routing, then select the exit under **Multi-Path** or **Network**. Device assignments can use the IPv4 kill switch or a backup exit. UDP support varies with the upstream protocol and transport.
+
+Use **Edit name** beside a saved VPN exit or proxy server. Proxy names also appear in routing choices and survive subscription refreshes when the same server configuration returns.
 
 ## Update proxy cores
 

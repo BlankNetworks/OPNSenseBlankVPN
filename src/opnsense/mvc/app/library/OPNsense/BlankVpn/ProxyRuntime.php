@@ -301,7 +301,10 @@ final class ProxyRuntime
                     'milliseconds' => round(curl_getinfo($curl, CURLINFO_TOTAL_TIME) * 1000, 1)];
             }
             $error = curl_errno($curl);
-            $detail = self::probeFailure($error, $status);
+            $detail = self::probeFailure($error, $status,
+                (float)curl_getinfo($curl, CURLINFO_CONNECT_TIME),
+                (float)curl_getinfo($curl, CURLINFO_APPCONNECT_TIME),
+                $error === CURLE_PROXY ? (int)curl_getinfo($curl, CURLINFO_PROXY_ERROR) : 0);
             if ($error === CURLE_COULDNT_CONNECT || $error === CURLE_SSL_CACERT) {
                 break;
             }
@@ -309,13 +312,22 @@ final class ProxyRuntime
         return ['reachable' => false, 'detail' => $detail, 'milliseconds' => null];
     }
 
-    private static function probeFailure(int $error, int $status): string
+    private static function probeFailure(
+        int $error,
+        int $status,
+        float $connected = 0,
+        float $tls = 0,
+        int $proxyError = 0
+    ): string
     {
         return match ($error) {
-            CURLE_OPERATION_TIMEDOUT => 'The proxy did not complete the HTTPS request before the timeout.',
+            CURLE_OPERATION_TIMEDOUT => $tls > 0 ? 'TLS connected through the proxy. The HTTPS response timed out.'
+                : ($connected > 0 ? 'The local SOCKS listener connected. The upstream connection or TLS handshake timed out.'
+                    : 'The connection to the local SOCKS listener timed out.'),
             CURLE_SSL_CACERT => 'The HTTPS test certificate could not be verified.',
             CURLE_COULDNT_CONNECT => 'The local SOCKS listener could not be reached.',
-            CURLE_PROXY => 'The proxy core could not open an upstream connection. Check the server credentials and transport.',
+            CURLE_PROXY => 'The local SOCKS listener rejected the upstream connection'
+                . ($proxyError > 0 ? ' (SOCKS code ' . $proxyError . ')' : '') . '.',
             default => $status > 0 ? 'The HTTPS test returned HTTP ' . $status . '.'
                 : 'The HTTPS connection ended before a response (cURL ' . $error . ').'
         };

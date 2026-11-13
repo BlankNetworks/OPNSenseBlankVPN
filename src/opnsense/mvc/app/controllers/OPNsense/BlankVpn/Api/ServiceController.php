@@ -77,7 +77,16 @@ class ServiceController extends ApiControllerBase
                 ];
             }
             $proxyStatus = ProxyRuntime::lastStatus();
+            $proxyNodes = [];
+            if ($proxyRoutes !== []) {
+                try {
+                    $proxyNodes = ProxyCatalog::read()['nodes'];
+                } catch (\RuntimeException $error) {
+                    $warnings[] = $error->getMessage();
+                }
+            }
             foreach ($proxyRoutes as $id => $route) {
+                $route['name'] = $proxyNodes[$route['node']]['name'] ?? $route['name'];
                 $checked = $health[$id] ?? [];
                 $running = in_array($id, $proxyStatus['active'], true);
                 $profiles[$id] = array_intersect_key($route, array_flip(['id', 'name', 'node', 'kind', 'core', 'protocol', 'interface'])) + [
@@ -471,6 +480,33 @@ class ServiceController extends ApiControllerBase
                 $node->dnsPort = (string)$port;
                 return ['profile' => (string)$node->getAttribute('uuid'), 'reload' => true];
             });
+        }), true, true);
+    }
+
+    public function renameProfileAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $id = $this->input('id', 64);
+            $name = $this->name();
+            return Operations::change(function (BlankVpn $model) use ($id, $name) {
+                $route = Policy::profiles($model)[$id] ?? NativeVpn::routes($model)[$id] ?? null;
+                if ($route === null) {
+                    throw new \DomainException('This VPN exit is no longer saved.');
+                }
+                $node = ($route['kind'] ?? '') === 'native'
+                    ? $model->nativeRoutes->route->getChild($id)
+                    : $model->profiles->profile->getChild($id);
+                $node->name = $name;
+                return [];
+            });
+        }), true, true);
+    }
+
+    public function renameProxyNodeAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            ProxyCatalog::renameNode($this->input('id', 64), $this->input('name', 256));
+            return [];
         }), true, true);
     }
 
@@ -908,7 +944,7 @@ class ServiceController extends ApiControllerBase
     public function importProxiesAction()
     {
         return $this->respond(fn () => Operations::exclusive(
-            fn () => ProxyCatalog::import($this->input('body', ProxyImport::MAX_BYTES))
+            fn () => ProxyCatalog::import($this->input('body', ProxyImport::MAX_BYTES), $this->input('name', 256))
         ), true, true, true);
     }
 
@@ -920,6 +956,7 @@ class ServiceController extends ApiControllerBase
                 $this->input('port', 5), trim($this->input('username', 255)), $this->input('secret', 2048),
                 trim($this->input('cipher', 80)), trim($this->input('parameters', 4096))
             );
+            $node['customName'] = true;
             ProxyCatalog::saveManual([$node['id'] => $node]);
             return ['id' => $node['id']];
         }), true, true, true);

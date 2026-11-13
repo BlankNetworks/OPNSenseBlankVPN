@@ -56,9 +56,17 @@ final class ProxyCatalog
         ];
     }
 
-    public static function import(string $body): array
+    public static function import(string $body, string $name = ''): array
     {
         $parsed = ProxyImport::parse($body);
+        if (trim($name) !== '') {
+            if (count($parsed['nodes']) !== 1 || $parsed['skipped'] !== 0) {
+                throw new DomainException('A server name applies to a single proxy. Clear it to import a list.');
+            }
+            $id = array_key_first($parsed['nodes']);
+            $parsed['nodes'][$id]['name'] = self::serverName($name);
+            $parsed['nodes'][$id]['customName'] = true;
+        }
         self::saveManual($parsed['nodes']);
         return ['imported' => count($parsed['nodes']), 'skipped' => $parsed['skipped']];
     }
@@ -67,6 +75,26 @@ final class ProxyCatalog
     {
         $data = self::read();
         self::replaceNodes($data, 'manual', $nodes, []);
+        self::save($data);
+    }
+
+    public static function serverName(string $name): string
+    {
+        $name = trim($name);
+        if (!preg_match('/^[^\p{C}<>]{1,64}$/uD', $name)) {
+            throw new DomainException('Enter a server name between 1 and 64 characters.');
+        }
+        return $name;
+    }
+
+    public static function renameNode(string $id, string $name): void
+    {
+        $data = self::read();
+        if (!isset($data['nodes'][$id])) {
+            throw new DomainException('This proxy server is no longer saved.');
+        }
+        $data['nodes'][$id]['name'] = self::serverName($name);
+        $data['nodes'][$id]['customName'] = true;
         self::save($data);
     }
 
@@ -184,7 +212,12 @@ final class ProxyCatalog
         }
         unset($entry);
         foreach ($nodes as $id => $node) {
-            $node['sources'] = array_values(array_unique([...($data['nodes'][$id]['sources'] ?? []), $source]));
+            $existing = $data['nodes'][$id] ?? [];
+            if (empty($node['customName']) && !empty($existing['customName'])) {
+                $node['name'] = $existing['name'];
+                $node['customName'] = true;
+            }
+            $node['sources'] = array_values(array_unique([...($existing['sources'] ?? []), $source]));
             $data['nodes'][$id] = $node;
         }
     }

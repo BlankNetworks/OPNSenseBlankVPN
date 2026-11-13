@@ -67,6 +67,12 @@ window.jQuery.ajax = async (request) => {
         }
         return structuredClone({ok:true, batches});
     }
+    if (action === 'renameProfile') {
+        reply.dashboard.profiles.find(x => x.id === data.id).name = data.name;
+    }
+    if (action === 'renameProxyNode') {
+        reply.proxyCatalog.nodes.find(x => x.id === data.id).name = data.name;
+    }
     if (action === 'saveService') {
         reply.dashboard.services = [{id:'list1', name:data.name, profile:data.profile, domains:data.domains.split(/[,\s]+/)}];
     }
@@ -185,6 +191,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('profile-list').querySelector('button').click();
     await wait();
     assert(bv('profile-list').querySelector('[data-test-result]').textContent.includes('45.2 ms'), 'exit HTTPS test missing');
+    bv('profile-list').querySelector('[aria-label="Edit name for Canada"]').click();
+    const vpnName = bv('profile-list').querySelector('.bv-name-editor');
+    vpnName.querySelector('input').value = 'Canada home';
+    vpnName.requestSubmit(vpnName.querySelector('button[type=submit]'));
+    await wait();
+    assert(requests.some(x => x.action === 'renameProfile' && x.data.id === 'vpn1' && x.data.name === 'Canada home') &&
+        bv('profile-list').textContent.includes('Canada home') &&
+        bv('profile-list').querySelector('[data-test-result]').textContent.includes('45.2 ms'), 'VPN rename lost the row or its result');
     bv('register-form').requestSubmit(bv('register-form').querySelector('button[type=submit]'));
     await wait();
     assert(requests.some(x => x.action === 'register' && x.data.relay === 'ca-test-wg-001' && !Object.hasOwn(x.data, 'account')), 'registration payload failed');
@@ -264,6 +278,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'testProxyNode' && x.data.id === 'proxy-1') &&
         bv('proxy-list').querySelector('[data-test-result]').textContent.includes('The proxy connection timed out.'), 'saved proxy test did not report its failure');
 
+    bv('proxy-list').querySelector('[aria-label="Edit name for Example proxy"]').click();
+    const proxyName = bv('proxy-list').querySelector('.bv-name-editor');
+    proxyName.querySelector('input').value = 'SOCKS5 office';
+    proxyName.requestSubmit(proxyName.querySelector('button[type=submit]'));
+    await wait();
+    assert(requests.some(x => x.action === 'renameProxyNode' && x.data.id === 'proxy-1' && x.data.name === 'SOCKS5 office') &&
+        bv('proxy-list').textContent.includes('SOCKS5 office') &&
+        bv('proxy-list').querySelector('[data-test-result]').textContent.includes('timed out'), 'Proxy rename lost the row or its result');
     assert(bv('subscription-list').textContent.includes('Test feed'), 'proxy subscription not displayed');
     assert(bv('subscription-list').textContent.includes('2.0 KiB used / 1.0 MiB'), 'subscription quota not displayed');
     assert(bv('subscription-auto').checked, 'auto-refresh should default on for new subscriptions');
@@ -281,9 +303,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'enableProxyExit' && x.data.id === 'proxy-1'), 'proxy was not selected individually');
     bv('proxy-body').value = 'socks5://192.0.2.9:1080';
+    bv('proxy-import-name').value = 'Private SOCKS';
     bv('proxy-import').requestSubmit(bv('proxy-import').querySelector('button'));
     await wait();
-    assert(requests.some(x => x.action === 'importProxies') && bv('proxy-body').value === '', 'proxy import was not submitted and cleared');
+    assert(requests.some(x => x.action === 'importProxies' && x.data.name === 'Private SOCKS') &&
+        bv('proxy-body').value === '' && bv('proxy-import-name').value === '', 'proxy import was not submitted and cleared');
     document.querySelector('[data-bv-section="tailscale"]').click();
     assert(!bv('tailscale-page').hidden && bv('tailscale-status').textContent.includes('Exit node advertised') &&
         !bv('native-tailscale').hidden, 'Tailscale page or native status missing');

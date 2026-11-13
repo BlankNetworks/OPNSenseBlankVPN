@@ -143,6 +143,9 @@
         </details>
         <div class="bv-grid">
             <form id="bv-proxy-import">
+                <label>Server name <span class="text-muted">(optional for a single proxy)</span>
+                    <input id="bv-proxy-import-name" class="form-control" type="text" maxlength="64">
+                </label>
                 <label>Proxy links or configuration
                     <textarea id="bv-proxy-body" class="form-control bv-config-text" rows="4"
                         placeholder="Proxy links, Clash YAML, Xray JSON or sing-box JSON" autocomplete="off" spellcheck="false" required></textarea>

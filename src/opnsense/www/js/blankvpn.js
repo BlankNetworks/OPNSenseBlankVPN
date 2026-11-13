@@ -28,6 +28,7 @@
             mullvadBatches: {worldwide: false, countries: [], cities: []},
             tests: new Map(),
             proxyTestRunning: false,
+            nameEditor: null,
             settings: null,
             availableInterfaces: [],
             canManage: true,
@@ -167,6 +168,53 @@
             return element;
         }
 
+        function nameEditor(row, name, id, action, render, onSave) {
+            const edit = button('Edit name', () => {
+                state.nameEditor = {id, action, draft: name};
+                render();
+                root.querySelector('.bv-name-editor input')?.focus();
+            }, 'Edit name for ' + name);
+            const current = state.nameEditor;
+            if (current?.id !== id || current.action !== action) {
+                return edit;
+            }
+            const form = document.createElement('form');
+            form.className = 'bv-inline-form bv-name-editor';
+            const input = document.createElement('input');
+            input.className = 'form-control';
+            input.required = true;
+            input.maxLength = 64;
+            input.value = current.draft;
+            input.setAttribute('aria-label', 'Name for ' + name);
+            input.addEventListener('input', () => { current.draft = input.value; });
+            const save = document.createElement('button');
+            save.type = 'submit';
+            save.className = 'btn btn-primary btn-sm';
+            save.textContent = 'Save name';
+            const cancel = button('Cancel', () => {
+                state.nameEditor = null;
+                render();
+            });
+            form.append(input, save, cancel);
+            form.addEventListener('submit', (event) => {
+                event.preventDefault();
+                const renamed = input.value.trim();
+                if (!renamed) {
+                    input.focus();
+                    return;
+                }
+                void mutate(save, () => api(action, {id, name: renamed}), 'Server name saved.', () => {
+                    if (state.nameEditor === current) {
+                        state.nameEditor = null;
+                    }
+                    onSave(renamed);
+                    render();
+                });
+            });
+            row.cells[0].append(form);
+            return null;
+        }
+
         function options(select, choices, placeholder, previous = select.value) {
             select.replaceChildren(new Option(placeholder, ''));
             const groups = new Map();
@@ -299,6 +347,11 @@
                     }
                     if (state.canManage) {
                         appendConnectionTest(actions, 'Test exit', 'testExit', profile.id);
+                        const edit = nameEditor(row, profile.name || profile.relay, profile.id, 'renameProfile',
+                            renderProfiles, (name) => { profile.name = name; });
+                        if (edit) {
+                            actions.append(edit);
+                        }
                         actions.append(remove);
                     }
                 }
@@ -694,6 +747,11 @@
                 const actions = row.insertCell();
                 appendConnectionTest(actions, exit ? 'Test exit' : 'Test server',
                     exit ? 'testExit' : 'testProxyNode', exit?.id || node.id, node.id);
+                const edit = nameEditor(row, node.name, node.id, 'renameProxyNode',
+                    renderProxyCatalog, (name) => { node.name = name; });
+                if (edit) {
+                    actions.append(edit);
+                }
                 if (exit) {
                     const disable = button('Remove exit', (event) => removeProfile(exit, event.currentTarget));
                     disable.disabled = state.assignments.some((item) => [item.profile, item.backup].includes(exit.id))
@@ -1687,7 +1745,8 @@
         byId('proxy-import').addEventListener('submit', (event) => {
             event.preventDefault();
             const body = byId('proxy-body').value.trim();
-            void mutate(event.submitter, () => api('importProxies', {body}), 'Proxy servers imported.', (result) => {
+            const name = byId('proxy-import-name').value.trim();
+            void mutate(event.submitter, () => api('importProxies', {body, name}), 'Proxy servers imported.', (result) => {
                 event.target.reset();
                 notice(result.imported + ' servers imported' + (result.skipped ? ' · ' + result.skipped + ' skipped' : ''), 'success');
                 void refreshProxyCatalog();

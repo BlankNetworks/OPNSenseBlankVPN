@@ -69,6 +69,15 @@ assertProxy(ProxyCatalog::subscriptionUsage('Upload=12; download=34; total=100; 
 assertProxy(ProxyCatalog::subscriptionUsage('upload=1; upload=2; total=9223372036854775808; expire=-1; download=0') ===
     ['download' => 0], 'Ignore duplicate, overflowed and negative metadata.');
 
+$savedNode = proxyNode($ss);
+$id = $savedNode['id'];
+$catalogData = ['nodes' => [$id => ['name' => 'My server', 'customName' => true, 'sources' => ['manual']] + $savedNode]];
+$replaceNodes = new ReflectionMethod(ProxyCatalog::class, 'replaceNodes');
+$replaceNodes->invokeArgs(null, [&$catalogData, 'feed', [$id => $savedNode], []]);
+assertProxy($catalogData['nodes'][$id]['name'] === 'My server' && $catalogData['nodes'][$id]['config'] === $savedNode['config'] &&
+    $catalogData['nodes'][$id]['sources'] === ['manual', 'feed'], 'Subscription refresh must preserve custom names and identity.');
+assertProxy(ProxyCatalog::serverName('  My SOCKS5 server  ') === 'My SOCKS5 server', 'Trim a custom server name.');
+
 $subscriptionEndpoint = new ReflectionMethod(ProxyCatalog::class, 'endpoint');
 $subscriptionAddresses = new ReflectionMethod(ProxyCatalog::class, 'publicAddresses');
 assertProxy($subscriptionEndpoint->invoke(null, 'https://Example.com:8443/feed?token=private') ===
@@ -132,7 +141,9 @@ assertProxy($realityConfig['proxies'][0]['flow'] === 'xtls-rprx-vision' &&
 $probeFailure = new ReflectionMethod(ProxyRuntime::class, 'probeFailure');
 assertProxy(str_contains($probeFailure->invoke(null, CURLE_SSL_CACERT, 0), 'certificate') &&
     str_contains($probeFailure->invoke(null, CURLE_RECV_ERROR, 0), 'ended') &&
-    str_contains($probeFailure->invoke(null, CURLE_OK, 403), 'HTTP 403'),
+    str_contains($probeFailure->invoke(null, CURLE_OK, 403), 'HTTP 403') &&
+    str_contains($probeFailure->invoke(null, CURLE_OPERATION_TIMEDOUT, 0, 0.001), 'upstream') &&
+    str_contains($probeFailure->invoke(null, CURLE_OPERATION_TIMEDOUT, 0, 0.001, 0.2), 'response timed out'),
     'Report PHP cURL failures without throwing an undefined-constant error.');
 $singNode = proxyNode('{"outbounds":[{"tag":"example","type":"anytls","server":"192.0.2.2","server_port":443,"password":"fixture-pass","tls":{"enabled":true,"server_name":"example.com"}}]}');
 $sing = ProxyRuntime::configuration($route, $singNode);
