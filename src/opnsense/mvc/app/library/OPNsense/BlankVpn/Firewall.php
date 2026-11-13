@@ -11,7 +11,7 @@ final class Firewall
     public static function installRules(Plugin $firewall): void
     {
         $model = new BlankVpn();
-        $settings = Policy::routingSettings(Policy::settings($model));
+        $settings = Policy::effectiveRouting($model);
         $profiles = Policy::routes($model);
         $proxyGateways = [];
         $pausedCore = $settings['enabled'] ? ProxyCores::pausedCore() : null;
@@ -310,7 +310,8 @@ final class Firewall
                 'to' => '<' . Policy::LOCAL_TABLE . '>', 'to_not' => true, 'tag' => $tag,
                 'descr' => 'Blank VPN Multi-Path source and destination scope'
             ];
-            $assignedOnly = !empty($settings['smartAssignedOnly']);
+            $assignedOnly = !empty($settings['smartAssignedOnly']) ||
+                in_array($interface, $settings['deviceMultiInterfaces'] ?? [], true);
             $sources = [];
             if (!$assignedOnly) {
                 foreach (['inet', 'inet6'] as $family) {
@@ -583,7 +584,7 @@ final class Firewall
         if ($loaded === null) {
             throw new \RuntimeException('Blank VPN could not verify the loaded PF rules.');
         }
-        $settings = Policy::routingSettings(Policy::settings($model));
+        $settings = Policy::effectiveRouting($model);
         foreach ($settings['strictInterfaces'] as $interface) {
             $marker = Policy::marker('block', $interface);
             if ($settings['enabled'] !== (($loaded[$marker]['action'] ?? '') === 'block')) {

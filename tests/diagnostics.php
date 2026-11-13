@@ -30,6 +30,7 @@ namespace {
     use OPNsense\Core\Backend;
 
     require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/Diagnostics.php';
+    require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/Policy.php';
 
     set_error_handler(static function (int $severity, string $message, string $file, int $line): bool {
         if ((error_reporting() & $severity) !== 0) {
@@ -44,6 +45,14 @@ namespace {
             throw new RuntimeException($message);
         }
     }
+
+    $peers = Diagnostics::tailnetPeers(['BackendState' => 'Running', 'Peer' => [
+        ['HostName' => 'Travel iPad', 'Online' => true, 'TailscaleIPs' => ['100.100.1.2', 'fd7a:115c:a1e0::2', '192.168.2.1']],
+        ['DNSName' => 'laptop.example.ts.net.', 'Online' => false, 'TailscaleIPs' => ['100.100.1.3']],
+        ['HostName' => 'Unrelated', 'TailscaleIPs' => ['198.51.100.2']],
+    ]]);
+    check(count($peers) === 2 && $peers[0]['ipv4'] === '100.100.1.2' && $peers[0]['ipv6'] === ['fd7a:115c:a1e0::2'] &&
+        $peers[1]['name'] === 'laptop', 'Display only known peers and their actual Tailscale addresses.');
 
     $config = new SimpleXMLElement(<<<'XML'
         <opnsense>

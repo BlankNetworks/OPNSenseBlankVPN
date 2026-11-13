@@ -140,7 +140,7 @@ final class Operations
         if (trim($backend->configdRun('blankvpn proxies', false, 45)) !== 'ok') {
             throw new \RuntimeException('The Blank VPN proxy exits could not be reconciled.');
         }
-        $settings = Policy::routingSettings(Policy::settings($model));
+        $settings = Policy::effectiveRouting($model);
         $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model) : [];
         $watchOutages = self::watchMultiPathOutages($settings, $assignments);
         $before = $watchOutages ? Firewall::loadedRules() : null;

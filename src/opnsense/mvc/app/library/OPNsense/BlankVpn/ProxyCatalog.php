@@ -12,7 +12,7 @@ final class ProxyCatalog
     public const MAX_URL_BYTES = 8192;
     private const FILE = 'proxy-catalog.json';
     private const MAX_FEEDS = 12;
-    private const MAX_CATALOG_BYTES = 16777216;
+    private const MAX_CATALOG_BYTES = 25165824;
     private const REFRESH_INTERVAL = 21600;
     private const RETRY_INTERVAL = 900;
 
@@ -48,7 +48,7 @@ final class ProxyCatalog
         $data = self::read();
         return [
             'nodes' => array_values(array_map(static fn (array $node): array =>
-                array_intersect_key($node, array_flip(['id', 'name', 'core', 'protocol', 'host', 'port', 'legacy', 'sources'])),
+                array_intersect_key($node, array_flip(['id', 'name', 'core', 'protocol', 'host', 'port', 'legacy', 'sources', 'disabled'])),
                 $data['nodes'])),
             'feeds' => array_values(array_map(static fn (array $feed): array =>
                 array_intersect_key($feed, array_flip(['id', 'name', 'auto', 'updated', 'error', 'skipped', 'count', 'usage'])),
@@ -190,6 +190,16 @@ final class ProxyCatalog
         self::save($data);
     }
 
+    public static function setEnabled(string $id, bool $enabled): void
+    {
+        $data = self::read();
+        if (!isset($data['nodes'][$id])) {
+            throw new DomainException('This proxy server is no longer saved.');
+        }
+        $data['nodes'][$id]['disabled'] = !$enabled;
+        self::save($data);
+    }
+
     public static function removeNode(string $id, array $pinned): void
     {
         if (in_array($id, $pinned, true)) {
@@ -216,6 +226,9 @@ final class ProxyCatalog
             if (empty($node['customName']) && !empty($existing['customName'])) {
                 $node['name'] = $existing['name'];
                 $node['customName'] = true;
+            }
+            if (!empty($existing['disabled'])) {
+                $node['disabled'] = true;
             }
             $node['sources'] = array_values(array_unique([...($existing['sources'] ?? []), $source]));
             $data['nodes'][$id] = $node;
@@ -355,7 +368,7 @@ final class ProxyCatalog
             throw new RuntimeException('The router could not configure a verified HTTPS subscription download.');
         }
         if (curl_exec($curl) === false) {
-            throw new RuntimeException($oversized ? 'The subscription response exceeds the 2 MiB download limit.' :
+            throw new RuntimeException($oversized ? 'The subscription response exceeds the 4 MiB download limit.' :
                 match (curl_errno($curl)) {
                     CURLE_OPERATION_TIMEDOUT => 'The subscription download timed out.',
                     CURLE_SSL_CACERT => 'The subscription server’s TLS certificate could not be verified.',

@@ -8,8 +8,8 @@ use DomainException;
 
 final class ProxyImport
 {
-    public const MAX_BYTES = 2097152;
-    public const MAX_NODES = 256;
+    public const MAX_BYTES = 4194304;
+    public const MAX_NODES = 2048;
     private const MIHOMO = [
         'http', 'socks5', 'ss', 'ssr', 'vmess', 'vless', 'trojan', 'hysteria', 'hysteria2', 'tuic',
         'anytls', 'snell', 'ssh', 'wireguard', 'mieru', 'masque', 'sudoku', 'shadowquic', 'gost-relay', 'trusttunnel'
@@ -52,7 +52,7 @@ final class ProxyImport
                 continue;
             }
             if (++$seen > self::MAX_NODES) {
-                throw new DomainException('This import has more than 256 server entries.');
+                throw new DomainException('This import has more than ' . self::MAX_NODES . ' server entries.');
             }
             try {
                 $node = self::link($line);
@@ -127,7 +127,7 @@ final class ProxyImport
             $engine = null;
         }
         if (!array_is_list($items) || count($items) > self::MAX_NODES) {
-            throw new DomainException('The document must provide a list of up to 256 individual proxy entries.');
+            throw new DomainException('The document must provide a list of up to ' . self::MAX_NODES . ' individual proxy entries.');
         }
         $nodes = [];
         $skipped = 0;
@@ -432,6 +432,9 @@ final class ProxyImport
     {
         self::reviewFields($config);
         $protocol = $config[$core === 'xray' ? 'protocol' : 'type'] ?? '';
+        if ($core === 'mihomo' && in_array($protocol, ['socks', 'socks5h'], true)) {
+            $protocol = $config['type'] = 'socks5';
+        }
         $allowed = match ($core) {'mihomo' => self::MIHOMO, 'xray' => self::XRAY, 'sing-box' => self::SING};
         if (!is_string($protocol) || !in_array($protocol, $allowed, true)) {
             throw new DomainException('Unsupported core or outbound protocol.');
@@ -468,7 +471,10 @@ final class ProxyImport
         $cipher = $config['cipher'] ?? $config['method'] ?? '';
         return [
             'id' => $id, 'name' => trim($shortLabel[0] ?? '') ?: $server . ':' . $port,
-            'core' => $core, 'protocol' => $protocol, 'host' => $server, 'port' => $port, 'config' => $config,
+            'core' => $core, 'protocol' => $protocol === 'socks'
+                ? (($config['version'] ?? '5') === '4' ? 'socks4' : (($config['version'] ?? '') === '4a' ? 'socks4a' : 'socks5'))
+                : $protocol,
+            'host' => $server, 'port' => $port, 'config' => $config,
             'legacy' => $protocol === 'ssr' || ($protocol === 'vmess' && (int)($config['alterId'] ?? 0) !== 0) ||
                 (is_string($cipher) && preg_match('/(?:^none$|rc4|cfb|ctr|chacha20$|salsa20)/i', $cipher) === 1) ||
                 (in_array($protocol, ['http', 'socks', 'socks5'], true) && empty($config['tls']))

@@ -28,7 +28,7 @@ class ServiceController extends ApiControllerBase
         return $this->respond(function () {
             $model = new BlankVpn();
             $settings = Policy::settings($model);
-            $routing = Policy::routingSettings($settings);
+            $routing = Policy::effectiveRouting($model);
             $settings['dashboardAddresses'] = Resolver::dashboardAddresses();
             $settings['dashboardMagicDns'] = $settings['dashboardAddresses']['tailnet'] !== '' ? Resolver::magicDnsName() : '';
             $settings['tailscaleInstalled'] = is_executable('/usr/local/bin/tailscale');
@@ -43,6 +43,7 @@ class ServiceController extends ApiControllerBase
             $services = SmartRouting::services($model);
             $diagnostics = new Diagnostics();
             $discovery = $diagnostics->devices();
+            $discovery['tailnetDevices'] = $settings['tailscaleInstalled'] ? $diagnostics->tailnetDevices() : [];
             $runtime = $profiles === [] ? [] : WireGuard::runtimeRecords();
             $health = Firewall::health();
             $loaded = $settings['enabled'] ? Firewall::loadedRules() : [];
@@ -95,11 +96,19 @@ class ServiceController extends ApiControllerBase
                         : (($checked['probeSucceeded'] ?? false) ? 'proxy probe succeeded' : 'proxy probe failed')
                 ];
             }
+            $gatewayNames = array_column($profiles, 'name', 'interface');
             foreach ($assignments as $id => $row) {
                 $rule = $loaded[Policy::marker('device', $id)] ?? null;
                 $guard = ($loaded[Policy::marker('kill', $id)]['action'] ?? '') === 'block';
-                $applied = $rule['gateway'] ?? ($guard ? 'IPv4 internet blocked' : 'Normal network policy');
-                $row['mode'] = Policy::mode($row);
+                $gateway = $rule['gateway'] ?? null;
+                $mode = Policy::mode($row);
+                $applied = $gateway !== null ? ($gatewayNames[$gateway] ?? $gateway)
+                    : ($guard ? 'Internet blocked' : match ($mode) {
+                        'multi' => SmartRouting::active($routing, $services) ? 'Multi-Path domain lists' : 'Waiting for domain lists',
+                        'full' => 'Using regular internet',
+                        default => 'Regular internet'
+                    });
+                $row['mode'] = $mode;
                 $row['killSwitch'] = Policy::killSwitch($row);
                 $assignments[$id] = $row + [
                     'device' => $row['interface'] . '/' . (($row['kind'] ?? '') === 'tailnet' ? $row['ip'] : $row['mac']),
@@ -107,6 +116,17 @@ class ServiceController extends ApiControllerBase
                     'killSwitchActive' => $guard && $rule === null && $row['killSwitch'],
                     'appliedRoute' => $applied
                 ];
+            }
+            $settings['networkRouting'] = [];
+            if ($settings['enabled'] && $settings['coverage'] === 'network') {
+                foreach ($routing['interfaces'] as $interface) {
+                    $id = 'network:' . $interface;
+                    $settings['networkRouting'][$interface] = [
+                        'gateway' => $loaded[Policy::marker('device', $id)]['gateway'] ?? null,
+                        'blocked' => ($loaded[Policy::marker('kill', $id)]['action'] ?? null) === 'block'
+                            && empty($loaded[Policy::marker('device', $id)]['gateway'])
+                    ];
+                }
             }
             $learned = SmartRouting::active($routing, $services) ? SmartRouting::status() : [];
             foreach ($services as $id => &$service) {
@@ -147,6 +167,18 @@ class ServiceController extends ApiControllerBase
                 'canManage' => $canManage
             ];
         });
+    }
+
+    public function discoverDevicesAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $settings = Policy::settings(new BlankVpn());
+            if ($settings['coverage'] === 'network') {
+                return ['probed' => 0];
+            }
+            $interfaces = array_diff($settings['interfaces'] ?: ['lan'], $settings['tailscaleInterfaces']);
+            return (new Diagnostics())->probeLanNeighbors($interfaces);
+        }), true, true);
     }
 
     public function relaysAction()
@@ -625,6 +657,7 @@ class ServiceController extends ApiControllerBase
                         Policy::segmentNetworks($segments);
                     }
                     if ($enabled && $networkMode === 'full') {
+                        $networkProfile = $this->resolveProxyChoice($model, $networkProfile);
                         $route = Policy::routes($model)[$networkProfile] ?? [];
                         if ($route === [] || !SmartRouting::canResolve($route) || !self::routeConfigured($route)) {
                             throw new \DomainException('Choose a configured VPN tunnel or an enabled proxy with DNS for Whole-Network coverage.');
@@ -640,8 +673,8 @@ class ServiceController extends ApiControllerBase
                     if (($row['kind'] ?? '') === 'tailnet' && !in_array($row['interface'], $tailscale, true)) {
                         throw new \DomainException('Remove the saved Tailscale assignments before removing their transit interface.');
                     }
-                    if ($mode === 'multi' && !in_array($row['interface'], $smart, true)) {
-                        throw new \DomainException('Move Multi-Path assignments before removing their service routing interface.');
+                    if ($mode === 'multi' && in_array($row['interface'], $strict, true)) {
+                        throw new \DomainException('Remove Multi-Path device rules before enabling Block devices without a rule on their interface.');
                     }
                     if ($enabled && $coverage === 'device' && (!$before['enabled'] || $before['coverage'] !== 'device') &&
                         ($mode === 'blocked' ||
@@ -771,8 +804,8 @@ class ServiceController extends ApiControllerBase
             $ipv6 = Policy::ipv6Address(trim($this->input('ipv6', 45)));
             $interface = $this->input('interface', 20);
             $label = trim($this->input('label', 120));
-            $profile = $this->input('profile', 64);
-            $backup = $this->input('backup', 64);
+            $profile = $this->input('profile', 80);
+            $backup = $this->input('backup', 80);
             $mode = $this->input('mode', 12, $profile === '' ? 'default' : 'full');
             if (!in_array($mode, ['full', 'multi', 'disabled', 'blocked', 'default'], true) ||
                 !in_array($kind, ['lan', 'tailnet'], true) || ($mode === 'full' && $profile === '')) {
@@ -811,9 +844,11 @@ class ServiceController extends ApiControllerBase
                     !Policy::tailnetInterface($interface))) {
                     throw new \DomainException('Select a configured Tailscale transit interface that preserves peer addresses.');
                 }
-                if ($mode === 'multi' && !in_array($interface, $settings['smartInterfaces'], true)) {
-                    throw new \DomainException('Enable Multi-Path service routing on this interface under Settings first.');
+                if ($mode === 'multi' && in_array($interface, $settings['strictInterfaces'], true)) {
+                    throw new \DomainException('Turn off Block devices without a rule on this interface to use Multi-Path.');
                 }
+                $profile = $this->resolveProxyChoice($model, $profile);
+                $backup = $failure === 'backup' ? $this->resolveProxyChoice($model, $backup, [$profile]) : '';
                 $profiles = Policy::routes($model);
                 if ($profile !== '' && (!isset($profiles[$profile]) || !self::routeConfigured($profiles[$profile]))) {
                     throw new \DomainException('The selected exit is missing or its configuration has changed.');
@@ -904,7 +939,7 @@ class ServiceController extends ApiControllerBase
             $id = $this->input('id', 64);
             $name = $this->name();
             $domains = SmartRouting::domains($this->input('domains', SmartRouting::MAX_DOMAIN_BYTES));
-            $profileId = $this->input('profile', 64);
+            $profileId = $this->input('profile', 80);
             return Operations::change(function (BlankVpn $model) use ($id, $name, $domains, $profileId) {
                 $services = SmartRouting::services($model);
                 if ($id !== '' && !isset($services[$id])) {
@@ -914,6 +949,7 @@ class ServiceController extends ApiControllerBase
                     throw new \DomainException('Remove an existing service before adding another.');
                 }
                 if ($profileId !== '') {
+                    $profileId = $this->resolveProxyChoice($model, $profileId);
                     SmartRouting::checkOverlap(SmartRouting::boundServices($services), $id, $domains);
                     $profile = Policy::routes($model)[$profileId] ?? [];
                     if ($profile === [] || !SmartRouting::canResolve($profile) || !self::routeConfigured($profile)) {
@@ -1027,39 +1063,79 @@ class ServiceController extends ApiControllerBase
     public function enableProxyExitAction()
     {
         return $this->respond(fn () => Operations::exclusive(function () {
-            $id = $this->input('id', 64);
-            $node = ProxyCatalog::read()['nodes'][$id] ?? null;
-            if (!is_array($node)) {
-                throw new \DomainException('Import the proxy node before enabling its exit.');
-            }
-            ProxyRuntime::preflight($node['core']);
-            ProxyRuntime::prepareTunnelDriver();
-            $result = Operations::change(function (BlankVpn $model) use ($id, $node) {
-                $routes = ProxyRuntime::routes($model);
-                $occupied = array_column($routes, 'slot');
-                foreach ($routes as $route) {
-                    if ($route['node'] === $id) {
-                        throw new \DomainException('This server already has its own exit.');
-                    }
-                }
-                $free = array_diff(range(0, ProxyRuntime::SLOTS - 1), $occupied);
-                if ($free === []) {
-                    throw new \DomainException('Remove an existing proxy exit to free a runtime slot.');
-                }
-                $route = $model->proxyRoutes->route->add();
-                $route->name = $node['name'];
-                $route->node = $id;
-                $route->core = $node['core'];
-                $route->protocol = $node['protocol'];
-                $route->slot = (string)reset($free);
-                return ['id' => (string)$route->getAttribute('uuid'), 'reload' => Policy::settings($model)['enabled']];
-            });
-            if (!$result['reload']) {
-                return ['message' => 'Proxy exit saved. It can be tested now and will route devices after Blank VPN routing is enabled.'];
-            }
-            $error = ProxyRuntime::lastStatus()['errors'][$result['id']] ?? null;
-            return $error === null ? [] : ['message' => 'Proxy exit saved.', 'warning' => $error];
+            ProxyCatalog::setEnabled($this->input('id', 64), true);
+            return [];
         }), true, true);
+    }
+
+    public function disableProxyNodeAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $id = $this->input('id', 64);
+            if (in_array($id, array_column(ProxyRuntime::routes(new BlankVpn()), 'node'), true)) {
+                Operations::change(function (BlankVpn $model) use ($id) {
+                    $routes = array_column(ProxyRuntime::routes($model), null, 'node');
+                    $route = $routes[$id] ?? null;
+                    if ($route !== null) {
+                        $this->requireUnusedByRouting($model, $route['id']);
+                        foreach (Policy::assignments($model) as $row) {
+                            if (in_array($route['id'], [$row['profile'], $row['backup']], true)) {
+                                throw new \DomainException('Remove this server from device rules before disabling it.');
+                            }
+                        }
+                        $model->proxyRoutes->route->del($route['id']);
+                    }
+                    return ['reload' => Policy::settings($model)['enabled']];
+                });
+            }
+            ProxyCatalog::setEnabled($id, false);
+            return [];
+        }), true, true);
+    }
+
+    private function resolveProxyChoice(BlankVpn $model, string $choice, array $keep = []): string
+    {
+        if (!preg_match('/^proxy-([a-f0-9]{64})$/D', $choice, $match)) {
+            return $choice;
+        }
+        $id = $match[1];
+        $node = ProxyCatalog::read()['nodes'][$id] ?? null;
+        if ($node === null || !empty($node['disabled'])) {
+            throw new \DomainException('Choose an enabled proxy server.');
+        }
+        $routes = ProxyRuntime::routes($model);
+        foreach ($routes as $route) {
+            if ($route['node'] === $id) {
+                return $route['id'];
+            }
+        }
+        ProxyRuntime::preflight($node['core']);
+        ProxyRuntime::prepareTunnelDriver();
+        $free = array_diff(range(0, ProxyRuntime::SLOTS - 1), array_column($routes, 'slot'));
+        if ($free === []) {
+            $used = [...$keep, Policy::settings($model)['networkProfile']];
+            foreach (Policy::assignments($model) as $row) {
+                array_push($used, $row['profile'], $row['backup']);
+            }
+            array_push($used, ...array_column(SmartRouting::services($model), 'profile'));
+            foreach ($routes as $route) {
+                if (!in_array($route['id'], $used, true)) {
+                    $model->proxyRoutes->route->del($route['id']);
+                    $free = [$route['slot']];
+                    break;
+                }
+            }
+        }
+        if ($free === []) {
+            throw new \DomainException('Eight proxy servers are already assigned. Remove an assignment to use another server.');
+        }
+        $route = $model->proxyRoutes->route->add();
+        $route->name = $node['name'];
+        $route->node = $id;
+        $route->core = $node['core'];
+        $route->protocol = $node['protocol'];
+        $route->slot = (string)reset($free);
+        return (string)$route->getAttribute('uuid');
     }
 
     private static function routeConfigured(array $profile): bool

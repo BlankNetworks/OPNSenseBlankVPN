@@ -1,4 +1,4 @@
-# Blank VPN 0.8.8
+# Blank VPN 0.8.9
 
 Blank VPN is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Multi-Path keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
@@ -41,7 +41,7 @@ The package and SHA-256 file are written to `dist/`. To reproduce the bundled re
 3. Transfer the matching package and its SHA-256 file to the router. Run these commands one line at a time as root from the same directory. For ARM64, replace `amd64` with `aarch64`.
 
    ```sh
-   sha256sum -c os-blank-vpn-0.8.8-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.8-amd64.pkg
+   sha256sum -c os-blank-vpn-0.8.9-amd64.pkg.sha256 && pkg add -f ./os-blank-vpn-0.8.9-amd64.pkg
    pkg info os-blank-vpn
    ```
 
@@ -54,18 +54,18 @@ From a client on your LAN, open your existing OPNsense HTTPS address and select 
 
 For ordinary LAN DNS, set up `blankvpn.home.arpa` as a host override pointing to the router’s LAN IP. In OPNsense Unbound, use **Services → Unbound DNS → Overrides**. Add the hostname under **System → Settings → Administration → Alternate Hostnames** and use a trusted HTTPS certificate covering it. To open Blank VPN immediately after login, set the OPNsense user’s preferred landing page to `ui/blankvpn/index`.
 
-For `blankvpn.local` on the home network, open **Tailscale → Dashboard address**, click **Use blankvpn.local**, then click **Save Tailscale settings**. Saving adds `blankvpn.local` to the OPNsense WebGUI’s allowed hostnames. Use a trusted WebGUI certificate covering the name. Open **Publish blankvpn.local on your home network** to copy a Bonjour command populated with the router’s LAN IP and WebGUI port. Run it in Terminal on a Mac connected to the same link and leave it running, or publish the same address from an existing mDNS responder. Then open `https://blankvpn.local/ui/blankvpn/index`, with the WebGUI port if it differs from 443. For remote Tailscale access, use the direct Tailscale IP or a name resolved through tailnet DNS.
+For `blankvpn.local` on the home network, open **Tailscale Settings → Dashboard address**, click **Use blankvpn.local**, then click **Save Tailscale settings**. Saving adds `blankvpn.local` to the OPNsense WebGUI’s allowed hostnames. Use a trusted WebGUI certificate covering the name. Open **Publish blankvpn.local on your home network** to copy a Bonjour command populated with the router’s LAN IP and WebGUI port. Run it in Terminal on a Mac connected to the same link and leave it running, or publish the same address from an existing mDNS responder. Then open `https://blankvpn.local/ui/blankvpn/index`, with the WebGUI port if it differs from 443. For remote Tailscale access, use the direct Tailscale IP or a name resolved through tailnet DNS.
 
 ### Open from Tailscale
 
-Open the **Tailscale** tab to see the router’s Tailscale address, its exit-node advertisement, and the direct dashboard URLs. Use **Open OPNsense Tailscale settings** to connect the router, advertise home subnets or the exit node, and approve them in the Tailscale admin console. Permit HTTPS only from peers that should manage OPNsense. [Tailscale setup for OPNsense](https://tailscale.com/docs/install/opnsense) · [Exit-node setup](https://tailscale.com/docs/features/exit-nodes)
+Open the **Tailscale Settings** tab to see the router’s Tailscale address, its exit-node advertisement, and the direct dashboard URLs. Use **Open OPNsense Tailscale settings** to connect the router, advertise home subnets or the exit node, and approve them in the Tailscale admin console. Permit HTTPS only from peers that should manage OPNsense. [Tailscale setup for OPNsense](https://tailscale.com/docs/install/opnsense) · [Exit-node setup](https://tailscale.com/docs/features/exit-nodes)
 
 Choose **Tailscale address** and save to use the router’s MagicDNS hostname and add it to the OPNsense WebGUI’s allowed hostnames. The dashboard also shows the direct Tailscale IP. The package detects and allows the MagicDNS hostname during an upgrade when Tailscale access was already selected. Use the WebGUI’s existing HTTPS certificate settings. The `blankvpn.local` name uses link-local Bonjour for home access. [MagicDNS](https://tailscale.com/docs/features/magicdns)
 
 ## Enable a Mullvad server
 
 1. Open **VPN Login**, enter your Mullvad account number, and sign in. Select **Save login on this router** to restore sign-in in future WebGUI sessions. The router stores the account number in a private file scoped to your WebGUI user, outside the OPNsense configuration export.
-2. Pick a country, city, and server, then choose **Enable**. For the first tunnel on the account, Blank VPN generates a local WireGuard key and registers its public key with Mullvad.
+2. Pick a country, city, and server, then choose **Add server**. The tunnel is available for routing immediately. For the first tunnel on the account, Blank VPN generates a local WireGuard key and registers its public key with Mullvad.
 3. To change locations, select a new server. Blank VPN reuses the router’s registration. If you already have multiple Mullvad tunnels from an earlier release, choose which tunnel to switch. Move its device and Multi-Path assignments before switching.
 
 The router retains the registration key in private storage across upgrades and tunnel removal. Existing Mullvad tunnels from earlier releases stay available. Mullvad allows up to five registered devices per account. [Mullvad device limits](https://mullvad.net/en/help/using-mullvad-vpn-app#too-many-devices)
@@ -84,15 +84,15 @@ Use **Ping server** beside the selected Mullvad server to check ICMP from OPNsen
 
 The GitHub release includes Mihomo, tun2socks, Xray, sing-box, and the Clash YAML parser. The source build can also use independently installed runtimes. Review [PROXY_SUPPORT.md](PROXY_SUPPORT.md) for formats and protocol coverage.
 
-1. Open **Proxies** over HTTPS. Add a single server with **Add a proxy manually**, paste its share link with an optional server name, or import a base64 list, Clash YAML, Xray JSON, or sing-box JSON.
+1. Open **Proxy Login** over HTTPS. Add a single server with **Add a proxy manually**, paste its share link with an optional server name, or import a base64 list, Clash YAML, Xray JSON, or sing-box JSON.
 2. For a provider feed, add its direct HTTPS subscription URL. The router follows public HTTPS redirects after validating each destination and reports DNS, TLS, HTTP, timeout, or format errors. The list shows reported traffic allowance, usage, and expiry when the provider sends those fields. New subscriptions enable automatic refresh every six hours. Change the setting per saved subscription. An enabled exit retains its server if a later refresh removes it.
-3. Choose **Test** to check HTTPS through a saved proxy before enabling it. Choose **Enable** on a server to make it available for routing, then select the exit under **Multi-Path** or **Network**. Device assignments can use the IPv4 kill switch or a backup exit. UDP support varies with the upstream protocol and transport.
+3. Choose **Test** to check HTTPS through a proxy. Imported servers are enabled by default and appear in the server picker. Assign a server in **Network Settings** or **Multi-Path Settings** to start its tunnel once routing is enabled. **Disable** hides an unused server from the picker. Each subscription supports up to 2,048 entries and 4 MiB.
 
 Use **Edit** beside a saved VPN exit or proxy server. Proxy names also appear in routing choices and survive subscription refreshes when the same server configuration returns.
 
 ## Update proxy cores
 
-Open **Proxies → Core updates and storage** as an OPNsense administrator. Select **Check for updates**, then install an approved version or upload its matching archive. Approved archives are checked against their SHA-256, the router’s FreeBSD CPU architecture, reported version, and saved proxy configurations. Core updates retain one rollback version and preserve the bundled baseline. A failed restart restores the prior selection. Proxy exits that depend on the changed core briefly reconnect.
+Open **Proxy Login → Core updates and storage** as an OPNsense administrator. Select **Check for updates**, then install an approved version or upload its matching archive. Approved archives are checked against their SHA-256, the router’s FreeBSD CPU architecture, reported version, and saved proxy configurations. Core updates retain one rollback version and preserve the bundled baseline. A failed restart restores the prior selection. Proxy exits that depend on the changed core briefly reconnect.
 
 The approved [amd64](src/share/blankvpn/core-catalog.json) and [aarch64](src/share/blankvpn/core-catalog-aarch64.json) catalogs pin specific upstream or Blank Networks release assets. Change the catalog on GitHub to approve a new version independently of the plug-in. The [sing-box workflow](.github/workflows/cores.yml) can publish FreeBSD builds from a pinned upstream tag and commit. After verifying the build, add its version and asset SHA-256 to the catalog. The router fetches the catalog on demand. See [CORE_UPDATES.md](CORE_UPDATES.md) for the exact release format, offline installation and rollback.
 
@@ -100,7 +100,7 @@ Core updates, saved Mullvad logins, the private subscription catalog, and recove
 
 ## Choose routing coverage
 
-Open **Network**, check the Ethernet ports or VLANs under **Interface**, choose who should use the rules, then click **Save and Enable VPN**. The button turns green once routing is enabled. The main home Ethernet port appears first. Devices need to use OPNsense as their gateway for the policy to apply.
+Open **Network Settings**, check the Ethernet ports or VLANs under **Interface**, choose who should use the rules, then click **Save and Enable VPN**. The button turns green once routing is enabled. The main home Ethernet port appears first. Devices need to use OPNsense as their gateway for the policy to apply.
 
 - **Only devices I choose** applies saved policies to individual devices. Select **Add device rule** and enter a reserved IPv4 address.
 - **Whole-Network coverage** uses one mode for the selected LANs and VLANs. Existing device assignments are saved for when you switch back. Check **Kill Switch** below **Interface** to block internet if the selected exit goes offline. One-exit mode routes IPv4 through that exit and blocks internet-bound IPv6 while the exit is in use. Blocked mode denies internet access on both families. Off restores normal routing. Whole-Network coverage requires a static IPv4 address on each selected router interface. LAN clients can still use DHCP. Blank VPN reads the current LAN IPv6 prefixes for Track Interface, Identity Association, SLAAC, and DHCPv6.
@@ -113,7 +113,7 @@ Open **Network**, check the Ethernet ports or VLANs under **Interface**, choose 
 | Off | Follow the native network policy and bypass Blank VPN service routing for the assigned addresses. |
 | Blocked | Block internet traffic from the assigned addresses and keep approved local access subject to native firewall rules. |
 
-Under **Network → More routing options**, select **Use Multi-Path domain lists** for the applicable interface and check **Use domain lists only for devices set to Multi-Path** for device-specific use. In **Network**, choose the mode for each reserved LAN IPv4 address. Add the device’s stable IPv6 address to cover that address as well. On shared LANs, other IPv6 addresses follow the native policy. Use a dedicated strict interface for network-wide internet IPv6 blocking.
+In **Network Settings**, choose **Only Devices I choose** and press **Refresh** to see LAN devices and Tailscale peers. **Select** fills the addresses and MAC where available. LAN rules require a unique DHCP reservation. Selecting Multi-Path for a device uses the domain lists assigned in **Multi-Path Settings**. Add the device’s stable IPv6 address to cover that address as well. On shared LANs, other IPv6 addresses follow the native policy. Use a dedicated strict interface for network-wide internet IPv6 blocking.
 
 You can run multiple provider exits together, with up to 32 VPN profiles and eight active proxy exits. A phone can use Mullvad, a TV ExpressVPN, a tablet a proxy, and a Mac NordVPN. With Multi-Path, select a different exit for each service, such as a Japan exit for Netflix, a USA exit for Hulu, and a China exit for WeChat. Each service uses the domains you enter. Presets are starting lists that you can edit.
 
@@ -121,13 +121,13 @@ You can run multiple provider exits together, with up to 32 VPN profiles and eig
 
 The standard OPNsense FreeBSD Tailscale exit node uses userspace forwarding. PF sees the router’s connection after Tailscale has translated it, so it cannot enforce a per-peer internet policy there. The dashboard is still reachable over that Tailscale interface. [Tailscale forwarding modes](https://tailscale.com/docs/reference/kernel-vs-userspace-routers)
 
-To apply per-peer policy, use a Linux Tailscale exit gateway in kernel forwarding mode on a dedicated OPNsense Ethernet or VLAN link. Preserve the peer source addresses, configure the return routes for those addresses through the Linux gateway, and confirm both address families with an OPNsense capture. Advertise and approve the home subnets for remote LAN access. In Blank VPN select **Only devices I choose**, enable the dedicated port under **Network → Interface**, then select the port under **Tailscale → Route Tailscale devices through Blank VPN**. Add a device rule using the peer's Tailscale IPv4 and IPv6 addresses. [Tailscale forwarding modes](https://tailscale.com/docs/reference/kernel-vs-userspace-routers) · [Tailscale subnet routing](https://tailscale.com/docs/features/subnet-routers)
+To apply per-peer policy, use a Linux Tailscale exit gateway in kernel forwarding mode on a dedicated OPNsense Ethernet or VLAN link. Preserve the peer source addresses, configure the return routes for those addresses through the Linux gateway, and confirm both address families with an OPNsense capture. Advertise and approve the home subnets for remote LAN access. In Blank VPN select **Only devices I choose**, enable the dedicated port under **Network Settings → Interface**, then select the port under **Tailscale Settings → Route Tailscale devices through Blank VPN**. Press **Refresh** in **Network Settings**, then select the peer to fill in its Tailscale IPv4 and IPv6 addresses. [Tailscale forwarding modes](https://tailscale.com/docs/reference/kernel-vs-userspace-routers) · [Tailscale subnet routing](https://tailscale.com/docs/features/subnet-routers)
 
 ## Route Netflix or another service
 
 1. Open **Multi-Path Settings**. Choose the Netflix preset, paste your own domains, or load a plain-text or comma-separated file. Each list accepts up to 1,000 unique domains and 128 KiB of input. Enter domains on separate lines or separated by commas. Lines may include `#` comments. Both `netflix.com` and `*.netflix.com` cover the apex and its subdomains.
 2. Save the list with an exit selected, or leave it unassigned and edit it later. An unassigned list adds no DNS or firewall rules. Edit any list to replace the domains from a file, change its exit, or download the editor contents as a text file.
-3. Choose **Multi-Path** under **Whole-Network coverage** on the **Network** page, or enable Multi-Path for selected interfaces under **More routing options** and assign the Multi-Path mode to devices. Use ordinary DNS on the managed interface. Restart the test application and refresh its DNS cache. Check the learned address count and confirm the expected path from the client.
+3. Choose **Multi-Path** under **Whole-Network coverage** on the **Network Settings** page, or enable Multi-Path for selected interfaces under **More routing options** and assign the Multi-Path mode to devices. Use ordinary DNS on the managed interface. Restart the test application and refresh its DNS cache. Check the learned address count and confirm the expected path from the client.
 
 Multi-Path forwards matching DNS through the chosen tunnel and uses the regular resolver for other names. Learned IPv4 destinations use the VPN and learned IPv6 destinations are blocked. When the exit is unavailable, known destinations are blocked. Multi-Path classifies DNS-observed IPs. Shared IPs, existing connections, encrypted DNS, HTTPS record address hints, and endpoints obtained without an observed DNS lookup can affect which connections match. If two services learn the same destination IP, the first saved service rule has precedence. Learned entries are aged out after about a day and relearned from DNS. Mullvad exit IPs may be blocked by Netflix. [Mullvad Netflix guidance](https://mullvad.net/en/help/watching-netflix-with-split-tunneling)
 

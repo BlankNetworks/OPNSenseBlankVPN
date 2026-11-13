@@ -86,7 +86,7 @@ try {
             Operations::exclusive(function () {
                 $model = new BlankVpn();
                 ProxyCores::recover($model);
-                $settings = Policy::routingSettings(Policy::settings($model));
+                $settings = Policy::effectiveRouting($model);
                 $proxyRoutes = ProxyRuntime::routes($model);
                 ProxyCatalog::refreshDue(array_column($proxyRoutes, 'node'));
                 $previousProxies = ProxyRuntime::lastStatus()['active'];
@@ -119,8 +119,13 @@ try {
                 $changed = $runningProxies !== $previousProxies ||
                     @file_get_contents(Policy::STATE_DIR . '/local-networks') !==
                         implode("\n", Policy::localNetworks($settings)) . "\n";
+                $assignedProxies = ProxyRuntime::assignedRoutes($model);
                 foreach ($routes as $id => $profile) {
                     if (($profile['kind'] ?? '') === 'proxy') {
+                        if (!isset($assignedProxies[$id])) {
+                            unset($health[$id]);
+                            continue;
+                        }
                         if ($profile['slot'] % 4 !== (int)gmdate('i') % 4 && in_array($id, $runningProxies, true)) {
                             continue;
                         }

@@ -39,6 +39,24 @@ final class ProxyRuntime
         return $routes;
     }
 
+    public static function assignedRoutes(BlankVpn $model): array
+    {
+        $settings = Policy::settings($model);
+        $selected = array_column(SmartRouting::boundServices(SmartRouting::services($model)), 'profile');
+        if ($settings['coverage'] === 'network') {
+            if ($settings['networkMode'] === 'full') {
+                $selected[] = $settings['networkProfile'];
+            }
+        } else {
+            foreach (Policy::assignments($model) as $assignment) {
+                if (Policy::mode($assignment) === 'full') {
+                    array_push($selected, $assignment['profile'], $assignment['backup']);
+                }
+            }
+        }
+        return array_intersect_key(self::routes($model), array_fill_keys($selected, true));
+    }
+
     public static function route(string $id, int $slot, string $node, string $name, string $core, string $protocol): array
     {
         return [
@@ -189,7 +207,7 @@ final class ProxyRuntime
         } catch (RuntimeException $error) {
             syslog(LOG_WARNING, 'Blank VPN proxy test cleanup: ' . $error->getMessage());
         }
-        $desired = Policy::settings($model)['enabled'] ? array_column(self::routes($model), null, 'slot') : [];
+        $desired = Policy::settings($model)['enabled'] ? array_column(self::assignedRoutes($model), null, 'slot') : [];
         $catalog = $desired === [] ? [] : ProxyCatalog::read()['nodes'];
         $errors = [];
         $active = [];

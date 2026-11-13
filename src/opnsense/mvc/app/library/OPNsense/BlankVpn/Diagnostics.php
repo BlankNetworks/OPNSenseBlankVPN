@@ -135,6 +135,94 @@ final class Diagnostics
         return $this->combine($observations, $interfaces, $this->reservations(), $warnings, $truncated, $now);
     }
 
+    public function tailnetDevices(): array
+    {
+        $output = Resolver::command(['/usr/bin/timeout', '2', '/usr/local/bin/tailscale', 'status', '--json'], false);
+        $status = json_decode($output, true);
+        return is_array($status) ? self::tailnetPeers($status) : [];
+    }
+
+    public static function tailnetPeers(array $status): array
+    {
+        if (($status['BackendState'] ?? '') !== 'Running' || !is_array($status['Peer'] ?? null)) {
+            return [];
+        }
+        $peers = [];
+        foreach (array_slice($status['Peer'], 0, self::DEVICE_LIMIT) as $peer) {
+            if (!is_array($peer) || !is_array($peer['TailscaleIPs'] ?? null)) {
+                continue;
+            }
+            $addresses = array_values(array_filter(array_map(
+                static fn ($ip) => is_string($ip) ? self::ip($ip) : null, $peer['TailscaleIPs']
+            )));
+            $v4 = current(array_filter($addresses, static fn ($ip) => Policy::tailnetAddress($ip))) ?: '';
+            $v6 = current(array_filter($addresses, static fn ($ip) => Policy::tailnetAddress($ip, true))) ?: '';
+            if ($v4 === '' && $v6 === '') {
+                continue;
+            }
+            $name = self::label($peer['HostName'] ?? '') ??
+                self::label(explode('.', (string)($peer['DNSName'] ?? ''), 2)[0]);
+            $peers[] = ['kind' => 'tailnet', 'name' => $name, 'ipv4' => $v4, 'ipv6' => $v6 === '' ? [] : [$v6],
+                'online' => ($peer['Online'] ?? false) === true];
+        }
+        usort($peers, static fn ($a, $b) => [!$a['online'], $a['name'] ?? '', $a['ipv4']] <=>
+            [!$b['online'], $b['name'] ?? '', $b['ipv4']]);
+        return $peers;
+    }
+
+    public function probeLanNeighbors(array $selected): array
+    {
+        $warnings = [];
+        $commands = [];
+        $ports = array_intersect_key(Policy::availableInterfaces(), array_fill_keys($selected, true));
+        $targetsByInterface = [];
+        foreach ($this->localInterfaces($warnings, false) as $interface) {
+            if (!isset($ports[$interface['id']])) {
+                continue;
+            }
+            foreach ($interface['prefixes'] as $ip => $bits) {
+                if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || $bits < 24 || $bits > 30) {
+                    continue;
+                }
+                $source = ip2long($ip);
+                $size = 1 << (32 - $bits);
+                $first = $source & (-$size);
+                for ($address = $first + 1; $address < $first + $size - 1; $address++) {
+                    if (!in_array(long2ip($address), $interface['ownAddresses'], true)) {
+                        $targetsByInterface[$interface['id']][] = ['/sbin/ping', '-n', '-r', '-c', '1', '-t', '1', '-S', $ip, long2ip($address)];
+                    }
+                }
+            }
+        }
+        for ($index = 0; $index < 254 && count($commands) < 256; $index++) {
+            foreach ($targetsByInterface as $targets) {
+                if (isset($targets[$index])) {
+                    $commands[] = $targets[$index];
+                    if (count($commands) === 256) {
+                        break;
+                    }
+                }
+            }
+        }
+        $descriptors = array_fill(0, 3, ['file', '/dev/null', 'w']);
+        $descriptors[0][2] = 'r';
+        $probed = 0;
+        foreach (array_chunk($commands, 24) as $batch) {
+            $processes = [];
+            foreach ($batch as $command) {
+                $process = @proc_open($command, $descriptors, $pipes);
+                if (is_resource($process)) {
+                    $processes[] = $process;
+                }
+            }
+            foreach ($processes as $process) {
+                proc_close($process);
+                $probed++;
+            }
+        }
+        return ['probed' => $probed];
+    }
+
     public function reservations(): array
     {
         // The firewall renderer may call this while configd is applying a reload.

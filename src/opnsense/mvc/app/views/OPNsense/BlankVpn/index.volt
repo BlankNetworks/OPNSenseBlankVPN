@@ -16,10 +16,10 @@
 
     <nav class="bv-navigation" aria-label="Blank VPN pages">
         <button type="button" data-bv-section="vpns" aria-controls="bv-tunnels" aria-pressed="true">VPN Login</button>
-        <button type="button" data-bv-section="proxies" aria-controls="bv-proxies" aria-pressed="false" data-manage-only>Proxies</button>
-        <button type="button" data-bv-section="network" aria-controls="bv-network-page" aria-pressed="false">Network</button>
+        <button type="button" data-bv-section="proxies" aria-controls="bv-proxies" aria-pressed="false" data-manage-only>Proxy Login</button>
+        <button type="button" data-bv-section="network" aria-controls="bv-network-page" aria-pressed="false">Network Settings</button>
         <button type="button" data-bv-section="smart" aria-controls="bv-smart-page" aria-pressed="false">Multi-Path Settings</button>
-        <button type="button" data-bv-section="tailscale" aria-controls="bv-tailscale-page" aria-pressed="false">Tailscale</button>
+        <button type="button" data-bv-section="tailscale" aria-controls="bv-tailscale-page" aria-pressed="false">Tailscale Settings</button>
     </nav>
 
     <div id="bv-message" role="status" aria-live="polite" aria-atomic="true" hidden>
@@ -205,7 +205,10 @@
         </div>
         <div class="bv-heading">
             <label>Find a server <input id="bv-proxy-search" class="form-control" type="search" autocomplete="off"></label>
-            <p id="bv-proxy-count" class="text-muted"></p>
+            <label>Protocol <select id="bv-proxy-filter" class="form-control">
+                <option value="">All protocols</option><option value="socks5">SOCKS5</option>
+            </select></label>
+            <p id="bv-proxy-count" class="text-muted" role="status"></p>
         </div>
         <div class="bv-scroll">
             <table class="table bv-table">
@@ -213,7 +216,11 @@
                 <tbody id="bv-proxy-list"></tbody>
             </table>
         </div>
-        <p class="text-muted">Enable a server to use it in a routing rule.</p>
+        <div class="bv-actions" id="bv-proxy-pages" hidden>
+            <button id="bv-proxy-prev" type="button" class="btn btn-default">Previous</button>
+            <button id="bv-proxy-next" type="button" class="btn btn-default">Next</button>
+        </div>
+        <p class="text-muted">Imported servers are ready to assign. A proxy tunnel starts when a routing rule uses it.</p>
     </section>
 
     <div id="bv-network-page" data-bv-panel="network" hidden>
@@ -247,6 +254,7 @@
                     </label>
                 </div>
                 <p id="bv-coverage-note" class="text-muted" aria-live="polite"></p>
+                <p id="bv-current-routing" class="bv-callout" aria-live="polite"></p>
 
                 <details class="bv-advanced" id="bv-advanced">
                     <summary>More routing options</summary>
@@ -269,17 +277,18 @@
                 </div>
             </form>
         </section>
-        <section class="bv-panel" aria-labelledby="bv-devices-title">
+        <section id="bv-devices" class="bv-panel" aria-labelledby="bv-devices-title">
             <div class="bv-heading">
                 <div>
-                    <h2 id="bv-devices-title">Device rules</h2>
-                    <p id="bv-observed" class="text-muted">Loading saved rules…</p>
+                    <h2 id="bv-devices-title">Devices and routing rules</h2>
+                    <p id="bv-observed" class="text-muted" role="status">Loading devices…</p>
                 </div>
                 <div class="bv-actions">
                     <button id="bv-refresh" type="button" class="btn btn-default">Refresh</button>
                     <button id="bv-add-device" data-manage-only type="button" class="btn btn-primary">Add device rule</button>
                 </div>
             </div>
+            <p id="bv-device-guide" class="text-muted">Choose a device to fill in its addresses. LAN rules use DHCP reservations. Tailscale rules use a link that preserves peer addresses.</p>
             <div class="bv-scroll">
                 <table class="table bv-table bv-devices" role="table">
                     <thead role="rowgroup">
@@ -345,7 +354,7 @@
                 </label>
                 <p class="text-muted">Reconnecting may interrupt downloads, streams, or calls.</p>
                 <div class="bv-actions">
-                    <button type="submit" class="btn btn-primary">Apply assignment</button>
+                    <button id="bv-save-device" type="submit" class="btn btn-primary">Save device rule</button>
                     <button id="bv-remove-assignment" type="button" class="btn btn-default" hidden>Remove assignment</button>
                 </div>
             </form>

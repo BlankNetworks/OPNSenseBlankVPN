@@ -3,6 +3,7 @@ let settingsError = null;
 const reply = {
     dashboard: {
         devices: [{ipv4: '10.0.0.20', ipv4Addresses: ['10.0.0.20', '10.0.0.21'], ipv6: ['fd00::20'], mac:'02:00:00:00:00:20', interface:'lan', interfaceName:'LAN', name:'<b>Device</b>', lastSeen:'2026-11-12T13:30:00Z', stable:true}],
+        tailnetDevices: [{kind:'tailnet', name:'Remote iPad', ipv4:'100.101.102.104', ipv6:['fd7a:115c:a1e0::104'], online:true}],
         profiles: [{id:'vpn1', name:'Canada', relay:'ca-test-wg-001', interface:'wg1', dns:['10.64.0.1'], latestHandshake:1794490200, status:'Recent handshake', receivedBytes:4096, sentBytes:2048}],
         assignments: [{id:'device1',ip:'10.0.0.20',mac:'02:00:00:00:00:20',interface:'lan',
             label:'<b>Device rule</b>',mode:'disabled',profile:'',kind:'lan'}],
@@ -87,6 +88,15 @@ window.jQuery.ajax = async (request) => {
         Object.assign(reply.dashboard.settings, data);
     }
     if (action === 'setSubscriptionAuto') reply.proxyCatalog.feeds[0].auto = data.auto;
+    if (action === 'disableProxyNode' || action === 'enableProxyExit') {
+        reply.proxyCatalog.nodes.find(x => x.id === data.id).disabled = action === 'disableProxyNode';
+    }
+    if (action === 'discoverDevices') {
+        if (!reply.dashboard.devices.some(device => device.ipv4 === '10.0.0.30')) {
+            reply.dashboard.devices.push({ipv4:'10.0.0.30', reservationIpv4:'10.0.0.30', interface:'lan',
+                name:'New console', mac:'02:00:00:00:00:30', stable:true});
+        }
+    }
     return structuredClone(reply[action] || {ok:true});
 };
 
@@ -98,7 +108,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(bv('device-list').textContent.includes('<b>Device rule</b>'), 'device name should remain literal text');
     assert(!bv('device-list').querySelector('b'), 'device name injected HTML');
-    assert(!bv('device-list').textContent.includes('10.0.0.21'), 'automatically observed device leaked into the rules table');
+    assert(bv('device-list').textContent.includes('10.0.0.21') &&
+        bv('device-list').textContent.includes('100.101.102.104'), 'LAN and Tailscale addresses must be listed');
     bv('appearance').value = 'night';
     bv('appearance').dispatchEvent(new Event('change'));
     assert(getComputedStyle(document.getElementById('blankvpn')).colorScheme === 'dark', 'night theme did not apply');
@@ -217,7 +228,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         'Browsing a batch must never register a Mullvad device.');
     bv('relay').value = 'jp-test-wg-001';
     bv('relay').dispatchEvent(new Event('change'));
-    assert(bv('register').textContent === 'Enable', 'available Mullvad server must show Enable');
+    assert(bv('register').textContent === 'Add server', 'Mullvad server must be ready when added');
     bv('register-form').requestSubmit(bv('register'));
     await wait();
     assert(requests.some(x => x.action === 'register' && x.data.relay === 'jp-test-wg-001' &&
@@ -287,7 +298,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'testProxyNode' && x.data.id === 'proxy-1') &&
         bv('proxy-list').querySelector('[data-test-result]').textContent.includes('The proxy connection timed out.'), 'saved proxy test did not report its failure');
 
-    assert([...bv('proxy-list').querySelectorAll('button')].map(button => button.textContent).join(',') === 'Test,Edit,Enable,Remove',
+    assert([...bv('proxy-list').querySelectorAll('button')].map(button => button.textContent).join(',') === 'Test,Edit,Disable,Remove',
         'proxy row actions must use simple labels');
     const failedTest = bv('proxy-list').querySelector('[data-result="fail"]');
     assert(getComputedStyle(failedTest).backgroundColor === 'rgb(255, 240, 241)' &&
@@ -313,9 +324,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('proxy-manual').requestSubmit(bv('proxy-manual').querySelector('button'));
     await wait();
     assert(requests.some(x => x.action === 'addProxyNode' && x.data.protocol === 'socks5'), 'manual proxy was not submitted');
-    [...bv('proxy-list').querySelectorAll('button')].find((item) => item.textContent === 'Enable').click();
+    const buttonByText = (id, label) => [...bv(id).querySelectorAll('button')].find((button) => button.textContent === label);
+    buttonByText('proxy-list', 'Disable').click();
     await wait();
-    assert(requests.some(x => x.action === 'enableProxyExit' && x.data.id === 'proxy-1'), 'proxy was not selected individually');
+    assert(requests.some(x => x.action === 'disableProxyNode' && x.data.id === 'proxy-1') &&
+        buttonByText('proxy-list', 'Enable'), 'imported proxies must start enabled and be switchable');
+    buttonByText('proxy-list', 'Enable').click();
+    await wait();
+    assert(requests.some(x => x.action === 'enableProxyExit' && x.data.id === 'proxy-1'), 'proxy could not be re-enabled');
+    reply.proxyCatalog.nodes.unshift(...Array.from({length:55}, (_, index) => ({
+        id:'bulk-' + index, name:'Server ' + index, host:'192.0.2.6', port:1080, protocol:'vless', core:'mihomo'
+    })));
+    buttonByText('subscription-list', 'Refresh').click();
+    await wait();
+    assert(bv('proxy-count').textContent.includes('1–50 of 56'), 'large catalog page count is incorrect');
+    bv('proxy-next').click();
+    assert(bv('proxy-list').textContent.includes('SOCKS5 office'), 'later pages must include all servers');
+    bv('proxy-filter').value = 'socks5';
+    bv('proxy-filter').dispatchEvent(new Event('input'));
+    assert(bv('proxy-count').textContent === '1 server' && bv('proxy-list').textContent.includes('SOCKS5 office'),
+        'SOCKS5 filter must find a server outside the first page');
+    reply.proxyCatalog.nodes.splice(0, 55);
+    bv('proxy-filter').value = '';
+    bv('proxy-filter').dispatchEvent(new Event('input'));
     bv('proxy-body').value = 'socks5://192.0.2.9:1080';
     bv('proxy-import-name').value = 'Private SOCKS';
     bv('proxy-import').requestSubmit(bv('proxy-import').querySelector('button'));
@@ -359,6 +390,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       !Object.hasOwn(x.data, 'dashboardBind')), 'network save was not scoped');
     assert(bv('save-routing').classList.contains('bv-enabled') && !bv('routing-enabled').hidden,
         'Verified enabled state did not turn the button green.');
+    bv('refresh').click();
+    await wait();
+    assert(requests.some(x => x.action === 'discoverDevices') && bv('device-list').textContent.includes('New console'),
+        'Manual refresh must discover and display LAN devices.');
+    bv('device-list').querySelector('[aria-label="Select New console"]').click();
+    assert(bv('ip').value === '10.0.0.30' && bv('mac').value === '02:00:00:00:00:30' &&
+        bv('interface').value === 'lan' && bv('device-kill').checked, 'Selecting a LAN device must fill the rule.');
+    bv('mode').value = 'full';
+    bv('mode').dispatchEvent(new Event('change'));
+    bv('profile').value = 'proxy-proxy-1';
+    bv('profile').dispatchEvent(new Event('change'));
+    bv('assign-form').requestSubmit(bv('save-device'));
+    await wait();
+    assert(requests.some(x => x.action === 'assign' && x.data.ip === '10.0.0.30' &&
+        x.data.profile === 'proxy-proxy-1' && x.data.killSwitch), 'New proxies must be ready to assign without a separate enable action.');
+    bv('device-list').querySelector('[aria-label="Select Remote iPad"]').click();
+    assert(bv('ip').value === '100.101.102.104' && bv('ipv6').value === 'fd7a:115c:a1e0::104' &&
+        bv('interface').value === 'opt2' && bv('device-kind').value === 'tailnet', 'Tailscale peer rule must fill both addresses.');
+    bv('close-assignment').click();
     bv('coverage').value = 'network';
     bv('network-mode').value = 'full';
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
@@ -415,7 +465,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(getComputedStyle(bv('service-form')).display === 'none', 'service management visible to read-only user');
     assert(getComputedStyle(bv('add-device')).display === 'none', 'management controls were visible to read-only user');
-    assert(bv('device-list').querySelectorAll('button').length === 1, 'read-only device controls incorrect');
+    assert([...bv('device-list').querySelectorAll('button')].every(button => button.textContent === 'Connections'),
+        'Read-only device controls must exclude rule editing.');
     document.body.setAttribute('data-fixture-result', 'PASS');
   } catch (error) {
     document.body.setAttribute('data-fixture-result', 'FAIL ' + error.message);

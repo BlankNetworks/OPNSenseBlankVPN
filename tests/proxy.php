@@ -63,6 +63,14 @@ foreach ([
     fclose($server);
 }
 
+$largeLinks = array_map(static fn (int $port): string => "socks5://192.0.2.8:$port", range(10000, 11200));
+$largeImport = ProxyImport::parse(base64_encode(implode("\n", $largeLinks)));
+assertProxy(count($largeImport['nodes']) === 1201 && $largeImport['skipped'] === 0,
+    'A subscription with more than 1,000 distinct SOCKS5 links must import completely.');
+$structuredSocks = proxyNode('{"proxies":[{"name":"Clash SOCKS","type":"socks","server":"192.0.2.8","port":1080}]}');
+assertProxy($structuredSocks['protocol'] === 'socks5' && $structuredSocks['config']['type'] === 'socks5',
+    'A Clash SOCKS alias must import and display as SOCKS5.');
+
 $uuid = 'e823f0a1-0f99-4ed1-aa0d-f5b05ae75e19';
 $ss = 'ss://' . rtrim(strtr(base64_encode('aes-256-gcm:fixture-pass'), '+/', '-_'), '=') . '@192.0.2.2:1234#Example';
 $legacy = 'ssr://' . rtrim(strtr(base64_encode('192.0.2.3:443:origin:aes-256-cfb:plain:' .
@@ -106,6 +114,9 @@ $replaceNodes = new ReflectionMethod(ProxyCatalog::class, 'replaceNodes');
 $replaceNodes->invokeArgs(null, [&$catalogData, 'feed', [$id => $savedNode], []]);
 assertProxy($catalogData['nodes'][$id]['name'] === 'My server' && $catalogData['nodes'][$id]['config'] === $savedNode['config'] &&
     $catalogData['nodes'][$id]['sources'] === ['manual', 'feed'], 'Subscription refresh must preserve custom names and identity.');
+$catalogData['nodes'][$id]['disabled'] = true;
+$replaceNodes->invokeArgs(null, [&$catalogData, 'feed', [$id => $savedNode], []]);
+assertProxy($catalogData['nodes'][$id]['disabled'] === true, 'Subscription refresh must preserve a disabled server.');
 assertProxy(ProxyCatalog::serverName('  My SOCKS5 server  ') === 'My SOCKS5 server', 'Trim a custom server name.');
 
 $subscriptionEndpoint = new ReflectionMethod(ProxyCatalog::class, 'endpoint');

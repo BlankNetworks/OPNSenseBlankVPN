@@ -38,6 +38,26 @@ final class Policy
         return $result;
     }
 
+    public static function effectiveRouting(BlankVpn $model): array
+    {
+        $settings = self::routingSettings(self::settings($model));
+        if ($settings['coverage'] !== 'device') {
+            return $settings;
+        }
+        $deviceOnly = [];
+        foreach (self::assignments($model) as $row) {
+            $interface = $row['interface'];
+            if (self::mode($row) === 'multi' && in_array($interface, $settings['interfaces'], true) &&
+                !in_array($interface, $settings['strictInterfaces'], true) &&
+                !in_array($interface, $settings['smartInterfaces'], true)) {
+                $deviceOnly[$interface] = true;
+            }
+        }
+        $settings['deviceMultiInterfaces'] = array_keys($deviceOnly);
+        $settings['smartInterfaces'] = [...$settings['smartInterfaces'], ...$settings['deviceMultiInterfaces']];
+        return $settings;
+    }
+
     public static function routingSettings(array $settings): array
     {
         if (($settings['coverage'] ?? '') === 'network') {

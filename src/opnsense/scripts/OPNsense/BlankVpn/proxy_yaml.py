@@ -18,7 +18,7 @@ class ProxyLoader(yaml.SafeLoader):
         self.nodes = 0
 
     def compose_node(self, parent, index):
-        if self.check_event(yaml.AliasEvent) or self.depth >= 24 or self.nodes >= 16000:
+        if self.check_event(yaml.AliasEvent) or self.depth >= 24 or self.nodes >= 120_000:
             raise ValueError("Unsupported YAML alias or structure")
         self.depth += 1
         self.nodes += 1
@@ -35,14 +35,14 @@ class ProxyLoader(yaml.SafeLoader):
 
 
 try:
-    data = sys.stdin.buffer.read(2_097_153)
-    if len(data) > 2_097_152:
+    data = sys.stdin.buffer.read(4_194_305)
+    if len(data) > 4_194_304:
         raise ValueError("Oversized YAML document")
     document = yaml.load(data, Loader=ProxyLoader)
     if not isinstance(document, dict) or not isinstance(document.get("proxies"), list):
         raise ValueError("Expected a proxy list")
     output = json.dumps({"proxies": document["proxies"]}, allow_nan=False)
-    if len(output) > 2_097_152:
+    if len(output) > 4_194_304:
         raise ValueError("Oversized proxy list")
     sys.stdout.write(output)
 except (ValueError, TypeError, yaml.YAMLError):
