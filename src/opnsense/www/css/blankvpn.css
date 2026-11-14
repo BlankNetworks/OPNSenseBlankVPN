@@ -809,3 +809,41 @@
         gap: .45em;
     }
 }
+
+.blankvpn .bv-scope-choice {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 0;
+}
+
+.blankvpn .bv-scope-choice select {
+    width: auto;
+}
+
+.blankvpn .bv-services td,
+.blankvpn .bv-route-test-detail {
+    overflow-wrap: anywhere;
+}
+
+.blankvpn .bv-services .bv-inline-form select {
+    min-width: 0;
+    width: 100%;
+}
+
+@media (max-width: 767px) {
+    .blankvpn .bv-services thead {
+        display: none;
+    }
+
+    .blankvpn .bv-services tr {
+        display: block;
+        border-top: 1px solid var(--bv-line);
+        padding-block: 0.5rem;
+    }
+
+    .blankvpn .bv-services td {
+        display: block;
+        border: 0;
+    }
+}

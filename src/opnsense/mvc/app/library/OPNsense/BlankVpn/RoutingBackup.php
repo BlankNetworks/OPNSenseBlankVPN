@@ -18,6 +18,9 @@ final class RoutingBackup
         'enabled', 'interfaces', 'coverage', 'networkMode', 'networkProfile', 'networkKillSwitch',
         'strictInterfaces', 'smartInterfaces', 'smartAssignedOnly', 'tailscaleInterfaces', 'localNetworks',
     ];
+    private const TAILNET_SETTINGS = [
+        'tailnetEnabled', 'tailnetCoverage', 'tailnetNetworkMode', 'tailnetNetworkProfile', 'tailnetNetworkKillSwitch',
+    ];
     private const ASSIGNMENT = [
         'ip', 'interface', 'mac', 'ipv6', 'paused', 'kind', 'mode', 'label', 'profile', 'backup', 'killSwitch',
         'failure', 'onDemand', 'bindMac', 'networkBypass', 'networkBypassIpv6',
@@ -53,8 +56,12 @@ final class RoutingBackup
             throw new DomainException('Preview this file again. The backup or router routing settings have changed.');
         }
 
-        foreach ($incoming['settings'] as $field => $value) {
-            $model->settings->$field = $field === 'enabled' ? '0' : $value;
+        $settings = $incoming['settings'] + [
+            'tailnetEnabled' => '0', 'tailnetCoverage' => 'device', 'tailnetNetworkMode' => 'disabled',
+            'tailnetNetworkProfile' => '', 'tailnetNetworkKillSwitch' => '',
+        ];
+        foreach ($settings as $field => $value) {
+            $model->settings->$field = in_array($field, ['enabled', 'tailnetEnabled'], true) ? '0' : $value;
         }
         foreach ($incoming['mullvadCatalog'] as $field => $value) {
             $model->mullvadCatalog->$field = $value;
@@ -74,6 +81,7 @@ final class RoutingBackup
             $node->name = $row['name'];
             $node->domains = implode(',', $row['domains']);
             $node->profile = $row['profile'];
+            $node->scope = $row['scope'] ?? 'both';
         }
         if (count($model->performValidation()) !== 0) {
             throw new DomainException('OPNsense rejected the routing settings. Review existing interfaces and routes.');
@@ -115,7 +123,7 @@ final class RoutingBackup
         $key = self::identity(false);
         $incoming = self::decode($json, $key);
         $current = self::snapshot($model, false);
-        if (Policy::settings($model)['enabled']) {
+        if (Policy::anyEnabled(Policy::settings($model))) {
             throw new DomainException('Disable Blank VPN & Proxy routing before restoring a backup.');
         }
 
@@ -171,7 +179,7 @@ final class RoutingBackup
         $combined = array_filter($incoming['assignments'], static fn (array $row): bool => $row['mode'] === 'full_multi');
         $dnsLists = array_filter($incoming['services'], static fn (array $list): bool =>
             SmartRouting::hasDomains($list['domains']));
-        foreach ([$incoming['settings']['networkProfile'], ...array_column($dnsLists, 'profile'),
+        foreach ([$incoming['settings']['networkProfile'], $incoming['settings']['tailnetNetworkProfile'] ?? '', ...array_column($dnsLists, 'profile'),
             ...array_column($combined, 'profile')] as $id) {
             if ($id !== '' && $id !== SmartRouting::BYPASS && !SmartRouting::canResolve($live[$id])) {
                 throw new DomainException('A saved network or Multi-Path exit needs working IPv4 DNS.');
@@ -219,7 +227,8 @@ final class RoutingBackup
 
     private static function snapshot(BlankVpn $model, bool $requireComplete = true): array
     {
-        $settings = array_intersect_key(Policy::fields($model->settings), array_flip(self::SETTINGS));
+        $settings = array_intersect_key(Policy::fields($model->settings), array_flip([...self::SETTINGS, ...self::TAILNET_SETTINGS]));
+        $settings['tailnetEnabled'] = Policy::settings($model)['tailnetEnabled'] ? '1' : '0';
         $mullvadCatalog = array_intersect_key(Policy::fields($model->mullvadCatalog), array_flip(self::CATALOG));
         $reservationIndex = null;
         $assignments = [];
@@ -338,23 +347,19 @@ final class RoutingBackup
         if (!is_array($settings)) {
             throw new DomainException('The backup routing settings are invalid.');
         }
-        self::keys($settings, self::SETTINGS);
+        self::keys($settings, [...self::SETTINGS, ...self::TAILNET_SETTINGS]);
         foreach (self::SETTINGS as $name) {
             self::text($settings[$name] ?? null, 2048);
         }
-        self::oneOf($settings['enabled'], ['0', '1']);
-        self::oneOf($settings['coverage'], ['device', 'network']);
-        self::oneOf($settings['networkMode'], ['disabled', 'full', 'multi', 'full_multi', 'blocked']);
-        self::oneOf($settings['networkKillSwitch'], ['', '0', '1']);
         self::oneOf($settings['smartAssignedOnly'], ['0', '1']);
-        if (
-            ($settings['networkProfile'] !== '' && !self::uuid($settings['networkProfile'])) ||
-            ($settings['networkProfile'] !== '' &&
-                ($settings['coverage'] !== 'network' || !Policy::usesBase($settings['networkMode']))) ||
-            ($settings['enabled'] === '1' && $settings['coverage'] === 'network' &&
-                Policy::usesBase($settings['networkMode']) && $settings['networkProfile'] === '')
-        ) {
-            throw new DomainException('The backup has an invalid Whole-Network exit.');
+        self::validateCoverage($settings['enabled'], $settings['coverage'], $settings['networkMode'],
+            $settings['networkProfile'], $settings['networkKillSwitch']);
+        if (array_intersect(self::TAILNET_SETTINGS, array_keys($settings)) !== []) {
+            foreach (self::TAILNET_SETTINGS as $name) {
+                self::text($settings[$name] ?? null, 64);
+            }
+            self::validateCoverage($settings['tailnetEnabled'], $settings['tailnetCoverage'],
+                $settings['tailnetNetworkMode'], $settings['tailnetNetworkProfile'], $settings['tailnetNetworkKillSwitch']);
         }
         foreach (['interfaces', 'strictInterfaces', 'smartInterfaces', 'tailscaleInterfaces'] as $name) {
             $ids = self::csv($settings[$name]);
@@ -425,7 +430,9 @@ final class RoutingBackup
         $forward = [];
         $bypass = [];
         foreach ($services as $row) {
-            self::keys($row, ['id', 'name', 'domains', 'profile']);
+            self::keys($row, ['id', 'name', 'domains', 'profile', 'scope']);
+            $scope = $row['scope'] ?? 'both';
+            self::oneOf($scope, ['local', 'tailscale', 'both']);
             self::text($row['name'] ?? null, 256, '/^[^\p{C}<>]{1,64}$/uD');
             $profile = self::text($row['profile'] ?? null, 64);
             if ($profile !== '' && $profile !== SmartRouting::BYPASS && !self::uuid($profile)) {
@@ -441,12 +448,16 @@ final class RoutingBackup
             if (SmartRouting::destinations(implode(',', $domains)) !== $domains) {
                 throw new DomainException('The backup contains an improperly formatted Multi-Path domain list.');
             }
-            if ($profile === SmartRouting::BYPASS) {
-                SmartRouting::checkOverlap($bypass, '', $domains);
-                $bypass[$row['id']] = $row;
-            } elseif ($profile !== '') {
-                SmartRouting::checkOverlap($forward, '', $domains);
-                $forward[$row['id']] = $row;
+            if ($profile !== '') {
+                $sameMode = $profile === SmartRouting::BYPASS ? $bypass : $forward;
+                foreach ($scope === 'both' ? ['local', 'tailscale'] : [$scope] as $ingress) {
+                    SmartRouting::checkOverlap(SmartRouting::forScope($sameMode, $ingress), '', $domains);
+                }
+                if ($profile === SmartRouting::BYPASS) {
+                    $bypass[$row['id']] = $row;
+                } else {
+                    $forward[$row['id']] = $row;
+                }
             }
         }
         $interfaces = self::signatures($document['interfaces'] ?? null, self::interfaces($settings));
@@ -454,9 +465,22 @@ final class RoutingBackup
         return compact('settings', 'mullvadCatalog', 'interfaces', 'assignments', 'services', 'routes');
     }
 
+    private static function validateCoverage(string $enabled, string $coverage, string $mode, string $profile, string $kill): void
+    {
+        self::oneOf($enabled, ['0', '1']);
+        self::oneOf($coverage, ['device', 'network']);
+        self::oneOf($mode, ['disabled', 'full', 'multi', 'full_multi', 'blocked']);
+        self::oneOf($kill, ['', '0', '1']);
+        $usesBase = $coverage === 'network' && Policy::usesBase($mode);
+        if (($profile !== '' && (!$usesBase || !self::uuid($profile))) ||
+            ($enabled === '1' && $usesBase && $profile === '')) {
+            throw new DomainException('The backup has an invalid Whole-Network exit.');
+        }
+    }
+
     private static function references(array $settings, array $assignments, array $services): array
     {
-        $ids = [$settings['networkProfile'] ?? '', ...array_column($assignments, 'profile'),
+        $ids = [$settings['networkProfile'] ?? '', $settings['tailnetNetworkProfile'] ?? '', ...array_column($assignments, 'profile'),
             ...array_column($assignments, 'backup'), ...array_column($services, 'profile')];
         $ids = array_values(array_unique(array_diff($ids, ['', SmartRouting::BYPASS])));
         sort($ids);

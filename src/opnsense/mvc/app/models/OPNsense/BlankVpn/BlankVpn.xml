@@ -1,6 +1,6 @@
 <model>
     <mount>//OPNsense/BlankVpn</mount>
-    <version>1.12.0</version>
+    <version>1.13.0</version>
     <description>Blank VPN &amp; Proxy configuration and native object ownership</description>
     <items>
         <settings>
@@ -10,6 +10,11 @@
             <networkMode type="TextField"><Default>disabled</Default></networkMode>
             <networkProfile type="TextField"/>
             <networkKillSwitch type="TextField"/>
+            <tailnetEnabled type="TextField"/>
+            <tailnetCoverage type="TextField"><Default>device</Default></tailnetCoverage>
+            <tailnetNetworkMode type="TextField"><Default>disabled</Default></tailnetNetworkMode>
+            <tailnetNetworkProfile type="TextField"/>
+            <tailnetNetworkKillSwitch type="TextField"/>
             <strictInterfaces type="TextField"/>
             <smartInterfaces type="TextField"/>
             <smartAssignedOnly type="BooleanField"><Default>0</Default></smartAssignedOnly>
@@ -83,6 +88,7 @@
             <service type="ArrayField">
                 <name type="TextField"><Required>Y</Required></name>
                 <domains type="TextField"><Required>Y</Required></domains>
+                <scope type="TextField"><Default>both</Default></scope>
                 <profile type="TextField"/>
             </service>
         </services>

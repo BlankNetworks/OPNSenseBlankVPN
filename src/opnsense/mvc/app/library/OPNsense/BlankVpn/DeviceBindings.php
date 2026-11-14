@@ -14,9 +14,8 @@ final class DeviceBindings
     {
         $settings = Policy::effectiveRouting($model);
         $rows = Policy::assignments($model, true);
-        $active = $settings['enabled'] && $settings['coverage'] === 'device';
         $diagnostics = new Diagnostics();
-        $assignments = $active ? Policy::routingAssignments($rows, $diagnostics) : [];
+        $assignments = Policy::deviceAssignments($settings, Policy::routingAssignments($rows, $diagnostics));
         $scopes = [];
         foreach ($assignments as $id => $row) {
             if (Policy::bindsMac($row) && in_array($row['interface'], $settings['interfaces'], true) &&

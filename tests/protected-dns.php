@@ -163,8 +163,35 @@ checkDnsPlan(str_contains($devices[$base['dnsPort']], 'server=/example.net/9.9.9
     'Protected and unprotected devices on the same profile keep separate DNS paths, including overlapping lists.');
 
 $unchecked = $makePlan(array_replace($settings, ['networkKillSwitch' => false]), fallback: true);
-checkDnsPlan(str_contains($unchecked[Resolver::FALLBACK_PORT], "\nserver=9.9.9.9@192.0.2.9\n") &&
+checkDnsPlan(str_contains($unchecked[Resolver::COMBINED_FALLBACK_PORT], "\nserver=9.9.9.9@192.0.2.9\n") &&
     !isset($unchecked[$combinedPort]), 'Unchecked Whole-Network coverage can retain explicit WAN DNS fallback.');
+
+$scoped = new ReflectionMethod(Resolver::class, 'scopedListenerPlan');
+$tailnet = array_replace($settings, ['scope' => 'tailscale', 'interfaces' => ['tailscale0'], 'smartInterfaces' => ['tailscale0']]);
+$localOnly = $routed + ['scope' => 'local'];
+$tailnetOnly = ['id' => 'remote', 'profile' => 'video', 'domains' => ['remote.example.net'], 'scope' => 'tailscale'];
+$remoteTag = Policy::marker('smart', 'tailscale0');
+$remoteTable = SmartRouting::table($tailnetOnly);
+$rules = $liveRules + [
+    Policy::marker('combined_scope', 'tailscale0') => ['tag' => $remoteTag],
+    Policy::marker('service', 'remote:tailscale0') => [
+        'action' => 'pass', 'table' => $remoteTable, 'gateway' => $proxy['interface'], 'tagged' => $remoteTag
+    ],
+    Policy::marker('service_guard', 'remote:tailscale0') => [
+        'action' => 'block', 'table' => $remoteTable, 'tagged' => $remoteTag
+    ],
+];
+$both = $scoped->invoke(null, ['scopes' => [$settings + ['scope' => 'local'], $tailnet]],
+    'blankvpn.home.arpa', '192.0.2.1', [], $profiles, ['video' => $localOnly, 'remote' => $tailnetOnly],
+    $wan, $rules, ['base' => ['reachable' => false]]);
+$remotePort = Resolver::scopedPort($combinedPort, true);
+checkDnsPlan(Resolver::allowedPort($remotePort) &&
+    str_contains($both[$combinedPort], 'server=/video.example.net/') &&
+    !str_contains($both[$combinedPort], 'remote.example.net') &&
+    str_contains($both[$remotePort], 'server=/remote.example.net/') &&
+    !str_contains($both[$remotePort], 'video.example.net') &&
+    !str_contains($both[$remotePort] . $both[$combinedPort], '10.64.0.1@'),
+    'A shared base can fail without disabling either scope’s own routed DNS overrides or cross-wiring their listeners.');
 
 $table = SmartRouting::table($routed);
 $other = 'bvs_' . str_repeat('a', 24);

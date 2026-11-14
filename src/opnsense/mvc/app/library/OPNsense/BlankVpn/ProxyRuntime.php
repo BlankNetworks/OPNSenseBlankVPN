@@ -46,20 +46,18 @@ final class ProxyRuntime
         $settings = Policy::effectiveRouting($model);
         $services = SmartRouting::forwardServices($settings, SmartRouting::services($model));
         $selected = array_column($services, 'profile');
-        if ($settings['coverage'] === 'network') {
-            if (Policy::usesBase($settings['networkMode'])) {
-                $selected[] = $settings['networkProfile'];
+        $assignments = Policy::deviceAssignments($settings, Policy::assignments($model, true));
+        foreach ($assignments as $row) {
+            if (Policy::usesBase(Policy::mode($row))) {
+                $selected[] = $row['profile'];
+                if (($row['failure'] ?? '') === 'backup') {
+                    $selected[] = $row['backup'];
+                }
             }
-        } else {
-            foreach (Policy::assignments($model, true) as $assignment) {
-                if (!Policy::usesBase(Policy::mode($assignment)) ||
-                    !in_array($assignment['interface'], $settings['interfaces'], true)) {
-                    continue;
-                }
-                $selected[] = $assignment['profile'];
-                if (($assignment['failure'] ?? '') === 'backup') {
-                    $selected[] = $assignment['backup'];
-                }
+        }
+        foreach (Policy::scopes($settings) as $scope) {
+            if ($scope['coverage'] === 'network' && Policy::usesBase($scope['networkMode'])) {
+                $selected[] = $scope['networkProfile'];
             }
         }
         return array_intersect_key(self::routes($model), array_fill_keys($selected, true));
@@ -217,7 +215,7 @@ final class ProxyRuntime
         } catch (RuntimeException $error) {
             syslog(LOG_WARNING, 'Blank VPN proxy test cleanup: ' . $error->getMessage());
         }
-        $desired = Policy::settings($model)['enabled'] ? array_column(self::assignedRoutes($model), null, 'slot') : [];
+        $desired = Policy::anyEnabled(Policy::settings($model)) ? array_column(self::assignedRoutes($model), null, 'slot') : [];
         $previous = self::statusRecord();
         $catalog = null;
         $catalogError = null;

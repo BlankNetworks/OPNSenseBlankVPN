@@ -73,6 +73,14 @@ try {
             Resolver::command(['/sbin/pfctl', '-k', $network ?? $ip]);
             echo "ok\n";
             break;
+        case 'reset_tailnet':
+            $source = $argv[2] ?? '';
+            if (!in_array($source, [Policy::TAILSCALE_V4, Policy::TAILSCALE_V6], true) &&
+                !Policy::tailnetAddress($source) && !Policy::tailnetAddress($source, true)) {
+                exit(64);
+            }
+            echo Diagnostics::resetTailnetStates($source) ? "ok\n" : "failed\n";
+            break;
         case 'reload':
             $response = Resolver::command(['/usr/local/etc/rc.filter_configure', 'skip_alias']);
             if (!preg_match('/\bdone\.\s*$/', $response)) {
@@ -98,7 +106,7 @@ try {
                         }
                     }
                 }
-                if ($settings['enabled'] || Policy::profiles($model) !== [] || NativeVpn::routes($model) !== [] ||
+                if (Policy::anyEnabled($settings) || Policy::profiles($model) !== [] || NativeVpn::routes($model) !== [] ||
                     (string)(\OPNsense\Core\Config::getInstance()->object()->OPNsense->tailscale->settings->enabled ?? '') === '1') {
                     Operations::sync($model);
                 }
@@ -112,8 +120,8 @@ try {
                 // masquerading as an empty ruleset and failing every tunnel health check.
                 $loaded = Firewall::parseLoadedRules(Resolver::command(['/sbin/pfctl', '-sr']));
                 Policy::refreshMacConflicts($model);
-                $assignments = $settings['coverage'] === 'device'
-                    ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
+                $assignments = Policy::deviceAssignments($settings,
+                    Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()));
                 $bindings = DeviceBindings::pending($model, $loaded);
                 $bindingsChanged = $bindings['reset'] !== [] || $bindings['changed'];
                 ProxyCores::recover($model);

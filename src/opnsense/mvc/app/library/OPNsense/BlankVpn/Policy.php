@@ -32,11 +32,23 @@ final class Policy
         }
         $result['smartAssignedOnly'] = ($stored['smartAssignedOnly'] ?? '0') === '1';
         $result['coverage'] = ($stored['coverage'] ?? '') === 'network' ? 'network' : 'device';
-        $result['networkMode'] = in_array($stored['networkMode'] ?? '', ['full', 'multi', 'full_multi', 'blocked', 'disabled'], true)
-            ? $stored['networkMode'] : 'disabled';
+        $mode = $stored['networkMode'] ?? 'disabled';
+        $result['networkMode'] = self::validNetworkMode($mode) ? $mode : 'disabled';
         $result['networkProfile'] = $stored['networkProfile'] ?? '';
         $killSwitch = $stored['networkKillSwitch'] ?? '';
         $result['networkKillSwitch'] = $killSwitch === '1' || ($killSwitch === '' && $result['networkMode'] !== 'multi');
+        $tailnetMode = $stored['tailnetNetworkMode'] ?? 'disabled';
+        $tailnetEnabled = $stored['tailnetEnabled'] ?? '';
+        $legacyPeers = $tailnetEnabled === '' && $result['enabled'] && $result['coverage'] === 'device';
+        $result['tailnetEnabled'] = $tailnetEnabled === '1' ||
+            ($legacyPeers && array_filter(self::assignments($model), static fn (array $row): bool =>
+                self::assignmentScope($row) === 'tailscale') !== []);
+        $result['tailnetCoverage'] = ($stored['tailnetCoverage'] ?? '') === 'network' ? 'network' : 'device';
+        $result['tailnetNetworkMode'] = self::validNetworkMode($tailnetMode) ? $tailnetMode : 'disabled';
+        $result['tailnetNetworkProfile'] = $stored['tailnetNetworkProfile'] ?? '';
+        $tailnetKillSwitch = $stored['tailnetNetworkKillSwitch'] ?? '';
+        $result['tailnetNetworkKillSwitch'] = $tailnetKillSwitch === '1' ||
+            ($tailnetKillSwitch === '' && $result['tailnetNetworkMode'] !== 'multi');
         $result['dashboardBind'] = ($stored['dashboardBind'] ?? '') === 'tailnet' ? 'tailnet' : 'lan';
         $result['hostname'] = $stored['hostname'] ?? 'blankvpn.home.arpa';
         return $result;
@@ -44,16 +56,81 @@ final class Policy
 
     public static function effectiveRouting(BlankVpn $model): array
     {
-        $settings = self::routingSettings(self::settings($model));
-        if ($settings['coverage'] !== 'device') {
-            return $settings;
+        $stored = self::settings($model);
+        $rows = self::anyEnabled($stored) ? self::assignments($model, true) : [];
+        $scopes = [];
+        foreach (['local', 'tailscale'] as $scope) {
+            $policy = self::scope($stored, $scope, $rows);
+            if ($policy['enabled']) {
+                $scopes[$scope] = $policy;
+            }
         }
-        $assignments = self::assignments($model, true);
-        if (in_array(self::TAILSCALE_DEVICE, array_column($assignments, 'interface'), true)) {
-            $settings['interfaces'][] = self::TAILSCALE_DEVICE;
+        $settings = ['enabled' => $scopes !== [], 'scopes' => $scopes] + $stored;
+        foreach (['interfaces', 'smartInterfaces', 'strictInterfaces', 'deviceMultiInterfaces'] as $field) {
+            $settings[$field] = array_merge(...array_column($scopes, $field));
         }
+        return $settings;
+    }
+
+    public static function anyEnabled(array $settings): bool
+    {
+        return !empty($settings['enabled']) || !empty($settings['tailnetEnabled']);
+    }
+
+    public static function scopes(array $settings): array
+    {
+        return $settings['scopes'] ?? [$settings];
+    }
+
+    public static function assignmentScope(array $row): string
+    {
+        return ($row['kind'] ?? '') === 'tailnet' ? 'tailscale' : 'local';
+    }
+
+    public static function scopedAssignments(array $settings, array $rows): array
+    {
+        return array_filter($rows, static fn (array $row): bool =>
+            in_array($row['interface'], $settings['interfaces'], true) &&
+            (!isset($settings['scope']) || self::assignmentScope($row) === $settings['scope']));
+    }
+
+    public static function deviceAssignments(array $settings, array $rows): array
+    {
+        $active = [];
+        foreach (self::scopes($settings) as $scope) {
+            if ($scope['enabled'] && $scope['coverage'] === 'device') {
+                $active += self::scopedAssignments($scope, $rows);
+            }
+        }
+        return $active;
+    }
+
+    public static function scope(array $settings, string $scope, array $rows = []): array
+    {
+        $settings['scope'] = $scope;
+        $transit = $settings['tailscaleInterfaces'];
+        if ($scope === 'tailscale') {
+            foreach (['enabled', 'coverage', 'networkMode', 'networkProfile', 'networkKillSwitch'] as $field) {
+                $settings[$field] = $settings['tailnet' . ucfirst($field)];
+            }
+            $settings['interfaces'] = $transit;
+            if (($settings['coverage'] === 'network' &&
+                ($transit === [] || self::nativeTailnetConfigured())) ||
+                in_array(self::TAILSCALE_DEVICE, array_column($rows, 'interface'), true)) {
+                $settings['interfaces'][] = self::TAILSCALE_DEVICE;
+            }
+            $settings['localNetworks'] = [];
+            $settings['strictInterfaces'] = [];
+            $settings['smartInterfaces'] = [];
+            $settings['smartAssignedOnly'] = true;
+        } else {
+            foreach (['interfaces', 'strictInterfaces', 'smartInterfaces'] as $field) {
+                $settings[$field] = array_values(array_diff($settings[$field], $transit, [self::TAILSCALE_DEVICE]));
+            }
+        }
+        $settings = self::routingSettings($settings);
         $deviceOnly = [];
-        foreach ($assignments as $row) {
+        foreach ($settings['coverage'] === 'device' ? self::scopedAssignments($settings, $rows) : [] as $row) {
             $interface = $row['interface'];
             $mode = self::mode($row);
             if (self::usesMultiPath($mode) && in_array($interface, $settings['interfaces'], true) &&
@@ -67,10 +144,17 @@ final class Policy
         return $settings;
     }
 
+    public static function validNetworkMode(string $mode): bool
+    {
+        return in_array($mode, ['full', 'multi', 'full_multi', 'blocked', 'disabled'], true);
+    }
+
     public static function routingSettings(array $settings): array
     {
         if (($settings['coverage'] ?? '') === 'network') {
-            $settings['interfaces'] = array_values(array_diff($settings['interfaces'], $settings['tailscaleInterfaces']));
+            if (($settings['scope'] ?? '') !== 'tailscale') {
+                $settings['interfaces'] = array_values(array_diff($settings['interfaces'], $settings['tailscaleInterfaces']));
+            }
             $settings['smartInterfaces'] = self::usesMultiPath($settings['networkMode']) ? $settings['interfaces'] : [];
             $settings['strictInterfaces'] = [];
             $settings['smartAssignedOnly'] = false;
@@ -158,8 +242,11 @@ final class Policy
 
     public static function networkBypassAssignments(array $settings, array $assignments): array
     {
-        if (empty($settings['enabled']) || ($settings['coverage'] ?? '') !== 'network' ||
-            !empty($settings['networkKillSwitch']) ||
+        if (isset($settings['scopes'])) {
+            return self::networkBypassAssignments($settings['scopes']['local'] ?? ['enabled' => false], $assignments);
+        }
+        if (empty($settings['enabled']) || ($settings['scope'] ?? '') === 'tailscale' ||
+            ($settings['coverage'] ?? '') !== 'network' || !empty($settings['networkKillSwitch']) ||
             !in_array($settings['networkMode'] ?? '', ['full', 'multi', 'full_multi'], true)) {
             return [];
         }
@@ -292,6 +379,9 @@ final class Policy
 
     private static function protectedLanAssignments(array $settings, array $assignments): array
     {
+        if (isset($settings['scopes'])) {
+            return self::protectedLanAssignments($settings['scopes']['local'] ?? ['enabled' => false], $assignments);
+        }
         if (empty($settings['enabled']) || ($settings['coverage'] ?? '') !== 'device') {
             return [];
         }
@@ -410,6 +500,10 @@ final class Policy
         $config = Config::getInstance()->object();
         $runtime = null;
         foreach ($interfaces as $interface) {
+            if ($interface === self::TAILSCALE_DEVICE) {
+                array_push($networks, self::TAILSCALE_V4, self::TAILSCALE_V6);
+                continue;
+            }
             $node = $config->interfaces->{$interface};
             $name = (string)$node->descr ?: strtoupper($interface);
             $ipv4 = self::cidr((string)$node->ipaddr . '/' . (string)$node->subnet);
@@ -437,6 +531,14 @@ final class Policy
             $networks[] = $network;
         }
         return array_values(array_unique($networks));
+    }
+
+    public static function routingSources(array $settings, array $interfaces): array
+    {
+        if (($settings['scope'] ?? '') === 'tailscale') {
+            return $interfaces === [] ? [] : [self::TAILSCALE_V4, self::TAILSCALE_V6];
+        }
+        return self::segmentNetworks($interfaces);
     }
 
     private static function runtimeInterfaces(): array
@@ -475,7 +577,8 @@ final class Policy
                 $networks[] = $network;
             }
         }
-        if (in_array(self::TAILSCALE_DEVICE, $settings['interfaces'] ?? [], true)) {
+        if (in_array(self::TAILSCALE_DEVICE, $settings['interfaces'] ?? [], true) ||
+            (string)(Config::getInstance()->object()->OPNsense->tailscale->settings->enabled ?? '') === '1') {
             array_push($networks, self::TAILSCALE_V4, self::TAILSCALE_V6, '100.100.100.100/32');
         }
         $runtime = null;

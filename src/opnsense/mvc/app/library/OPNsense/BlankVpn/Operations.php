@@ -60,7 +60,7 @@ final class Operations
                 self::sync($model, $result['killSwitchReset'] ?? []);
             }
             if (isset($result['networkProxy'])) {
-                self::verifyNetworkProxy($result['networkProxy'], $result['settings']);
+                self::verifyNetworkProxy($result['networkProxy'], $result['networkProxyScope']);
             }
             if (!empty($result['resetSegments'])) {
                 self::resetSegments($result['resetSegments'], $result['settings']);
@@ -110,10 +110,9 @@ final class Operations
         }
     }
 
-    private static function verifyNetworkProxy(array $proxy, array $settings): void
+    private static function verifyNetworkProxy(array $proxy, array $routing): void
     {
         $loaded = Firewall::loadedRules();
-        $routing = Policy::routingSettings($settings);
         $ready = ProxyRuntime::ready($proxy);
         foreach ($routing['interfaces'] as $interface) {
             $id = 'network:' . $interface;
@@ -176,8 +175,8 @@ final class Operations
         }
         $settings = Policy::effectiveRouting($model);
         Policy::refreshMacConflicts($model);
-        $assignments = $settings['coverage'] === 'device'
-            ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
+        $assignments = Policy::deviceAssignments($settings,
+            Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()));
         $before = Firewall::loadedRules() ?? [];
         $bindings = DeviceBindings::pending($model, $before);
         // Load DNS destination tables before a resolver can begin filling them.
@@ -200,8 +199,8 @@ final class Operations
         if (($route['kind'] ?? '') === 'native') {
             $health[$id]['source'] = $route['address'];
         }
-        $assignments = $settings['coverage'] === 'device'
-            ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
+        $assignments = Policy::deviceAssignments($settings,
+            Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()));
         if (($previous['reachable'] ?? true) === false || self::pathReloadPending()) {
             $before = Firewall::loadedRules() ?? [];
             self::reloadRoutingPaths($model, $settings, $assignments, $before, health: $health);
@@ -238,6 +237,14 @@ final class Operations
 
     public static function killSwitchProbeExits(array $settings, array $assignments, array $services): array
     {
+        if (isset($settings['scopes'])) {
+            $results = [];
+            foreach ($settings['scopes'] as $scope) {
+                array_push($results, ...self::killSwitchProbeExits($scope, Policy::scopedAssignments($scope, $assignments),
+                    SmartRouting::forScope($services, $scope['scope'])));
+            }
+            return array_values(array_unique($results));
+        }
         if (!$settings['enabled']) {
             return [];
         }
@@ -272,6 +279,14 @@ final class Operations
 
     public static function policyProbeExits(array $settings, array $assignments, array $services): array
     {
+        if (isset($settings['scopes'])) {
+            $results = [];
+            foreach ($settings['scopes'] as $scope) {
+                $results += self::policyProbeExits($scope, Policy::scopedAssignments($scope, $assignments),
+                    SmartRouting::forScope($services, $scope['scope']));
+            }
+            return $results;
+        }
         $selected = array_column($services, 'profile');
         if ($settings['coverage'] === 'network') {
             if (Policy::usesBase($settings['networkMode'])) {
@@ -385,6 +400,16 @@ final class Operations
         array $failedExits = [],
         bool $legacyReset = false
     ): array {
+        if (isset($settings['scopes'])) {
+            $results = [];
+            foreach ($settings['scopes'] as $scope) {
+                array_push($results, ...self::killSwitchStateScopes(
+                    $scope, Policy::scopedAssignments($scope, $assignments),
+                    SmartRouting::forScope($services, $scope['scope']), $before, $after, $failedExits, $legacyReset
+                ));
+            }
+            return array_values(array_unique($results));
+        }
         if (!$settings['enabled']) {
             return [];
         }
@@ -465,7 +490,7 @@ final class Operations
                 }
             }
         }
-        return array_values(array_unique(array_filter([...$scopes, ...Policy::segmentNetworks($segments)])));
+        return array_values(array_unique(array_filter([...$scopes, ...Policy::routingSources($settings, $segments)])));
     }
 
     private static function routingPathChanged(string $id, array $before, array $after, bool $observedOutage): bool
@@ -490,15 +515,22 @@ final class Operations
 
     public static function serviceStateScopes(array $settings, array $assignments): array
     {
+        if (isset($settings['scopes'])) {
+            $results = [];
+            foreach ($settings['scopes'] as $scope) {
+                $results = [...$results, ...self::serviceStateScopes($scope, Policy::scopedAssignments($scope, $assignments))];
+            }
+            return array_values(array_unique($results));
+        }
         if (!$settings['enabled']) {
             return [];
         }
         if ($settings['coverage'] === 'network') {
-            return Policy::usesMultiPath($settings['networkMode']) ? Policy::segmentNetworks($settings['interfaces']) : [];
+            return Policy::usesMultiPath($settings['networkMode']) ? Policy::routingSources($settings, $settings['interfaces']) : [];
         }
         $scopes = [];
         foreach ($assignments as $row) {
-            if (Policy::usesMultiPath(Policy::mode($row)) && Policy::killSwitch($row) &&
+            if (Policy::usesMultiPath(Policy::mode($row)) &&
                 !Policy::assignmentPaused($row) && in_array($row['interface'], $settings['interfaces'], true)) {
                 array_push($scopes, $row['ip'], $row['ipv6'] ?? '');
             }
@@ -508,10 +540,17 @@ final class Operations
 
     public static function bypassStateScopes(array $settings, array $assignments): array
     {
+        if (isset($settings['scopes'])) {
+            $results = [];
+            foreach ($settings['scopes'] as $scope) {
+                $results = [...$results, ...self::bypassStateScopes($scope, Policy::scopedAssignments($scope, $assignments))];
+            }
+            return array_values(array_unique($results));
+        }
         $scopes = [];
         foreach (Firewall::bypassScopes($settings, $assignments, new Diagnostics()) as $interface => $families) {
             if (($families['inet']['all'] ?? false) || ($families['inet6']['all'] ?? false)) {
-                array_push($scopes, ...Policy::segmentNetworks([$interface]));
+                array_push($scopes, ...Policy::routingSources($settings, [$interface]));
                 continue;
             }
             foreach ($families as $scope) {
@@ -524,8 +563,11 @@ final class Operations
     public static function resetKillSwitch(string $source): void
     {
         $network = str_contains($source, '/') ? Policy::cidr($source) : null;
+        $address = explode('/', $network ?? $source, 2)[0];
+        $tailnet = Policy::tailnetAddress($address) || Policy::tailnetAddress($address, true);
+        $action = $tailnet ? 'blankvpn reset_tailnet' : 'blankvpn reset_ip';
         if ((!filter_var($source, FILTER_VALIDATE_IP) && $network === null) ||
-            trim((new Backend())->configdpRun('blankvpn reset_ip', [$network ?? $source], false, 10)) !== 'ok') {
+            trim((new Backend())->configdpRun($action, [$network ?? $source], false, 15)) !== 'ok') {
             throw new \RuntimeException('The firewall could not reset previous connections for this address or network.');
         }
     }

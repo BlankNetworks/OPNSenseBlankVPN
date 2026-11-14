@@ -34,7 +34,7 @@ final class SmartRouting
             $row = Policy::fields($node);
             $services[$id] = [
                 'id' => $id, 'name' => $row['name'], 'profile' => $row['profile'] ?? '',
-                'domains' => self::destinations($row['domains'])
+                'domains' => self::destinations($row['domains']), 'scope' => ($row['scope'] ?? '') ?: 'both'
             ];
         }
         return $services;
@@ -43,6 +43,12 @@ final class SmartRouting
     public static function boundServices(array $services): array
     {
         return array_filter($services, static fn (array $service): bool => ($service['profile'] ?? '') !== '');
+    }
+
+    public static function forScope(array $services, string $scope): array
+    {
+        return array_filter($services, static fn (array $service): bool =>
+            in_array($service['scope'] ?? 'both', ['both', $scope], true));
     }
 
     public static function usesBypass(array $settings): bool
@@ -60,21 +66,47 @@ final class SmartRouting
 
     public static function forwardServices(array $settings, array $services): array
     {
+        if (isset($settings['scopes'])) {
+            $active = [];
+            foreach ($settings['scopes'] as $scope) {
+                $active += self::forwardServices($scope, $services);
+            }
+            return $active;
+        }
         if (empty($settings['enabled']) || empty($settings['smartInterfaces']) ||
             (($settings['coverage'] ?? '') === 'network' && !Policy::usesMultiPath($settings['networkMode'] ?? ''))) {
             return [];
         }
+        $services = self::forScope($services, $settings['scope'] ?? 'local');
         return array_filter(self::boundServices($services), static fn (array $service): bool =>
             $service['profile'] !== self::BYPASS);
     }
 
     public static function bypassServices(array $settings, array $services): array
     {
+        if (isset($settings['scopes'])) {
+            $active = [];
+            foreach ($settings['scopes'] as $scope) {
+                $active += self::bypassServices($scope, $services);
+            }
+            return $active;
+        }
         if (!self::usesBypass($settings)) {
             return [];
         }
+        $services = self::forScope($services, $settings['scope'] ?? 'local');
         return array_filter(self::boundServices($services), static fn (array $service): bool =>
             $service['profile'] === self::BYPASS);
+    }
+
+    public static function hasBypassDomains(array $settings, array $lists): bool
+    {
+        foreach (self::bypassServices($settings, $lists) as $list) {
+            if (self::hasDomains($list['domains'])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static function bypassTable(array $services): string
@@ -415,14 +447,28 @@ final class SmartRouting
         return $bypass === [] ? $tables : $tables + array_fill_keys(array_keys($bypass), self::bypassTable($bypass));
     }
 
+    private static function allLearnedTables(array $settings, array $services): array
+    {
+        $tables = [];
+        foreach (Policy::scopes($settings) as $scope) {
+            foreach (self::learnedTables($scope, $services) as $id => $table) {
+                $tables[$id][$table] = true;
+            }
+        }
+        return $tables;
+    }
+
     public static function countLearned(array $settings, array $services): array
     {
-        $tables = self::learnedTables($settings, $services);
+        $tables = self::allLearnedTables($settings, $services);
         if ($tables === []) {
             return [];
         }
         $stats = self::learnedTableStats();
-        return array_map(static fn (string $table): ?int => $stats[$table]['count'] ?? null, $tables);
+        return array_map(static function (array $names) use ($stats): ?int {
+            $known = array_intersect_key($stats, $names);
+            return $known === [] ? null : array_sum(array_column($known, 'count'));
+        }, $tables);
     }
 
     private static function learnedTableStats(): array
@@ -456,7 +502,7 @@ final class SmartRouting
             if (!flock($lock, LOCK_EX | LOCK_NB)) {
                 return;
             }
-            $active = array_fill_keys(self::learnedTables($settings, $services), true);
+            $active = array_replace([], ...array_values(self::allLearnedTables($settings, $services)));
             $orphans = self::orphanLearnedTables(self::learnedTableStats(), $active);
             $path = Policy::STATE_DIR . '/' . self::ORPHAN_CANDIDATES;
             $previous = is_file($path) ? json_decode((string)file_get_contents($path), true) : [];
@@ -491,7 +537,7 @@ final class SmartRouting
 
     public static function expire(array $settings, array $services): void
     {
-        foreach (array_unique(self::learnedTables($settings, $services)) as $table) {
+        foreach (array_keys(array_replace([], ...array_values(self::allLearnedTables($settings, $services)))) as $table) {
             Resolver::command(
                 ['/sbin/pfctl', '-t', $table, '-T', 'expire', (string)self::TABLE_MAX_AGE],
                 false

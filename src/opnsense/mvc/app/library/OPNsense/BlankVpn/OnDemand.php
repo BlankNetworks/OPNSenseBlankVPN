@@ -16,12 +16,17 @@ final class OnDemand
 
     public static function selectExits(array $settings, array $assignments, array $activeServices): array
     {
-        if (!$settings['enabled'] || $settings['coverage'] !== 'device') {
+        if (!$settings['enabled']) {
             return [];
         }
         $always = array_fill_keys(array_column($activeServices, 'profile'), true);
         $onDemand = [];
-        foreach ($assignments as $row) {
+        foreach (Policy::scopes($settings) as $scope) {
+            if ($scope['coverage'] === 'network' && Policy::usesBase($scope['networkMode'] ?? '')) {
+                $always[$scope['networkProfile']] = true;
+            }
+        }
+        foreach (Policy::deviceAssignments($settings, $assignments) as $row) {
             $profile = $row['profile'] ?? '';
             if ($profile === '' || !Policy::usesBase(Policy::mode($row)) ||
                 !in_array($row['interface'], $settings['interfaces'], true)) {

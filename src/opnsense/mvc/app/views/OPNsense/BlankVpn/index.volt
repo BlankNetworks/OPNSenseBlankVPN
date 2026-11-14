@@ -13,6 +13,11 @@
             <button type="submit" class="btn btn-default">Close</button>
         </form>
     </dialog>
+    <dialog id="bv-service-test-dialog" class="bv-panel bv-ping-dialog" aria-labelledby="bv-service-test-title">
+        <h2 id="bv-service-test-title">Multi-Path route test</h2>
+        <div id="bv-service-test-detail" class="bv-route-test-detail" role="status"></div>
+        <form method="dialog"><button type="submit" class="btn btn-default">Close</button></form>
+    </dialog>
 
     <nav class="bv-navigation" aria-label="Blank VPN &amp; Proxy pages">
         <button type="button" data-bv-section="vpns" aria-controls="bv-tunnels" aria-pressed="true">VPN Login</button>
@@ -332,10 +337,21 @@
     </section>
 
     <div id="bv-network-page" data-bv-panel="network" hidden>
-        <section class="bv-panel" aria-labelledby="bv-settings-title" data-manage-only>
+        <section class="bv-panel" aria-labelledby="bv-settings-title">
             <div class="bv-heading">
                 <h2 id="bv-settings-title">Routing coverage</h2>
-                <button type="button" id="bv-disable-routing" class="btn btn-danger" hidden>Disable VPN</button>
+                <label class="bv-scope-choice">Network
+                    <select id="bv-routing-scope" class="form-control" aria-controls="bv-local-routing bv-tailnet-coverage-panel bv-lan-devices bv-tailnet-devices">
+                        <option value="local">Local</option>
+                        <option value="tailscale">Tailscale</option>
+                    </select>
+                </label>
+            </div>
+        </section>
+        <section class="bv-panel" id="bv-local-routing" aria-labelledby="bv-local-routing-title" data-manage-only>
+            <div class="bv-heading">
+                <h2 id="bv-local-routing-title">Local routing</h2>
+                <button type="button" id="bv-disable-routing" class="btn btn-danger" hidden>Disable Local routing</button>
             </div>
             <p id="bv-current-routing" class="bv-callout" aria-live="polite"></p>
             <form id="bv-settings-form">
@@ -388,6 +404,43 @@
                 </div>
             </form>
         </section>
+        <section class="bv-panel" id="bv-tailnet-coverage-panel" aria-labelledby="bv-tailnet-coverage-title" data-manage-only hidden>
+            <div class="bv-heading">
+                <h2 id="bv-tailnet-coverage-title">Tailscale routing</h2>
+                <button type="button" id="bv-disable-tailnet-routing" class="btn btn-danger" hidden>Disable Tailscale routing</button>
+            </div>
+            <p id="bv-current-tailnet-routing" class="bv-callout" aria-live="polite"></p>
+            <div id="bv-tailnet-base-test" class="bv-actions" hidden></div>
+            <form id="bv-tailnet-coverage-form">
+                <label class="bv-coverage-choice">Who should use these routing rules?
+                    <select id="bv-tailnet-coverage" class="form-control">
+                        <option value="device">Only Devices I choose</option>
+                        <option value="network">Whole-Network coverage</option>
+                    </select>
+                </label>
+                <div id="bv-tailnet-network-fields" class="bv-fields" hidden>
+                    <label>How should their internet traffic be routed?
+                        <select id="bv-tailnet-network-mode" class="form-control">
+                            <option value="full">Use one VPN or proxy</option>
+                            <option value="multi">Use domain lists (Multi-Path)</option>
+                            <option value="full_multi">Whole-Network + Multi-Path</option>
+                            <option value="blocked">Block internet</option>
+                            <option value="disabled">Use regular internet</option>
+                        </select>
+                    </label>
+                    <label id="bv-tailnet-network-profile-field" hidden><span id="bv-tailnet-network-profile-label">Saved server</span>
+                        <select id="bv-tailnet-network-profile" class="form-control"></select>
+                    </label>
+                </div>
+                <label class="bv-check" id="bv-tailnet-network-kill-field" hidden>
+                    <input type="checkbox" id="bv-tailnet-network-kill" aria-describedby="bv-tailnet-coverage-note" checked> Kill Switch
+                </label>
+                <p id="bv-tailnet-coverage-note" class="text-muted" aria-live="polite"></p>
+                <div class="bv-actions">
+                    <button type="submit" id="bv-save-tailnet-routing" class="btn btn-primary">Save and Enable Tailscale Routing</button>
+                </div>
+            </form>
+        </section>
         <section id="bv-devices" class="bv-panel" aria-labelledby="bv-devices-title">
             <div class="bv-heading">
                 <div>
@@ -399,9 +452,9 @@
                     <button id="bv-add-device" data-manage-only type="button" class="btn btn-primary">Add device rule</button>
                 </div>
             </div>
-            <p id="bv-device-guide" class="text-muted">Refresh to find LAN devices and current DHCP leases. Select a device to set up its routing rule.</p>
-            <h3>LAN devices</h3>
-            <div class="bv-scroll">
+            <div id="bv-lan-devices">
+                <p id="bv-device-guide" class="text-muted">Refresh to find LAN devices and current DHCP leases. Select a device to set up its routing rule.</p>
+                <div class="bv-scroll">
                 <table class="table bv-table bv-devices" role="table">
                     <thead role="rowgroup">
                         <tr role="row">
@@ -415,10 +468,12 @@
                     </thead>
                     <tbody id="bv-device-list" role="rowgroup"></tbody>
                 </table>
+                </div>
             </div>
-            <details id="bv-tailnet-devices" class="bv-advanced">
-                <summary><span class="bv-disclosure-link">Tailscale devices</span> <span id="bv-tailnet-count" class="text-muted"></span></summary>
-                <p id="bv-tailnet-snat-note" class="text-muted">* For per-device routing through the OPNsense exit node, check <strong>Disable SNAT</strong> under <strong>VPN → Tailscale → Settings → Advanced</strong> and click <strong>Apply</strong>.</p>
+            <section id="bv-tailnet-devices" hidden aria-label="Tailscale devices">
+                <p id="bv-tailnet-count" class="text-muted"></p>
+                <p id="bv-tailnet-snat-note" class="text-muted">Exit-node clients need <strong>Disable SNAT</strong> enabled in OPNsense Tailscale settings.
+                    For domain-based Multi-Path, point the client’s DNS to the OPNsense Tailscale IP.</p>
                 <p id="bv-tailnet-routing-hint" class="text-muted"></p>
                 <button type="button" id="bv-add-tailnet-peer" class="btn btn-default" data-manage-only hidden>Add by Tailscale IP</button>
                 <div class="bv-scroll">
@@ -428,7 +483,7 @@
                         <tbody id="bv-tailnet-device-list" role="rowgroup"></tbody>
                     </table>
                 </div>
-            </details>
+            </section>
         </section>
 
         <section id="bv-network-device" class="bv-panel" aria-labelledby="bv-network-device-title" hidden>
@@ -458,7 +513,7 @@
             <form id="bv-assign-form">
                 <div class="bv-fields">
                     <label>Device label <input id="bv-device-label" type="text" class="form-control" maxlength="80"></label>
-                    <label>Address source
+                    <label hidden>Address source
                         <select id="bv-device-kind" class="form-control">
                             <option value="lan">LAN device</option>
                             <option value="tailnet">Tailscale peer</option>
@@ -530,6 +585,13 @@
                 </label>
                 <label>Destination
                     <select id="bv-service-profile" class="form-control"></select>
+                </label>
+                <label>Apply to
+                    <select id="bv-service-scope" class="form-control">
+                        <option value="local">Local</option>
+                        <option value="tailscale">Tailscale</option>
+                        <option value="both">Local and Tailscale</option>
+                    </select>
                 </label>
             </div>
             <label>Domains, IP addresses, and CIDRs

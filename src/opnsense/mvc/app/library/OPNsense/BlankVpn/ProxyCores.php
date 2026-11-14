@@ -363,7 +363,7 @@ final class ProxyCores
     {
         $model = new BlankVpn();
         $affected = array_filter(ProxyRuntime::routes($model), static fn (array $route): bool => self::uses($route, $core));
-        $live = Policy::settings($model)['enabled'] && $affected !== [];
+        $live = Policy::anyEnabled(Policy::settings($model)) && $affected !== [];
         $state['pending'] = ['core' => $core, 'restore' => $state['cores'][$core] ?? [], 'paused' => true];
         self::save($state);
         try {
@@ -407,7 +407,7 @@ final class ProxyCores
         $state['pending']['paused'] = true;
         $state['cores'][$core] = $state['pending']['restore'];
         self::save($state);
-        $live = Policy::settings($model)['enabled'];
+        $live = Policy::anyEnabled(Policy::settings($model));
         if ($live) {
             self::reloadPaths($model);
             ProxyRuntime::reconcile($model);
@@ -419,8 +419,8 @@ final class ProxyCores
     private static function reloadPaths(BlankVpn $model): void
     {
         $settings = Policy::effectiveRouting($model);
-        $assignments = $settings['coverage'] === 'device'
-            ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
+        $assignments = Policy::deviceAssignments($settings,
+            Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()));
         Operations::reloadRoutingPaths($model, $settings, $assignments, Firewall::loadedRules() ?? []);
     }
 

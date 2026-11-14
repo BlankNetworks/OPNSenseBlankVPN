@@ -265,10 +265,6 @@ write_combined_rules() {
         printf 'table <connected> const { 192.0.2.0/24, 2001:db8:10::/64, fe80::/10, ff02::/16 }\n'
         printf 'table <service> const { %s }\n' "$override4"
         write_egress_guard
-        if [ "$1" = base_down ]; then
-            printf 'block drop in quick on %s inet from %s to ! <connected> label "base_outage"\n' \
-                "$lan_link" "$protected4"
-        fi
         printf 'match in on %s inet from %s to ! <connected> tag blankvpn_combined_scope\n' \
             "$lan_link" "$protected4"
         if [ "$1" != override_down ]; then
@@ -315,7 +311,7 @@ jexec "$router" ifconfig "$vpn_link" down
 write_combined_rules base_down
 pf -k "$protected4"
 blocked 4 "$protected4" "$vpn4"
-blocked 4 "$protected4" "$override4"
-rule_matched base_outage
+reachable 4 "$protected4" "$override4"
+rule_matched override_route
 reachable 4 "$regular4" "$override4"
-echo 'Multi-Path recovered when the override returned. Losing the base VPN still blocked protected internet.'
+echo 'Losing the base VPN blocked unmatched protected traffic while the healthy Multi-Path override stayed online.'

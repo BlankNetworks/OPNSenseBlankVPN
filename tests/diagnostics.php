@@ -262,10 +262,13 @@ namespace {
     check($sessions['connections'][0]['stateId'] === '0000000012345678'
         && $sessions['connections'][0]['creatorId'] === 'abcdef01', 'Native PF state identifiers');
 
-    check($diagnostics->hasRoutedTraffic('192.168.10.5', 'blankvpn_device_fixture') &&
-        !$diagnostics->hasRoutedTraffic('192.168.10.5', 'blankvpn_other_rule') &&
-        !$diagnostics->hasRoutedTraffic('192.168.10.6', 'blankvpn_device_fixture'),
+    check($diagnostics->hasRoutedTraffic('192.168.10.5', ['blankvpn_device_fixture']) &&
+        !$diagnostics->hasRoutedTraffic('192.168.10.5', ['blankvpn_other_rule']) &&
+        !$diagnostics->hasRoutedTraffic('192.168.10.6', ['blankvpn_device_fixture']),
         'A device probe requires both the saved address and the policy rule label.');
+    check($diagnostics->hasRoutedTraffic('192.168.10.0/24', ['blankvpn_device_fixture']) &&
+        !$diagnostics->hasRoutedTraffic('100.64.0.0/10', ['blankvpn_device_fixture']),
+        'A whole-network probe confirms bidirectional traffic only from its allowed source range.');
 
     $tunnels = $diagnostics->tunnels();
     check($tunnels['wg4']['handshakeRecent'] && $tunnels['wg4']['reachability'] === 'unverified', 'Handshake and path status');

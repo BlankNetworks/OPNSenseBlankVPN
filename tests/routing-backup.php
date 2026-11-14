@@ -115,4 +115,19 @@ check(RoutingBackup::decode(json_encode(RoutingBackup::envelope($combined, $key)
 $combined['assignments'][0]['failure'] = 'wan';
 expectFail(fn () => RoutingBackup::envelope($combined, $key), 'invalid device rule');
 
+$scoped = $policy;
+$scoped['settings'] += [
+    'tailnetEnabled' => '1', 'tailnetCoverage' => 'network', 'tailnetNetworkMode' => 'full_multi',
+    'tailnetNetworkProfile' => $exit, 'tailnetNetworkKillSwitch' => '1'
+];
+$scoped['services'][0]['scope'] = 'local';
+$scoped['services'][] = [
+    'id' => '829481c4-bbbb-46d2-b907-728d40b50d1d', 'scope' => 'tailscale',
+    'name' => 'Tailnet suffix', 'domains' => ['.cn'], 'profile' => $exit
+];
+check(RoutingBackup::decode(json_encode(RoutingBackup::envelope($scoped, $key)), $key) === $scoped,
+    'Independent coverage and identical lists limited to separate scopes survive signed backup and restore.');
+$scoped['services'][1]['scope'] = 'both';
+expectFail(fn () => RoutingBackup::envelope($scoped, $key), 'overlaps');
+
 echo "Routing backup fixtures passed.\n";

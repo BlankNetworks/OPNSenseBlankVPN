@@ -61,3 +61,9 @@
 ## 0.8.23
 
 - Saved VPN and proxy servers use compact, aligned rows. Status and ping results stay on one line, and desktop actions sit side by side. The lists switch to a two-column layout when the dashboard has less room.
+
+## 0.8.24
+
+- Network Settings offers independent Local and Tailscale coverage, each with Whole-Network and Only Devices I choose. Multi-Path lists can apply to Local, Tailscale, or both. Existing peer rules and shared lists keep their previous scope.
+- Matching Multi-Path destinations use their selected exits ahead of the base VPN or proxy. With Kill Switch enabled, a base outage blocks unmatched traffic while healthy overrides keep working. An unavailable override blocks its own destinations.
+- Base and override status are displayed separately. Multi-Path route tests open in a dialog and the list fits narrow screens.

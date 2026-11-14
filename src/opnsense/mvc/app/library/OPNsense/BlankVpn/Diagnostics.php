@@ -555,12 +555,55 @@ final class Diagnostics
         return $confirmed;
     }
 
-    public function hasRoutedTraffic(string $ip, string $rule): bool
+    public static function resetTailnetStates(string $source): bool
     {
-        foreach ($this->connections($ip)['connections'] as $session) {
-            if ($session['source'] === $ip && $session['rule'] === $rule &&
-                ($session['packets'][0] ?? 0) > 0 && ($session['packets'][1] ?? 0) > 0) {
-                return true;
+        // Keep access to the router and connected subnets while new Internet and DNS states are installed.
+        $raw = Resolver::command(['/usr/local/opnsense/scripts/filter/list_states.py', '--filter=' . $source]);
+        $states = json_decode($raw, true, flags: JSON_THROW_ON_ERROR)['details'] ?? null;
+        if (!is_array($states)) {
+            return false;
+        }
+        $prefix = Policy::cidr($source);
+        $local = Policy::localNetworks(['localNetworks' => [], 'interfaces' => [Policy::TAILSCALE_DEVICE]]);
+        foreach ($states as $state) {
+            $ip = self::ip((string)($state['src_addr'] ?? ''));
+            if ($ip === null || ($prefix !== null ? !Policy::contains($prefix, $ip) : $ip !== $source)) {
+                continue;
+            }
+            $destination = self::ip((string)($state['dst_addr'] ?? ''));
+            $port = (int)($state['dst_port'] ?? 0);
+            $redirectedDns = $destination !== null && in_array($destination, ['127.0.0.1', '::1'], true) &&
+                Resolver::allowedPort($port);
+            if ($port !== 53 && !$redirectedDns && $destination !== null &&
+                array_any($local, static fn (string $cidr): bool => Policy::contains($cidr, $destination))) {
+                continue;
+            }
+            $id = $state['id'] ?? '';
+            if (!preg_match('/^[0-9a-f]{16}\/[0-9a-f]{8}$/iD', $id)) {
+                return false;
+            }
+            Resolver::command(['/sbin/pfctl', '-k', 'id', '-k', $id]);
+        }
+        return true;
+    }
+
+    public function hasRoutedTraffic(string $source, array $rules): bool
+    {
+        $prefix = Policy::cidr($source);
+        if ($prefix === null && filter_var($source, FILTER_VALIDATE_IP) === false) {
+            return false;
+        }
+        foreach ($rules as $rule) {
+            $states = $this->read('filter list states', [$prefix ?? $source, (string)self::STATE_LIMIT, '0', $rule, '']);
+            if (!is_array($states['details'] ?? null)) {
+                throw new RuntimeException('Firewall sessions are unavailable. Try again.');
+            }
+            foreach ($states['details'] as $state) {
+                $ip = self::ip((string)($state['src_addr'] ?? ''));
+                if ($ip !== null && ($prefix !== null ? Policy::contains($prefix, $ip) : $source === $ip) &&
+                    ($state['label'] ?? '') === $rule && ($state['pkts'][0] ?? 0) > 0 && ($state['pkts'][1] ?? 0) > 0) {
+                    return true;
+                }
             }
         }
         return false;

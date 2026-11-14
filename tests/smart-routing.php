@@ -623,9 +623,10 @@ namespace {
     $baseDown = $compileCombined(['us' => ['reachable' => false]], $wan, true);
     checkRouting(!isset($baseDown->rules[$basePass]) && isset($baseDown->rules[$netflixPass], $baseDown->rules[$baseKill]) &&
         !isset($baseDown->rules[$fallbackMarker], $baseDown->rules[$directMarker]) &&
-        $baseDown->rules[$networkOutage]['priority'] < $baseDown->rules[$netflixPass]['priority'] &&
-        array_column($baseDown->dns, 'local-port') === array_fill(0, 2, (string)Resolver::LOCAL_PORT),
-        'A protected base outage blocks all internet traffic before the healthy overrides and keeps only local DNS.');
+        !isset($baseDown->rules[$networkOutage]) &&
+        $baseDown->rules[$netflixKill]['priority'] < $baseDown->rules[$baseKill]['priority'] &&
+        array_column($baseDown->dns, 'local-port') === array_fill(0, 2, (string)Resolver::protectedCombinedPort($chicago)),
+        'A protected base outage blocks unmatched traffic and keeps healthy overrides and their DNS available.');
     $protectedCombined = $compileCombined([], $wan, true);
     checkRouting(!isset($protectedCombined->rules[$directMarker], $protectedCombined->rules[$networkOutage]) &&
         isset($protectedCombined->rules[$basePass], $protectedCombined->rules[$netflixPass]) &&
@@ -654,7 +655,7 @@ namespace {
     checkRouting($combinedFallback->rules[$netflixKill]['priority'] < $combinedFallback->rules[$fallbackMarker]['priority'] &&
         $combinedFallback->rules[$fallbackMarker]['priority'] < $combinedFallback->rules[$baseKill]['priority'] &&
         $combinedFallback->rules[$fallbackMarker]['gateway'] === 'WAN_DHCP' &&
-        array_column($combinedFallback->dns, 'local-port') === array_fill(0, 2, (string)Resolver::FALLBACK_PORT),
+        array_column($combinedFallback->dns, 'local-port') === array_fill(0, 2, (string)Resolver::COMBINED_FALLBACK_PORT),
         'Combined WAN fallback uses native DNS while preserving the explicit route and guard for each override.');
     \OPNsense\Core\Config::$fixture = new SimpleXMLElement('<opnsense><system><enablenatreflectionhelper>1</enablenatreflectionhelper></system></opnsense>');
     $disabledDns = $compileCombined();
@@ -779,6 +780,37 @@ namespace {
         ['native-peer' => $tailnet + ['paused' => '1']], $profiles, [], $diag);
     checkRouting($pausedPeer->rules === [] && $pausedPeer->nat === [] && $pausedPeer->dns === [],
         'A paused Tailscale rule must produce no route, DNS redirect, or kill switch.');
+    $saved = array_replace($combinedNetwork, [
+        'enabled' => true, 'interfaces' => ['lan', 'opt2'], 'tailscaleInterfaces' => ['opt2'],
+        'tailnetEnabled' => true, 'tailnetCoverage' => 'device', 'tailnetNetworkMode' => 'disabled',
+        'tailnetNetworkProfile' => '', 'tailnetNetworkKillSwitch' => true
+    ]);
+    $localScope = Policy::scope($saved, 'local', ['native-peer' => $tailnet]);
+    $peerScope = Policy::scope($saved, 'tailscale', ['native-peer' => $tailnet]);
+    checkRouting($localScope['coverage'] === 'network' && $localScope['interfaces'] === ['lan'] &&
+        $peerScope['coverage'] === 'device' && $peerScope['interfaces'] === ['opt2', Policy::TAILSCALE_DEVICE] &&
+        Policy::deviceAssignments(['scopes' => [$localScope, $peerScope]], [
+            'native-peer' => $tailnet, 'lan' => $assignment
+        ]) === ['native-peer' => $tailnet],
+        'Local whole-network routing and individual Tailscale peer routing are independent.');
+    $saved['tailnetCoverage'] = 'network';
+    $saved['tailnetNetworkMode'] = 'full_multi';
+    $saved['tailnetNetworkProfile'] = 'us';
+    $tailnetScope = Policy::scope($saved, 'tailscale');
+    $sharedRules = new Plugin();
+    $network->invoke(null, $sharedRules, $localScope, $interfaces, $combinedProfiles, [], $wan);
+    $network->invoke(null, $sharedRules, $tailnetScope, $tailnetInterfaces, $combinedProfiles, [], $wan);
+    $tailnetBase = Policy::marker('device', 'network:tailscale0');
+    checkRouting($sharedRules->rules[$basePass]['interface'] === 'lan' &&
+        $sharedRules->rules[$tailnetBase]['from'] === Policy::TAILSCALE_V4 &&
+        $sharedRules->rules[$tailnetBase]['gateway'] === 'NORD' &&
+        $sharedRules->rules[Policy::marker('kill_v6', 'network:tailscale0')]['from'] === Policy::TAILSCALE_V6 &&
+        $sharedRules->nat[1]['from'] === Policy::TAILSCALE_V4 &&
+        $sharedRules->dns[2]['local-port'] === (string)Resolver::scopedPort(Resolver::protectedCombinedPort($chicago), true),
+        'Tailscale whole-network routing only matches peer addresses and has dedicated NAT and DNS.');
+    checkRouting(Operations::serviceStateScopes($tailnetScope, []) === [Policy::TAILSCALE_V4, Policy::TAILSCALE_V6],
+        'Tailscale state resets target Tailscale sources even on an Ethernet transit link.');
+
     $native->disableSNAT = '0';
     $userspace = new Plugin();
     $compileDevice->invoke(null, $userspace, $tailnetSettings, $tailnetInterfaces,

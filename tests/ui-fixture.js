@@ -171,6 +171,9 @@ window.jQuery.ajax = async (request) => {
     if (action === 'setTailnetRuleEnabled') {
         reply.dashboard.assignments.find(row => row.id === data.id).paused = !data.enabled;
     }
+    if (action === 'testTailnetBase') {
+        return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:'unseen'};
+    }
     if (action === 'testDeviceRoute') {
         return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:'seen', usingBackup:false};
     }
@@ -185,6 +188,11 @@ window.jQuery.ajax = async (request) => {
     }
     if (action === 'disable') {
         reply.dashboard.settings.enabled = false;
+    }
+    if (action === 'tailnetRouting') {
+        for (const [key, value] of Object.entries(data)) {
+            reply.dashboard.settings['tailnet' + key[0].toUpperCase() + key.slice(1)] = value;
+        }
     }
     if (action === 'settings' && settingsError) {
         return {ok:false, error:settingsError};
@@ -616,6 +624,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('dashboard-link').hostname === 'blankvpn.local' && bv('address-link').hostname === '10.0.0.1',
         'Saved hostname and direct address did not update.');
     document.querySelector('[data-bv-section="network"]').click();
+    bv('routing-scope').value = 'local';
+    bv('routing-scope').dispatchEvent(new Event('change'));
     assert(bv('save-routing').textContent === 'Save and Enable VPN' && bv('routing-enabled').hidden &&
         bv('network-kill-field').hidden, 'Disabled routing did not show the enable action.');
     bv('settings-form').requestSubmit(bv('settings-form').querySelector('button[type=submit]'));
@@ -727,15 +737,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'assign' && x.data.id === 'mac-device' && x.data.bindMac &&
         x.data.ip === '10.0.0.31' && x.data.killSwitch === false && x.data.reserveIp === false),
         'Editing an offline MAC rule must save the existing rule without attempting to reserve an old address.');
-    assert(bv('tailnet-devices').tagName === 'DETAILS' && !bv('tailnet-devices').open &&
-        bv('tailnet-count').textContent.includes('1 online') &&
-        getComputedStyle(bv('tailnet-devices').querySelector('.bv-disclosure-link')).textDecorationLine === 'underline',
-        'Tailscale device list must be collapsible with an underlined label.');
-    bv('tailnet-devices').open = true;
-    assert(bv('tailnet-snat-note').textContent.trim().startsWith('*') &&
-        bv('tailnet-snat-note').textContent.includes('Disable SNAT') &&
-        bv('tailnet-snat-note').textContent.includes('Apply'),
-        'The expanded list must show the Disable SNAT step.');
+    assert(bv('tailnet-devices').hidden && !bv('local-routing').hidden,
+        'Local coverage shows the local policy and LAN devices.');
+    bv('routing-scope').value = 'tailscale';
+    bv('routing-scope').dispatchEvent(new Event('change'));
+    assert(!bv('tailnet-devices').hidden && bv('lan-devices').hidden && bv('local-routing').hidden &&
+        !bv('tailnet-coverage-panel').hidden && bv('tailnet-count').textContent.includes('1 online') &&
+        bv('tailnet-snat-note').textContent.includes('Disable SNAT'),
+        'Tailscale coverage shows only its own policy and peers.');
+    bv('tailnet-coverage').value = 'network';
+    bv('tailnet-network-mode').value = 'full_multi';
+    bv('tailnet-network-profile').value = 'vpn1';
+    bv('tailnet-network-mode').dispatchEvent(new Event('input', {bubbles:true}));
+    assert(bv('tailnet-network-profile').required && !bv('tailnet-network-kill-field').hidden &&
+        bv('tailnet-network-profile-label').textContent === 'Base server',
+        'Combined Tailscale coverage requires its own base server.');
+    bv('tailnet-coverage-form').requestSubmit(bv('save-tailnet-routing'));
+    await wait();
+    assert(requests.some(x => x.action === 'tailnetRouting' && x.data.networkProfile === 'vpn1' &&
+        !Object.hasOwn(x.data, 'interfaces')) && reply.dashboard.settings.coverage === 'device' &&
+        reply.dashboard.settings.tailnetCoverage === 'network',
+        'Saving Whole-Network Tailscale coverage must not change Local device coverage.');
+    bv('tailnet-base-test').querySelector('button').click();
+    await wait();
+    const baseResult = bv('tailnet-base-test').querySelector('[data-test-result]');
+    assert(requests.some(x => x.action === 'testTailnetBase') && baseResult.dataset.result === 'unverified' &&
+        baseResult.textContent.includes('router HTTPS') && baseResult.textContent.includes('No matching device traffic'),
+        'A successful Tailscale base probe with no observed peer traffic stays unverified.');
+    bv('tailnet-coverage').value = 'device';
+    bv('tailnet-coverage').dispatchEvent(new Event('input', {bubbles:true}));
+    bv('tailnet-coverage-form').requestSubmit(bv('save-tailnet-routing'));
+    await wait();
     bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
     assert(bv('ip').value === '100.101.102.104' && bv('ipv6').value === 'fd7a:115c:a1e0::104' &&
         bv('interface').value === 'opt2' && bv('device-kind').value === 'tailnet', 'Existing gateway link rules must remain available.');
@@ -873,6 +905,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         'The dashboard must explain IPv6 coverage and the temporary IPv4 block for an unbound protected device.');
     delete reply.dashboard.settings.killSwitchIpv6Interfaces;
     delete reply.dashboard.settings.killSwitchUnboundInterfaces;
+    bv('routing-scope').value = 'local';
+    bv('routing-scope').dispatchEvent(new Event('change'));
     bv('coverage').value = 'network';
     bv('network-mode').value = 'full';
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
@@ -974,8 +1008,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('network-kill').click();
     bv('settings-form').requestSubmit(bv('save-routing'));
     await wait();
+    bv('routing-scope').value = 'tailscale';
+    bv('routing-scope').dispatchEvent(new Event('change'));
+    bv('tailnet-coverage').value = 'network';
+    bv('tailnet-coverage').dispatchEvent(new Event('input', {bubbles:true}));
     assert(!bv('tailnet-device-list').querySelector('[aria-label^="Bypass VPN"]'),
-        'Tailscale devices must never offer a Whole-Network bypass.');
+        'Tailscale peers use the independently saved network policy.');
     bv('tailnet-device-list').querySelector('[aria-label="Edit Remote iPad"]').click();
     assert(bv('network-device-bypass-field').hidden,
         'A saved Tailscale device name must be editable without a Whole-Network bypass control.');
@@ -986,6 +1024,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         x.data.label === 'Renamed iPad' && x.data.networkBypass === undefined) &&
         reply.dashboard.assignments.find(row => row.id === 'tailnet1').mode === 'full_multi',
         'Renaming a Tailscale peer must preserve its routing without submitting a bypass field.');
+    bv('tailnet-coverage').value = 'device';
+    bv('tailnet-coverage').dispatchEvent(new Event('input', {bubbles:true}));
+    bv('routing-scope').value = 'local';
+    bv('routing-scope').dispatchEvent(new Event('change'));
     bv('coverage').value = 'device';
     bv('coverage').dispatchEvent(new Event('input', {bubbles:true}));
     assert(!bv('device-list').querySelector('[aria-label^="Bypass VPN"], [aria-label^="Use network rule"]'),
@@ -1056,40 +1098,43 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('service-list').firstElementChild === renderedService &&
         !bv('service-list').textContent.includes('YouTube'), 'Refresh must defer rendering the hidden Multi-Path panel.');
     document.querySelector('[data-bv-section="smart"]').click();
-    assert(bv('smart-status').textContent.includes('Bypass is unavailable while the Kill Switch is on.'),
-        'Multi-Path must explain that checked combined coverage pauses Bypass.');
+    assert(bv('service-scope').value === 'local',
+        'Multi-Path offers independent list coverage.');
     const youtubeRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('YouTube'));
     youtubeRow.querySelector('[aria-label="Test route for YouTube"]').click();
     await wait();
     assert(requests.some(x => x.action === 'testServiceRoute' && x.data.id === 'youtube-demo') &&
-        youtubeRow.textContent.includes('www.youtube.com') && youtubeRow.textContent.includes('DNS and firewall match New York'),
-        'The Multi-Path test must show its hostname and result in the service row.');
+        bv('service-test-dialog').open && bv('service-test-detail').textContent.includes('www.youtube.com') &&
+        bv('service-test-detail').textContent.includes('DNS and firewall match New York'),
+        'The Multi-Path test reports its hostname and result without changing the service row layout.');
+    bv('service-test-dialog').close();
     const downRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('Unavailable route'));
     assert(downRow.cells[2].textContent.includes('Selected server unavailable · Matching traffic blocked') &&
         !youtubeRow.cells[2].textContent.includes('Matching traffic blocked'),
         'A failed override should only change the status for its matching service.');
     downRow.querySelector('[aria-label="Test route for Unavailable route"]').click();
     await wait();
-    assert(downRow.textContent.includes('Selected server unavailable. Matching traffic is blocked'),
-        'The route test should display service-specific blocking in the failed route row.');
+    assert(bv('service-test-detail').textContent.includes('Selected server unavailable. Matching traffic is blocked'),
+        'The route test should display service-specific blocking.');
+    bv('service-test-dialog').close();
     reply.dashboard.settings.networkRouting.lan = {gateway:null, outage:true, statusKnown:true, blockedServices:0};
-    reply.dashboard.services.find(service => service.id === 'youtube-demo').routing.lan.baseOutage = true;
     bv('refresh').click();
     await wait();
-    assert(bv('current-routing').textContent.includes('Base server unavailable · Kill Switch blocking internet') &&
+    assert(bv('current-routing').textContent.includes('Base server unavailable · Default traffic blocked') &&
         [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('YouTube')).cells[2].textContent
-            .includes('Base server unavailable · Internet blocked'),
-        'A base outage must explain the network-wide Kill Switch even if the override pass is still installed.');
+            .includes('Canada'),
+        'The base outage must be shown independently of the healthy override.');
     delete reply.dashboard.settings.networkRouting;
     reply.dashboard.services = reply.dashboard.services.filter(service => !['youtube-demo', 'unavailable-demo'].includes(service.id));
-    reply.dashboard.services.push({id:'bypass-demo', name:'Direct test', domains:['example.net'], profile:'bypass',
-        routing:{lan:{bypass:true}, opt1:{bypass:false, guard:true}}});
+    reply.dashboard.services.push({id:'bypass-demo', name:'Direct test', domains:['example.net'], profile:'bypass', scope:'local',
+        routing:{}});
     bv('refresh').click();
     await wait();
     const directServiceRow = () => [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('Direct test'));
     assert(directServiceRow().cells[2].textContent.includes('Bypass paused by Kill Switch'),
         'A saved Bypass row must show the Kill Switch is preventing direct internet.');
     reply.dashboard.settings.networkKillSwitch = false;
+    reply.dashboard.services.at(-1).routing = {lan:{bypass:true}, opt1:{bypass:false, guard:true}};
     bv('refresh').click();
     await wait();
     const directRow = directServiceRow();
@@ -1100,8 +1145,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     delete reply.dashboard.services.at(-1).routing;
     bv('refresh').click();
     await wait();
-    assert(bv('smart-status').textContent.includes('Internet access stays blocked') &&
-        bv('service-list').textContent.includes('Internet blocked'),
+    assert(directServiceRow().cells[2].textContent.includes('Internet blocked'),
         'Bypass must disclose an explicit Whole-Network block.');
     reply.dashboard.settings.networkMode = 'full_multi';
     reply.dashboard.settings.networkKillSwitch = true;
@@ -1109,13 +1153,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('refresh').click();
     await wait();
     document.querySelector('[data-bv-section="network"]').click();
-    assert(bv('disable-routing').parentElement.contains(bv('settings-title')) &&
+    assert(bv('disable-routing').parentElement.contains(bv('local-routing-title')) &&
         getComputedStyle(bv('disable-routing')).backgroundColor === 'rgb(177, 40, 60)',
-        'Disable VPN must be red at the top of routing settings.');
+        'Disable Local routing must be red in the Local routing header.');
     bv('disable-routing').click();
     await wait();
     assert(requests.some(x => x.action === 'disable') && bv('routing-enabled').hidden &&
-        !bv('save-routing').classList.contains('bv-enabled') && bv('network-kill').checked,
+        !bv('save-routing').classList.contains('bv-enabled') && bv('network-kill').checked &&
+        reply.dashboard.settings.tailnetEnabled === true,
         'Disabling VPN did not preserve the saved kill switch and clear the green state.');
     document.querySelector('[data-bv-section="vpns"]').click();
     bv('country').value = '';
@@ -1202,6 +1247,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             group.label === 'NordVPN' && group.querySelector('option').value === 'proxy-' + nordNode),
         'A userspace Nord tunnel must appear in both VPN Login and the NordVPN routing group.');
     document.querySelector('[data-bv-section="network"]').click();
+    bv('routing-scope').value = 'tailscale';
+    bv('routing-scope').dispatchEvent(new Event('change'));
     bv('add-tailnet-peer').click();
     assert([...bv('profile').options].some(option => option.value === 'mysterium1') &&
         [...bv('profile').options].some(option => option.value === 'ivpn1') &&
@@ -1210,6 +1257,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('close-assignment').click();
     assert(document.documentElement.scrollWidth <= window.innerWidth, 'document has horizontal overflow');
     document.querySelector('[data-bv-section="network"]').click();
+    bv('routing-scope').value = 'local';
+    bv('routing-scope').dispatchEvent(new Event('change'));
     const expected = window.innerWidth < 768 ? 'block' : 'table';
     assert(getComputedStyle(bv('device-list').closest('table')).display === expected, 'incorrect device layout for viewport');
     const system = document.querySelector('[data-bv-section="system"]');
