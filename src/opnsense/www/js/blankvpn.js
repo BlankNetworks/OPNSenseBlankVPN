@@ -1415,16 +1415,21 @@
             }
             for (const node of results) {
                 const row = servers.insertRow();
-                const server = cell(row, node.name, '', endpoint(node.host, node.port));
+                const address = endpoint(node.host, node.port);
+                const server = cell(row, node.name, '', address);
                 if (node.legacy) {
                     const warning = document.createElement('span');
                     warning.textContent = 'Legacy';
                     warning.title = 'Legacy or unencrypted transport';
-                    server.querySelector('small').append(' · ', warning);
+                    const detail = server.querySelector('small');
+                    detail.append(' · ', warning);
+                    detail.title = address + ' · ' + warning.title;
                 }
                 cell(row, proxyProtocol(node).toUpperCase(), 'Protocol');
                 const exit = state.profiles.find((profile) => profile.node === node.id);
-                cell(row, node.core, 'Core', node.disabled ? 'Disabled' : exit?.status || 'Ready to assign');
+                const status = node.disabled ? 'Disabled' : exit?.status || 'Ready to assign';
+                const core = cell(row, node.core, 'Core', status);
+                core.querySelector('small').title = status;
                 const ping = cell(row, '—', 'Ping');
                 ping.className = 'bv-ping-cell';
                 const actions = serverControls(row);

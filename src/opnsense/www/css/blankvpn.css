@@ -659,6 +659,12 @@
     white-space: nowrap;
 }
 
+.blankvpn .bv-server-table td > small[title] {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .blankvpn .bv-server-table .bv-server-actions-cell {
     text-align: end;
 }
@@ -776,6 +782,10 @@
     .blankvpn .bv-server-table td {
         padding: 0;
         border: 0;
+    }
+
+    .blankvpn .bv-server-table td > small[title] {
+        white-space: normal;
     }
 
     .blankvpn .bv-server-table :is(.bv-server-actions-cell, .bv-empty) {
