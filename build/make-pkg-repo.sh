@@ -33,6 +33,9 @@ cmp -s "$public_key" "$work/repo.pub" || {
     exit 1
 }
 
+# Keep the signed index readable on supported pkg builds that lack Zstandard.
+printf '%s\n' 'version = 2; packing_format = "txz";' > "$work/repo-meta.conf"
+
 for arch in amd64 aarch64; do
     abi=FreeBSD:15:$arch
     original=$package_name-$version-$arch.pkg
@@ -43,7 +46,7 @@ for arch in amd64 aarch64; do
     directory=$site/pkg/26.7/$abi
     mkdir -p "$directory/All"
     cp "$release/$original" "$directory/All/$package_name-$version.pkg"
-    "$pkg" -o ABI="$abi" repo -l "$directory" "rsa:$key"
+    "$pkg" -o ABI="$abi" repo -l -m "$work/repo-meta.conf" "$directory" "rsa:$key"
     test -s "$directory/meta.conf"
     test -s "$directory/packagesite.pkg"
     test -s "$directory/data.pkg"
