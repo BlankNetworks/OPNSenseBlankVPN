@@ -75,6 +75,7 @@
             assignmentDevice: null,
             busy: false,
             dashboardRequest: null,
+            deviceRefreshRunning: false,
             settingsDirty: false,
             catalogLoaded: false,
             signingIn: false,
@@ -515,8 +516,12 @@
             const body = byId('device-list');
             const tailnetBody = byId('tailnet-device-list');
             const wholeNetwork = byId('coverage').value === 'network';
+            const wholeNetworkApplies = wholeNetwork && state.settings?.enabled &&
+                state.settings.coverage === 'network' && state.settings.networkMode !== 'disabled';
             byId('add-device').hidden = wholeNetwork;
-            byId('device-guide').hidden = wholeNetwork;
+            byId('device-guide').textContent = wholeNetwork
+                ? 'To assign devices individually, choose Only Devices I choose under Routing coverage.'
+                : 'Refresh to find LAN devices and current DHCP leases. Select a device to set up its routing rule.';
             const managed = list(state.settings?.interfaces);
             const transit = list(state.settings?.tailscaleInterfaces);
             const nativeTailnet = state.settings?.tailscaleSetup?.ready === true;
@@ -548,9 +553,7 @@
                 if (assignment) {
                     seen.add(assignment.id);
                 }
-                if (!wholeNetwork || assignment || tailnet) {
-                    rows.push({device, assignment});
-                }
+                rows.push({device, assignment});
             }
             for (const assignment of state.assignments) {
                 if (!seen.has(assignment.id)) {
@@ -565,9 +568,10 @@
                 const name = assignment?.label || device?.name || device?.ipv4 || assignment?.ip || 'Unnamed device';
                 const bindMac = assignment?.bindMac === true;
                 const macBindingSupported = device?.macBindingSupported === true;
-                const effectiveIp = assignment?.effectiveIp ?? device?.currentIpv4;
-                const reserveAddress = device?.reservationIpv4 || device?.ipv4;
-                const ip = effectiveIp || reserveAddress || assignment?.ip || '';
+                const observedIp = device?.currentIpv4 || device?.ipv4 || '';
+                const effectiveIp = assignment?.effectiveIp ?? observedIp;
+                const reserveAddress = device?.stable === true ? device.reservationIpv4 || observedIp : observedIp;
+                const ip = observedIp || effectiveIp || assignment?.ip || '';
                 const ipv6 = list(device?.ipv6 || assignment?.ipv6);
                 const routableV6 = ipv6.filter(address => !address.toLowerCase().startsWith('fe80:'));
                 const interfaceId = assignment?.interface || device?.interface ||
@@ -578,16 +582,29 @@
                 const blocked = assignment?.killSwitchActive === true;
                 const paused = assignment?.paused === true;
                 const waitingForAddress = bindMac && !effectiveIp;
-                const status = assignment
-                    ? (paused ? 'Disabled' : wholeNetwork ? 'Paused by Whole-Network coverage' : !state.settings?.enabled
-                        ? 'Saved · Routing off' : waitingForAddress ? 'Waiting for DHCP' : assignment.appliedRoute || 'Rule saved')
-                    : !canUseInterface ? (tailnet ? 'Exit node setup needed' : 'Interface outside coverage')
-                        : macBindingSupported && reserved ? 'Ready to follow MAC'
-                            : !reserved && !reserveIp ? (tailnet ? 'Both Tailscale addresses needed' : 'DHCP reservation needed')
-                            : reserveIp ? 'Current lease can be reserved' : 'Ready to assign';
-                const addresses = [...new Set([waitingForAddress ? '' : ip,
-                    ...list(waitingForAddress ? [] : device?.ipv4Addresses), ...ipv6].filter(Boolean))];
-                cell(row, name, 'Device', tailnet ? 'Tailscale' : (device?.mac || assignment?.mac));
+                const staleReservation = !!(observedIp && device?.reservationIpv4 && device.reservationIpv4 !== observedIp);
+                let status;
+                if (assignment) {
+                    status = paused ? 'Disabled' : wholeNetwork ? 'Paused by Whole-Network coverage' : !state.settings?.enabled
+                        ? 'Saved · Routing off' : waitingForAddress ? 'Waiting for DHCP' : assignment.appliedRoute || 'Rule saved';
+                } else if (wholeNetwork && !tailnet && canUseInterface) {
+                    status = wholeNetworkApplies ? 'Covered by network rule' : 'Discovered';
+                } else if (!canUseInterface) {
+                    status = tailnet ? 'Exit node setup needed' : 'Interface outside coverage';
+                } else if (!tailnet && device?.addressConflict) {
+                    status = 'DHCP address conflict';
+                } else if (macBindingSupported && reserved) {
+                    status = 'Ready to follow MAC';
+                } else if (!reserved && !reserveIp) {
+                    status = tailnet ? 'Both Tailscale addresses needed' : 'DHCP reservation needed';
+                } else {
+                    status = reserveIp ? 'Current lease can be reserved' : 'Ready to assign';
+                }
+                const hideOldAddress = waitingForAddress && (!observedIp || observedIp === assignment.ip);
+                const addresses = [...new Set([hideOldAddress ? '' : ip,
+                    ...list(hideOldAddress ? [] : device?.ipv4Addresses), ...ipv6].filter(Boolean))];
+                const identity = [device?.mac || assignment?.mac, device?.arpConfirmed === false ? 'DHCP lease' : ''];
+                cell(row, name, 'Device', tailnet ? 'Tailscale' : identity.filter(Boolean).join(' · '));
                 cell(row, addresses[0], 'Addresses', addresses.slice(1).join(' · '));
                 if (tailnet) {
                     cell(row, device ? (device.online ? 'Online' : 'Offline') : 'Unknown', 'Availability');
@@ -602,8 +619,19 @@
                 }
                 cell(row, assignment ? modes[assignment.mode] || 'Regular internet' : 'No rule', 'Rule',
                     ruleDetail.filter(Boolean).join(' · '));
-                cell(row, status, 'Status', wholeNetwork || paused ? '' : blocked ? 'Kill Switch blocking internet'
-                    : assignment?.killSwitch ? 'Kill Switch on' : '');
+                const statusDetail = [];
+                if (!tailnet && !canUseInterface) {
+                    statusDetail.push('Select this interface in Routing coverage and save.');
+                }
+                if (staleReservation) {
+                    statusDetail.push('DHCP reservation is ' + device.reservationIpv4 + '. Update it to match the current address.');
+                } else if (!tailnet && device?.addressConflict) {
+                    statusDetail.push('Check the device’s DHCP lease and reservation in OPNsense.');
+                }
+                if (!wholeNetwork && !paused && assignment?.killSwitch) {
+                    statusDetail.push(blocked ? 'Kill Switch blocking internet' : 'Kill Switch on');
+                }
+                cell(row, status, 'Status', statusDetail.join(' '));
                 const actions = row.insertCell();
                 actions.setAttribute('role', 'cell');
                 if (state.canManage && !wholeNetwork) {
@@ -611,7 +639,8 @@
                         ip: waitingForAddress ? assignment.ip : ip, reserveAddress, effectiveIp,
                         ipv6: tailnet || routableV6.length === 1 ? routableV6[0] : '',
                         interface: interfaceId, mac: device.mac, label: (device.name || '').replace(/[<>]/g, '').slice(0, 80),
-                        reserved, reserveIp, canUseInterface, macBindingSupported
+                        reserved, reserveIp, canUseInterface, macBindingSupported,
+                        addressConflict: device.addressConflict === true
                     } : null;
                     if (assignment) {
                         actions.append(button('Edit', () => openAssignment(assignment, tailnet ? 'tailnet' : 'lan', discovered), 'Edit ' + name));
@@ -631,13 +660,13 @@
                                     () => state.tests.delete('device:' + assignment.id));
                             }, action + ' ' + name));
                         }
-                    } else {
+                    } else if ((tailnet || canUseInterface) && !device?.addressConflict) {
                         actions.append(button('Select', () => openAssignment(null, tailnet ? 'tailnet' : 'lan', discovered), 'Select ' + name));
                     }
                 }
             }
             if (!body.rows.length) {
-                empty(body, wholeNetwork ? 'No saved LAN rules.' : 'No active LAN devices found. Press Refresh.', 6);
+                empty(body, 'No LAN devices or DHCP leases found. Press Refresh.', 6);
             }
             byId('tailnet-devices').hidden = !state.settings?.tailscaleInstalled && tailnetBody.rows.length === 0;
             byId('add-tailnet-peer').hidden = wholeNetwork || !nativeTailnet;
@@ -652,11 +681,8 @@
                 ? 'Choose Only Devices I choose to assign a Tailscale device.'
                 : nativeTailnet ? 'Uses the OPNsense exit node.' : transit.length ? 'Uses the configured gateway link.'
                     : state.settings?.tailscaleSetup?.reason || 'Check Tailscale Settings for exit node setup.';
-            const count = wholeNetwork ? 0 : state.devices.length + state.tailnetDevices.length;
-            const counts = [];
-            if (!wholeNetwork) {
-                counts.push(count + (count === 1 ? ' device found' : ' devices found'));
-            }
+            const count = state.devices.length + state.tailnetDevices.length;
+            const counts = [count + (count === 1 ? ' device found' : ' devices found')];
             counts.push(state.assignments.length + (state.assignments.length === 1 ? ' saved rule' : ' saved rules'));
             byId('observed').textContent = counts.join(' · ');
         }
@@ -866,13 +892,13 @@
                     ? 'All selected interfaces use ' + profileName(exit.value) + '.'
                         + (killSwitch ? ' Internet is blocked if the server goes offline.' : '')
                     : 'Add a VPN or proxy server, then select it here.',
-                multi: 'The selected interfaces use your domain lists. '
+                multi: 'The selected interfaces use your Multi-Path lists. '
                     + (killSwitch ? 'All internet is blocked if a list’s server goes offline or no list has a server.'
                         : 'Other traffic uses regular internet.'),
                 full_multi: exit.value
-                    ? 'Default traffic uses ' + profileName(exit.value) + '. Matched domains use their Multi-Path servers. '
+                    ? 'Default traffic uses ' + profileName(exit.value) + '. Matching destinations use their Multi-Path servers. '
                         + 'The Kill Switch blocks traffic when its assigned server is unavailable. Bypass lists use the base server.'
-                    : 'Choose a base server for default traffic. Set domain overrides in Multi-Path.',
+                    : 'Choose a base server for default traffic. Set destination overrides in Multi-Path.',
                 blocked: 'Internet is blocked on the selected LANs and VLANs.',
                 disabled: 'Devices use your normal OPNsense routing.'
             };
@@ -959,7 +985,10 @@
         function domainDestinations(current) {
             const choices = [
                 {value: bypassDestination, label: 'Bypass (regular internet)'},
-                ...routableExits().map(exitChoice)
+                ...routingServers().map((profile) => {
+                    const choice = exitChoice(profile);
+                    return hasVpnDns(profile) ? choice : {...choice, label: choice.label + ' (IP entries only)'};
+                })
             ];
             if (current && !choices.some((choice) => choice.value === current)) {
                 choices.push({value: current, label: 'Unavailable server'});
@@ -977,22 +1006,22 @@
                 && state.services.some((service) => service.profile && service.profile !== bypassDestination);
             byId('smart-status').textContent = bypass
                 ? 'Bypass lists use regular internet under Whole-Network coverage. The Kill Switch still applies if the server goes offline.'
-                : combined ? 'Matched domains use their Multi-Path servers. Bypass lists use the base server for VPN + Multi-Path rules.'
-                    : active ? 'Routing matched DNS traffic on ' + interfaces.map(networkName).join(', ') + '.'
+                : combined ? 'Matching destinations use their Multi-Path servers. Bypass lists use the base server for VPN + Multi-Path rules.'
+                    : active ? 'Routing matching destinations on ' + interfaces.map(networkName).join(', ') + '.'
                         : 'Choose a server and enable Multi-Path to use these lists. Use Bypass with Whole-Network coverage through one VPN or proxy.';
             byId('use-lan').hidden = bypass || (combined && settings?.coverage === 'network') ||
                 !state.availableInterfaces.some((item) => item.id === 'lan')
                 || interfaces.includes('lan') || list(settings?.strictInterfaces).includes('lan');
             const body = byId('service-list');
             if (state.services.length === 0) {
-                empty(body, 'No saved domain lists.', 4);
+                empty(body, 'No saved lists.', 4);
             } else {
                 body.replaceChildren();
                 for (const service of state.services) {
                     const row = body.insertRow();
-                    const domains = list(service.domains);
+                    const entries = list(service.domains);
                     const saved = service.profile || '';
-                    cell(row, service.name, '', domains.length + (domains.length === 1 ? ' domain' : ' domains'));
+                    cell(row, service.name, '', entries.length + (entries.length === 1 ? ' entry' : ' entries'));
                     const destination = row.insertCell();
                     if (state.canManage) {
                         const form = document.createElement('form');
@@ -1044,7 +1073,7 @@
                         actions.append(button('Remove', (event) => {
                             if (window.confirm('Remove the Multi-Path list for ' + service.name + '?')) {
                                 void mutate(event.currentTarget, () => api('removeService', {id: service.id}),
-                                    'Domain list removed.', () => {
+                                    'Multi-Path list removed.', () => {
                                         state.serviceDestinations.delete(service.id);
                                         if (state.editingService === service.id) {
                                             editService();
@@ -1372,7 +1401,7 @@
                     empty(byId('device-list'), 'Saved rules are unavailable.');
                 }
             } finally {
-                refresh.disabled = false;
+                refresh.disabled = state.deviceRefreshRunning;
             }
         }
 
@@ -1389,7 +1418,8 @@
                 list(state.settings?.tailscaleInterfaces).length === 0);
             byId('assignment-interface-field').hidden = automatic;
             interfaceField.required = !automatic;
-            byId('save-device').disabled = automatic && !state.settings?.tailscaleSetup?.ready;
+            byId('save-device').disabled = (automatic && !state.settings?.tailscaleSetup?.ready)
+                || (!tailnet && state.assignmentDevice?.addressConflict === true);
             byId('mac-field').hidden = tailnet;
             byId('mac').required = !tailnet;
             byId('ipv6-field').hidden = automatic;
@@ -1427,7 +1457,7 @@
                     : 'Use the peer addresses seen on the configured gateway link.');
             }
             if (mode === 'multi' || combined) {
-                notes.push('Matched domains use their Multi-Path servers.');
+                notes.push('Matching destinations use their Multi-Path servers.');
                 notes.push(combined ? 'Default traffic and Bypass lists use the base server.' : 'Other traffic uses regular internet.');
                 if (!state.services.some((service) => service.profile && service.profile !== bypassDestination)) {
                     notes.push('Assign a server to a list in Multi-Path Settings.');
@@ -1480,6 +1510,8 @@
             let note = '';
             if (observed && !observed.canUseInterface && !tailnet) {
                 note = 'Select this interface under Routing coverage and save, then refresh.';
+            } else if (observed?.addressConflict) {
+                note = 'Check the device’s DHCP lease and reservation in OPNsense, then refresh.';
             } else if (bindMac) {
                 note = 'The rule follows changes to the DHCP reservation for this MAC on the selected interface.';
                 if (reserve) {
@@ -1922,10 +1954,12 @@
         });
         byId('refresh').addEventListener('click', async (event) => {
             const control = event.currentTarget;
+            state.deviceRefreshRunning = true;
             control.disabled = true;
             let failure = '';
             try {
-                if (state.canManage && byId('coverage').value === 'device' && !state.dashboardRequest) {
+                await state.dashboardRequest;
+                if (state.canManage && byId('coverage').value === 'device') {
                     byId('observed').textContent = 'Finding LAN and Tailscale devices…';
                     await api('discoverDevices', {});
                 }
@@ -1936,6 +1970,7 @@
                 if (failure) {
                     notice(failure, 'warning');
                 }
+                state.deviceRefreshRunning = false;
                 control.disabled = false;
             }
         });
@@ -2244,8 +2279,8 @@
                 profile: byId('service-profile').value,
                 domains: byId('service-domains').value.trim()
             };
-            const message = payload.profile ? 'Domain list saved with ' + profileName(payload.profile) + '.'
-                : 'Domain list saved. Choose a destination when ready.';
+            const message = payload.profile ? 'Multi-Path list saved with ' + profileName(payload.profile) + '.'
+                : 'Multi-Path list saved. Choose a destination when ready.';
             void mutate(event.submitter, () => api('saveService', payload), message, () => {
                 state.serviceDestinations.delete(payload.id);
                 editService();
@@ -2260,7 +2295,7 @@
             }
             const status = byId('domain-file-status');
             if (file.size > maxDomainBytes) {
-                status.textContent = 'Choose a domain list up to 128 KiB.';
+                status.textContent = 'Choose a list file up to 128 KiB.';
                 input.value = '';
                 return;
             }
@@ -2278,7 +2313,7 @@
                 input.value = '';
             } catch {
                 if (state.domainRead === read) {
-                    status.textContent = 'Could not read the file. Paste its domains into the editor.';
+                    status.textContent = 'Could not read the file. Paste its entries into the editor.';
                 }
             }
         });
@@ -2286,9 +2321,9 @@
             byId('download-domains').disabled = !event.target.value.trim();
         });
         byId('download-domains').addEventListener('click', () => {
-            const name = byId('service-name').value.trim().replace(/[^a-z0-9_.-]+/gi, '-') || 'domains';
-            const domains = byId('service-domains').value.trim();
-            const url = URL.createObjectURL(new Blob([domains + '\n'], {type: 'text/plain'}));
+            const name = byId('service-name').value.trim().replace(/[^a-z0-9_.-]+/gi, '-') || 'multi-path';
+            const entries = byId('service-domains').value.trim();
+            const url = URL.createObjectURL(new Blob([entries + '\n'], {type: 'text/plain'}));
             const link = document.createElement('a');
             link.href = url;
             link.download = name + '.txt';

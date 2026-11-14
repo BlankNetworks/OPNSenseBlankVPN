@@ -39,14 +39,15 @@ class ServiceController extends ApiControllerBase
                 (string)(Config::getInstance()->object()->OPNsense->tailscale->settings->advertiseExitNode ?? '') === '1';
             $port = (string)Config::getInstance()->object()->system->webgui->port;
             $settings['dashboardPort'] = ctype_digit($port) && (int)$port <= 65535 && (int)$port > 0 ? (int)$port : 443;
-            $settings['availableInterfaces'] = array_values(Policy::availableInterfaces());
+            $availableInterfaces = Policy::availableInterfaces();
+            $settings['availableInterfaces'] = array_values($availableInterfaces);
             $profiles = Policy::profiles($model);
             $proxyRoutes = ProxyRuntime::routes($model);
             $assignments = Policy::assignments($model);
             $services = SmartRouting::services($model);
             $diagnostics = new Diagnostics();
-            $discovery = $diagnostics->devices();
-            $lanInterfaces = array_diff($settings['interfaces'] ?: ['lan'], $settings['tailscaleInterfaces']);
+            $lanInterfaces = array_diff(array_keys($availableInterfaces), $settings['tailscaleInterfaces']);
+            $discovery = $diagnostics->devices(array_intersect($settings['interfaces'] ?: ['lan'], $lanInterfaces));
             $discovery['devices'] = array_values(array_filter($discovery['devices'],
                 static fn (array $device): bool => in_array($device['interface'], $lanInterfaces, true)));
             $reservationIndex = DeviceIdentity::index($diagnostics->reservations());
@@ -1471,7 +1472,7 @@ class ServiceController extends ApiControllerBase
         return $this->respond(fn () => Operations::exclusive(function () {
             $id = $this->input('id', 64);
             $name = $this->name();
-            $domains = SmartRouting::domains($this->input('domains', SmartRouting::MAX_DOMAIN_BYTES));
+            $domains = SmartRouting::destinations($this->input('domains', SmartRouting::MAX_DOMAIN_BYTES));
             return $this->saveDomainList($id, $this->input('profile', 80), $name, $domains);
         }), true, true);
     }
@@ -1507,8 +1508,11 @@ class ServiceController extends ApiControllerBase
                 if (!$bypass) {
                     $profileId = $this->resolveProxyChoice($model, $profileId);
                     $profile = Policy::routes($model)[$profileId] ?? [];
-                    if ($profile === [] || !SmartRouting::canResolve($profile) || !self::routeConfigured($profile)) {
-                        throw new \DomainException('Select a configured VPN or proxy server with DNS support.');
+                    if ($profile === [] || !self::routeConfigured($profile)) {
+                        throw new \DomainException('Select a configured VPN or proxy server.');
+                    }
+                    if (SmartRouting::hasDomains($domains) && !SmartRouting::canResolve($profile)) {
+                        throw new \DomainException('Select an exit with IPv4 DNS support to route domain names.');
                     }
                 }
             }

@@ -368,7 +368,7 @@
                     <button id="bv-add-device" data-manage-only type="button" class="btn btn-primary">Add device rule</button>
                 </div>
             </div>
-            <p id="bv-device-guide" class="text-muted">Refresh to find active LAN devices. Select a device to set up its routing rule.</p>
+            <p id="bv-device-guide" class="text-muted">Refresh to find LAN devices and current DHCP leases. Select a device to set up its routing rule.</p>
             <h3>LAN devices</h3>
             <div class="bv-scroll">
                 <table class="table bv-table bv-devices" role="table">
@@ -482,9 +482,10 @@
                     <select id="bv-service-profile" class="form-control"></select>
                 </label>
             </div>
-            <label>Domains
+            <label>Domains, IP addresses, and CIDRs
                 <textarea id="bv-service-domains" class="form-control bv-config-text" rows="7" maxlength="131072"
-                    placeholder="netflix.com&#10;*.nflxvideo.net&#10;*.cn" spellcheck="false" required></textarea>
+                    placeholder="example.com&#10;*.nflxvideo.net&#10;*.cn&#10;203.0.113.42&#10;198.51.100.0/24"
+                    aria-describedby="bv-service-format" spellcheck="false" required></textarea>
             </label>
             <div class="bv-actions bv-file-actions">
                 <label>Import or replace from file
@@ -493,8 +494,14 @@
                 <button id="bv-download-domains" type="button" class="btn btn-default" disabled>Download list</button>
             </div>
             <p id="bv-domain-file-status" class="text-muted" role="status"></p>
-            <p class="text-muted">Enter domains one per line or separated by commas. A domain includes its subdomains. Use .cn or *.cn for every domain ending in .cn.
-                Save a list now and choose a server when it’s ready.</p>
+            <p id="bv-service-format" class="text-muted">
+                Separate entries with new lines or commas. Both <code>example.com</code> and <code>*.example.com</code>
+                include the domain and its subdomains. Use <code>*.cn</code> or <code>.cn</code> for all .cn domains.
+                A trailing wildcard such as <code>*.example.*</code> is invalid.
+                Enter one IP as <code>203.0.113.42</code> or <code>203.0.113.42/32</code>.
+                For a range, use CIDR such as <code>198.51.100.0/24</code>. IP entries match without DNS.
+                An IPv6 entry such as <code>2001:db8::/32</code> blocks matching traffic when assigned to a VPN or proxy.
+            </p>
             <div class="bv-actions">
                 <button id="bv-save-service" type="submit" class="btn btn-primary">Save list</button>
                 <button id="bv-cancel-service" type="button" class="btn btn-default" hidden>Cancel edit</button>
@@ -504,7 +511,7 @@
             <table class="table bv-table bv-services">
                 <thead>
                     <tr>
-                        <th scope="col">Service and domains</th>
+                        <th scope="col">Service and entries</th>
                         <th scope="col">Server</th>
                         <th scope="col">Routing</th>
                         <th scope="col"><span class="sr-only">Actions</span></th>

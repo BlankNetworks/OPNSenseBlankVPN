@@ -184,7 +184,11 @@ window.jQuery.ajax = async (request) => {
     if (action === 'discoverDevices') {
         if (!reply.dashboard.devices.some(device => device.ipv4 === '10.0.0.30')) {
             reply.dashboard.devices.push({ipv4:'10.0.0.30', interface:'lan',
-                name:'New console', mac:'02:00:00:00:00:30', stable:false, leaseProvider:'Dnsmasq DHCP'});
+                name:'New console', mac:'02:00:00:00:00:30', stable:false, arpConfirmed:false, leaseProvider:'Dnsmasq DHCP'});
+            reply.dashboard.devices.push({ipv4:'10.0.2.45', interface:'opt1',
+                name:'Guest phone', mac:'02:00:00:00:00:45', stable:false, arpConfirmed:false, leaseProvider:'Dnsmasq DHCP'});
+            reply.dashboard.devices.push({ipv4:'10.0.0.46', interface:'lan', name:'Changed reservation',
+                mac:'02:00:00:00:00:46', stable:false, arpConfirmed:true, addressConflict:true, reservationIpv4:'10.0.0.16'});
             reply.dashboard.devices.push({ipv4:'10.0.0.31', currentIpv4:'10.0.0.31', interface:'lan',
                 name:'Laptop', mac:'02:00:00:00:00:31', stable:false, leaseProvider:'Kea DHCPv4', macBindingSupported:true});
         }
@@ -354,6 +358,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         !bv('profile-list').textContent.includes('Japan home') && bv('profile-list').textContent.includes('Canada home'),
         'Removing a saved server must keep the other saved server.');
     document.querySelector('[data-bv-section="smart"]').click();
+    const formatHelp = bv('service-format').textContent;
+    assert(['*.example.com', '*.example.*', '*.cn', '203.0.113.42/32', '198.51.100.0/24', '2001:db8::/32']
+        .every(example => formatHelp.includes(example)) && formatHelp.includes('invalid'),
+        'Multi-Path must show domain wildcard and IP syntax.');
     bv('service-preset').value = 'Netflix';
     bv('service-preset').dispatchEvent(new Event('change'));
     assert(bv('service-domains').value === 'netflix.com\nnflxvideo.net', 'Netflix preset domains not populated');
@@ -361,15 +369,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     reply.dashboard.profiles = [];
     bv('refresh').click();
     await wait();
-    const importedDomains = 'netflix.com\n*.nflxvideo.net\nnflximg.net';
+    const importedEntries = 'netflix.com\n*.nflxvideo.net\nnflximg.net,198.51.100.0/24\n203.0.113.5\n2001:db8::/32';
     const data = new DataTransfer();
-    data.items.add(new File([importedDomains], 'Netflix.txt'));
+    data.items.add(new File([importedEntries], 'Netflix.txt'));
     bv('service-file').files = data.files;
     // Headless Chrome can exhaust its virtual time budget before native file IO returns.
     const nativeText = File.prototype.text;
     File.prototype.text = async function () {
         assert(this.name === 'Netflix.txt', 'wrong domain file was read');
-        return importedDomains;
+        return importedEntries;
     };
     try {
         bv('service-file').dispatchEvent(new Event('change'));
@@ -382,8 +390,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('service-form').requestSubmit(bv('save-service'));
     await wait();
     assert(requests.some(x => x.action === 'saveService' && x.data.profile === '' &&
-        x.data.domains.includes('nflximg.net')) && bv('service-list').querySelector('select').value === '',
-        'domain list did not save without any exits');
+        x.data.domains === importedEntries) && bv('service-list').querySelector('select').value === '' &&
+        bv('service-list').textContent.includes('6 entries'),
+        'Multi-Path must keep mixed domain and IP entries before a destination is assigned.');
     reply.dashboard.profiles = originalProfiles;
     bv('refresh').click();
     await wait();
@@ -392,7 +401,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('service-form').requestSubmit(bv('save-service'));
     await wait();
     assert(requests.some(x => x.action === 'saveService' && x.data.id === 'list1' && x.data.profile === 'vpn1' &&
-        x.data.domains.includes('nflxvideo.net')), 'saved list could not be bound to an exit');
+        x.data.domains.includes('*.nflxvideo.net') && x.data.domains.includes('198.51.100.0/24') &&
+        x.data.domains.includes('203.0.113.5') && x.data.domains.includes('2001:db8::/32')),
+        'The saved mixed list could not be edited or bound to an exit.');
     const destination = bv('service-list').querySelector('select');
     destination.value = 'bypass';
     destination.dispatchEvent(new Event('change'));
@@ -403,6 +414,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'setServiceDestination' && x.data.id === 'list1' &&
         x.data.profile === 'bypass' && !Object.hasOwn(x.data, 'domains')) &&
         reply.dashboard.services[0].domains.includes('*.nflxvideo.net') &&
+        reply.dashboard.services[0].domains.includes('198.51.100.0/24') &&
         bv('service-list').querySelector('select').value === 'bypass',
         'The list destination must change without submitting or altering the domains.');
     const switchBack = bv('service-list').querySelector('select');
@@ -522,6 +534,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'discoverDevices') && bv('device-list').textContent.includes('New console'),
         'Manual refresh must discover and display LAN devices.');
+    const discoveryRows = [...bv('device-list').rows];
+    const consoleRow = discoveryRows.find(row => row.cells[0].textContent.includes('New console'));
+    const outsideRow = discoveryRows.find(row => row.cells[0].textContent.includes('Guest phone'));
+    const changedRow = discoveryRows.find(row => row.cells[0].textContent.includes('Changed reservation'));
+    assert(consoleRow.cells[0].textContent.includes('DHCP lease') && !consoleRow.textContent.includes('Online'),
+        'A lease-only device must be identified without claiming it is online.');
+    assert(outsideRow.textContent.includes('Interface outside coverage') &&
+        outsideRow.textContent.includes('Select this interface in Routing coverage and save') && !outsideRow.querySelector('button'),
+        'Devices on unmanaged LANs should be visible without allowing a rule until coverage is saved.');
+    assert(changedRow.cells[1].textContent === '10.0.0.46' &&
+        changedRow.textContent.includes('DHCP reservation is 10.0.0.16') && !changedRow.querySelector('button'),
+        'Show the current device address and explain why a conflicting reservation must be corrected before assignment.');
+    const savedInterfaces = [...reply.dashboard.settings.interfaces];
+    const vlan = bv('managed').querySelector('[value="opt1"]');
+    vlan.click();
+    assert(!bv('device-list').querySelector('[aria-label="Select Guest phone"]'),
+        'Marking the VLAN in a draft must leave the guest device unavailable for assignment.');
+    bv('settings-form').requestSubmit(bv('save-routing'));
+    await wait();
+    bv('device-list').querySelector('[aria-label="Select Guest phone"]').click();
+    assert(bv('ip').value === '10.0.2.45' && bv('interface').value === 'opt1',
+        'After saving VLAN coverage, selecting its DHCP device should fill its observed address and interface.');
+    bv('close-assignment').click();
+    reply.dashboard.settings.interfaces = savedInterfaces;
+    bv('refresh').click();
+    await wait();
     bv('device-list').querySelector('[aria-label="Select New console"]').click();
     assert(bv('ip').value === '10.0.0.30' && bv('mac').value === '02:00:00:00:00:30' &&
         bv('interface').value === 'lan' && bv('device-kill').checked && bv('device-on-demand').checked &&
@@ -742,6 +780,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         x.data.networkMode === 'full' && x.data.networkProfile === 'proxy1' && x.data.networkKillSwitch === true) &&
         bv('add-device').hidden && reply.dashboard.settings.networkProfile === 'proxy1',
         'Whole-Network proxy coverage settings did not apply.');
+    assert(bv('device-list').textContent.includes('New console') &&
+        bv('device-list').textContent.includes('Covered by network rule') &&
+        !bv('device-list').querySelector('button') && bv('device-guide').textContent.includes('Only Devices I choose'),
+        'Whole-Network view must show discovered devices read-only and explain individual assignments.');
     assert(dismiss.hidden, 'Success messages must hide the error dismiss control.');
     bv('network-mode').value = 'full_multi';
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
@@ -752,7 +794,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('network-profile').value = 'proxy1';
     bv('network-profile').dispatchEvent(new Event('input', {bubbles:true}));
     assert(bv('coverage-note').textContent.includes('Default traffic uses Chicago proxy') &&
-        bv('coverage-note').textContent.includes('Matched domains use their Multi-Path servers.'),
+        bv('coverage-note').textContent.includes('Matching destinations use their Multi-Path servers.'),
         'Combined network mode must describe both the base server and the domain overrides.');
     bv('settings-form').requestSubmit(bv('save-routing'));
     await wait();

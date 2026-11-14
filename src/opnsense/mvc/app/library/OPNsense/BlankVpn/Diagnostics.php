@@ -29,7 +29,7 @@ final class Diagnostics
         $this->config = $config ?? Config::getInstance()->object();
     }
 
-    public function devices(): array
+    public function devices(array $preferredInterfaces = []): array
     {
         $warnings = [];
         $truncated = false;
@@ -115,8 +115,9 @@ final class Diagnostics
                 if (!is_array($lease) || (int)($lease['state'] ?? 0) !== 0) {
                     continue;
                 }
-                $expiry = (int)($lease['expire'] ?? 0);
-                if ($expiry > 0 && $expiry <= $now) {
+                $expiry = filter_var($lease['expire'] ?? null, FILTER_VALIDATE_INT);
+                if ($expiry === false || $expiry < 0 || ($expiry === 0 && $source !== 'Dnsmasq DHCP') ||
+                    ($expiry > 0 && $expiry <= $now)) {
                     continue;
                 }
                 // Prefix-delegation leases describe routed networks rather than host addresses.
@@ -125,14 +126,20 @@ final class Diagnostics
                 }
                 $address = self::ip((string)($lease['address'] ?? ''));
                 $hardware = self::mac((string)($lease['hwaddr'] ?? ''));
-                $port = $interfaces[(string)($lease['if'] ?? '')]['id'] ?? null;
-                if ($port !== null && $address !== null && !str_contains($address, ':') && $hardware !== null) {
+                $candidate = (string)($lease['if'] ?? '');
+                $dhcp4 = $source !== 'Kea DHCPv6' && $address !== null && !str_contains($address, ':');
+                if ($dhcp4 && $candidate === '') {
+                    // Some native lease rows omit the interface. Only infer an unambiguous local subnet.
+                    $candidate = self::interfaceForIp($address, $interfaces, []) ?? '';
+                }
+                $port = $interfaces[$candidate]['id'] ?? null;
+                if ($port !== null && $dhcp4 && $hardware !== null) {
                     $leases[$port . '/' . $address][$source . '/' . $hardware] = ['source' => $source, 'mac' => $hardware];
                 }
                 $append([
-                    'device' => $lease['if'] ?? '', 'mac' => $lease['hwaddr'] ?? '',
+                    'device' => $candidate, 'mac' => $lease['hwaddr'] ?? '',
                     'ip' => $lease['address'] ?? '', 'name' => $lease['hostname'] ?? '',
-                    'source' => $source, 'current' => true,
+                    'source' => $source, 'current' => true, 'lease' => $dhcp4,
                 ]);
             }
         }
@@ -141,7 +148,9 @@ final class Diagnostics
             $append($reservation + ['source' => 'DHCP reservation']);
         }
 
-        $snapshot = $this->combine($observations, $interfaces, $this->reservations(), $warnings, $truncated, $now);
+        $snapshot = $this->combine(
+            $observations, $interfaces, $this->reservations(), $warnings, $truncated, $now, $preferredInterfaces
+        );
         foreach ($snapshot['devices'] as &$device) {
             $claims = $leases[$device['interface'] . '/' . $device['ipv4']] ?? [];
             $lease = count($claims) === 1 ? reset($claims) : null;
@@ -421,7 +430,7 @@ final class Diagnostics
 
     public function reservationProvider(string $interface, string $ip, string $mac): string
     {
-        foreach ($this->devices()['devices'] as $device) {
+        foreach ($this->devices([$interface])['devices'] as $device) {
             if ($device['interface'] === $interface && $device['ipv4'] === $ip && $device['mac'] === $mac) {
                 return $device['leaseProvider'];
             }
@@ -758,7 +767,8 @@ final class Diagnostics
         array $reservations,
         array $warnings,
         bool $truncated,
-        int $now
+        int $now,
+        array $preferredInterfaces
     ): array {
         $devices = [];
         $claims = [];
@@ -799,6 +809,7 @@ final class Diagnostics
             $ipv6 = [];
             $reserved = [];
             $liveIpv4 = [];
+            $leasedIpv4 = [];
             foreach ($device['records'] as $record) {
                 $ip = $record['ip'];
                 $current = !empty($record['current']);
@@ -812,19 +823,26 @@ final class Diagnostics
                     $ipv4[$ip] = true;
                     if ($record['source'] === 'ARP') {
                         $liveIpv4[$ip] = true;
+                    } elseif (!empty($record['lease'])) {
+                        $leasedIpv4[$ip] = true;
                     }
                 }
             }
-            if ($liveIpv4 === []) {
+            if ($liveIpv4 === [] && $leasedIpv4 === []) {
                 unset($devices[$id]);
                 continue;
             }
             $reservedIp = count($reserved) === 1 ? array_key_first($reserved) : null;
-            $ip = array_key_first($liveIpv4);
-            $conflict = count($reserved) > 1 || ($ip !== null && count($claims[$ip] ?? []) > 1)
+            $agree = array_intersect_key($liveIpv4, $leasedIpv4);
+            $singleLease = count($leasedIpv4) === 1 ? $leasedIpv4 : [];
+            $ranked = $agree + $singleLease + $liveIpv4 + $leasedIpv4;
+            $ip = array_key_first($ranked);
+            $conflict = count($reserved) > 1 || count($claims[$ip] ?? []) > 1 ||
+                ($liveIpv4 === [] && count($leasedIpv4) > 1)
                 || ($reservedIp !== null && $ipv4 && (count($ipv4) > 1 || !isset($ipv4[$reservedIp])));
             $device['ipv4'] = $ip;
-            $device['ipv4Addresses'] = array_keys($liveIpv4);
+            $device['ipv4Addresses'] = array_keys($ranked);
+            $device['arpConfirmed'] = isset($liveIpv4[$ip]);
             $device['ipv6'] = array_keys($ipv6);
             $device['reservationIpv4'] = $reservedIp;
             $device['addressConflict'] = $conflict;
@@ -837,8 +855,10 @@ final class Diagnostics
         unset($device);
 
         $devices = array_values($devices);
-        usort($devices, static fn ($a, $b) => [$a['interface'], ip2long($a['ipv4'])]
-            <=> [$b['interface'], ip2long($b['ipv4'])]);
+        $preferred = array_fill_keys($preferredInterfaces, true);
+        usort($devices, static fn ($a, $b) => [!isset($preferred[$a['interface']]), !$a['arpConfirmed'],
+            $a['interface'], ip2long($a['ipv4'])]
+            <=> [!isset($preferred[$b['interface']]), !$b['arpConfirmed'], $b['interface'], ip2long($b['ipv4'])]);
 
         return [
             'devices' => array_slice($devices, 0, self::DEVICE_LIMIT),

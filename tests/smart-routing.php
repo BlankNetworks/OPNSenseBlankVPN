@@ -91,7 +91,7 @@ namespace OPNsense\Firewall {
             $this->dns[] = $rule + ['priority' => $priority];
         }
 
-        public function registerTable(string $table, bool $persist): void
+        public function registerTable(string $table, bool $persist, ?string $file = null): void
         {
             $this->tables[$table] = $persist;
         }
@@ -202,6 +202,23 @@ namespace {
     ));
     SmartRouting::checkOverlap($chinaService, '', ['example.cn.com']);
 
+    $mixedEntries = SmartRouting::destinations("*.Example.com, *.cn, 203.0.113.8, 198.51.100.89/24\n2001:DB8::1, 2001:db8:10::b/48\n198.51.100.0/24");
+    checkRouting($mixedEntries === [
+        'example.com', '.cn', '203.0.113.8/32', '198.51.100.0/24', '2001:db8::1/128', '2001:db8:10::/48'
+    ] && SmartRouting::destinations(implode(',', $mixedEntries)) === $mixedEntries,
+        'Canonicalize bare addresses and prefixes, deduplicate network ranges, and keep exact wildcard semantics.');
+    foreach (['*.example.*', '203.0.113.0/33', '2001:db8::/129', '0.0.0.0/0', '::/0', 'fe80::1%lan',
+        '198.51.100.3/24/2', 'https://example.com/path'] as $invalid) {
+        rejectRouting(fn () => SmartRouting::destinations($invalid));
+    }
+    $staticService = array_replace($service, ['id' => 'fixed', 'domains' => ['198.51.100.0/24', '2001:db8::/32']]);
+    $staticServices = ['fixed' => $staticService];
+    rejectRouting(fn () => SmartRouting::checkOverlap($staticServices, '', ['198.51.100.1/32']));
+    rejectRouting(fn () => SmartRouting::checkOverlap($staticServices, '', ['198.51.100.0/23']));
+    rejectRouting(fn () => SmartRouting::checkOverlap($staticServices, '', ['2001:db8:ffff:ffff:ffff:ffff:ffff:ffff/128']));
+    SmartRouting::checkOverlap($staticServices, '', ['198.51.101.0/24', '2001:db9::/32']);
+    SmartRouting::checkOverlap($staticServices, 'fixed', ['198.51.100.0/24']);
+    SmartRouting::checkOverlap($staticServices, '', ['example.com']);
     $table = SmartRouting::table($service);
     checkRouting(strlen($table) <= 31, 'PF table name must fit the native limit.');
     checkRouting($table === SmartRouting::table(array_replace($service, ['domains' => array_reverse($domains)])), 'Table identity is independent of domain order.');
@@ -252,6 +269,39 @@ namespace {
     checkRouting(!isset($down->rules[Policy::marker('service', 'streaming:lan')]) &&
         isset($down->rules[Policy::marker('service_guard', 'streaming:lan')]), 'Keep the block when the service exit is down.');
 
+    $static = new Plugin();
+    $compileSmart->invoke(null, $static, $settings, $interfaces, $staticServices, $profiles, []);
+    $staticTable = SmartRouting::addressTable($staticService);
+    $staticPass = $static->rules[Policy::marker('service', 'fixed:lan')];
+    $staticGuard = $static->rules[Policy::marker('service_guard', 'fixed:lan')];
+    checkRouting($staticPass['to'] === '<' . $staticTable . '>' && $staticPass['ipprotocol'] === 'inet' &&
+        $staticPass['gateway'] === 'VPN' && $staticGuard['ipprotocol'] === 'inet46' &&
+        $staticGuard['priority'] > $staticPass['priority'] && $static->nat[0]['to'] === $staticPass['to'] &&
+        $staticPass['tagged'] === $static->rules[$smartScope]['tag'] && $static->rules[$smartScope]['to_not'] &&
+        $GLOBALS['policyFiles'][$staticTable] === "198.51.100.0/24\n2001:db8::/32\n" &&
+        $static->dns === [] && SmartRouting::dnsDirectives($staticServices, $profiles) === [],
+        'Seed fixed IPv4 and IPv6 destinations without DNS; route IPv4 and reject IPv6 and unavailable exits.');
+    $staticDown = new Plugin();
+    $compileSmart->invoke(null, $staticDown, $settings, $interfaces, $staticServices, $profiles,
+        ['jp' => ['reachable' => false]]);
+    checkRouting(!isset($staticDown->rules[Policy::marker('service', 'fixed:lan')]) &&
+        isset($staticDown->rules[Policy::marker('service_guard', 'fixed:lan')]) && $staticDown->nat === [],
+        'Guard the static destination when the exit goes offline.');
+    $mixed = array_replace($service, ['id' => 'mixed', 'domains' => ['example.com', '203.0.113.8/32']]);
+    $mixedServices = ['mixed' => $mixed];
+    $mixedCompile = new Plugin();
+    $compileSmart->invoke(null, $mixedCompile, $settings, $interfaces, $services + $mixedServices, $profiles, []);
+    $mixedPass = $mixedCompile->rules[Policy::marker('service', 'mixed:lan')];
+    $mixedDns = $mixedCompile->rules[Policy::marker('service_dns', 'mixed:lan')];
+    $learned = new ReflectionMethod(SmartRouting::class, 'learnedTables');
+    checkRouting($mixedPass['priority'] < $pass['priority'] && $mixedDns['priority'] > $mixedPass['priority'] &&
+        $mixedDns['to'] === '<' . SmartRouting::table($mixed) . '>' &&
+        $mixedPass['to'] === '<' . SmartRouting::addressTable($mixed) . '>' &&
+        $learned->invoke(null, $settings, $mixedServices + $staticServices) === ['mixed' => SmartRouting::table($mixed)] &&
+        SmartRouting::table($mixed) === SmartRouting::table(array_replace($mixed, ['domains' => ['example.com']])) &&
+        SmartRouting::dnsDirectives($mixedServices, $profiles) === [
+            'ipset=/example.com/' . SmartRouting::table($mixed), 'server=/example.com/10.64.0.1@10.64.0.9'
+        ], 'Fixed IPs take precedence over learned addresses and retain separate, non-expiring tables.');
     $networkSettings = $settings + [
         'coverage' => 'network', 'networkMode' => 'full', 'networkProfile' => 'jp', 'tailscaleInterfaces' => []
     ];
@@ -278,7 +328,7 @@ namespace {
         'ipset=/cn/' . $bypassTable, 'server=/cn/127.0.0.1#53'
     ], 'Learn bypass destinations from the native resolver.');
     $withBypass = new Plugin();
-    $network->invoke(null, $withBypass, $networkSettings, $interfaces, $profiles, [], false, $bypassTable);
+    $network->invoke(null, $withBypass, $networkSettings, $interfaces, $profiles, [], false, $bypassList);
     $tag = $withBypass->rules[Policy::marker('bypass', 'network:lan')];
     $vpn = $withBypass->rules[Policy::marker('device', 'network:lan')];
     $guard = $withBypass->rules[Policy::marker('kill', 'network:lan')];
@@ -289,10 +339,20 @@ namespace {
         'Bypass traffic follows native policy and both DNS families use the split resolver.');
     $withBypassDown = new Plugin();
     $network->invoke(null, $withBypassDown, $networkSettings, $interfaces, $profiles,
-        ['jp' => ['reachable' => false]], false, $bypassTable);
+        ['jp' => ['reachable' => false]], false, $bypassList);
     checkRouting(!isset($withBypassDown->rules[Policy::marker('bypass', 'network:lan')]) &&
         !isset($withBypassDown->rules[Policy::marker('kill', 'network:lan')]['tagged']) &&
         $withBypassDown->dns === [], 'An outage installs a kill switch that covers previously bypassed destinations.');
+    $mixedBypass = ['china' => array_replace($bypassList['china'], ['domains' => ['.cn', '198.51.100.0/24']])];
+    $withMixedBypass = new Plugin();
+    $network->invoke(null, $withMixedBypass, $networkSettings, $interfaces, $profiles, [], false, $mixedBypass);
+    $stage = $withMixedBypass->rules[Policy::marker('bypass_stage', 'network:lan')];
+    $last = $withMixedBypass->rules[Policy::marker('bypass', 'network:lan')];
+    $mixedBypassPass = $withMixedBypass->rules[Policy::marker('device', 'network:lan')];
+    checkRouting($stage['priority'] < $last['priority'] && $last['priority'] < $mixedBypassPass['priority'] &&
+        $stage['to'] === '<' . $bypassTable . '>' && $last['to'] === '<' . SmartRouting::bypassAddressTable($mixedBypass) . '>' &&
+        $last['tagged'] === $stage['tag'] && $mixedBypassPass['tagged'] === $last['tag'],
+        'One-server WAN bypass matches either an explicit CIDR or a DNS-learned address.');
     $wholeFallback = new Plugin();
     $network->invoke(null, $wholeFallback, $networkSettings + ['networkKillSwitch' => false],
         $interfaces, $profiles, ['jp' => ['reachable' => false]]);

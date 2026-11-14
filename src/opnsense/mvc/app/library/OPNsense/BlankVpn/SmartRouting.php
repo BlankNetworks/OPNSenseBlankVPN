@@ -29,7 +29,7 @@ final class SmartRouting
             $row = Policy::fields($node);
             $services[$id] = [
                 'id' => $id, 'name' => $row['name'], 'profile' => $row['profile'] ?? '',
-                'domains' => self::domains($row['domains'])
+                'domains' => self::destinations($row['domains'])
             ];
         }
         return $services;
@@ -61,20 +61,40 @@ final class SmartRouting
 
     public static function bypassTable(array $services): string
     {
-        $domains = array_unique(array_merge(...array_column($services, 'domains')));
-        sort($domains, SORT_STRING);
-        return 'bvb_' . substr(hash('sha256', implode(',', $domains)), 0, 24);
+        $domains = self::domainEntries(array_merge(...array_column($services, 'domains')));
+        return self::tableName('bvb_', $domains);
     }
 
     public static function domains(string $input): array
     {
+        return self::parseList($input, false);
+    }
+
+    public static function destinations(string $input): array
+    {
+        return self::parseList($input, true);
+    }
+
+    private static function parseList(string $input, bool $allowAddresses): array
+    {
         if (strlen($input) > self::MAX_DOMAIN_BYTES) {
-            throw new DomainException('The Multi-Path domain list is too long.');
+            throw new DomainException('The Multi-Path destination list is too long.');
         }
         $input = preg_replace('/^\xEF\xBB\xBF/', '', $input);
         $input = preg_replace('/#[^\r\n]*/', '', $input);
-        $domains = [];
+        $destinations = [];
         foreach (preg_split('/[\s,]+/', trim($input), -1, PREG_SPLIT_NO_EMPTY) as $item) {
+            if ($allowAddresses && (str_contains($item, '/') || filter_var($item, FILTER_VALIDATE_IP))) {
+                if (!str_contains($item, '/')) {
+                    $item .= str_contains($item, ':') ? '/128' : '/32';
+                }
+                $prefix = Policy::cidr($item, false);
+                if ($prefix === null) {
+                    throw new DomainException('Enter a valid IP address or CIDR between /1 and /32 for IPv4, or /1 and /128 for IPv6.');
+                }
+                $destinations[$prefix] = true;
+                continue;
+            }
             $domain = strtolower($item);
             $explicitSuffix = str_starts_with($domain, '*.') || str_starts_with($domain, '.');
             $domain = rtrim(substr($domain, str_starts_with($domain, '*.') ? 2 : (int)$explicitSuffix), '.');
@@ -87,14 +107,16 @@ final class SmartRouting
                 ], true))) ||
                 self::matches($domain, 'home.arpa') || self::matches($domain, 'local')
             ) {
-                throw new DomainException('Enter a DNS domain such as netflix.com or a suffix such as *.cn. Local domains and IPs are excluded.');
+                throw new DomainException($allowAddresses
+                    ? 'Enter a DNS domain such as netflix.com or *.cn, an IP address, or a CIDR. Local domains are excluded.'
+                    : 'Enter a DNS domain such as netflix.com or a suffix such as *.cn. Local domains and IPs are excluded.');
             }
-            $domains[$topLevel ? '.' . $domain : $domain] = true;
+            $destinations[$topLevel ? '.' . $domain : $domain] = true;
         }
-        if (count($domains) < 1 || count($domains) > self::MAX_DOMAINS) {
-            throw new DomainException('Add between one and ' . self::MAX_DOMAINS . ' unique domains per list.');
+        if (count($destinations) < 1 || count($destinations) > self::MAX_DOMAINS) {
+            throw new DomainException('Add between one and ' . self::MAX_DOMAINS . ' unique destinations per list.');
         }
-        return array_keys($domains);
+        return array_keys($destinations);
     }
 
     public static function matches(string $name, string $suffix): bool
@@ -103,23 +125,25 @@ final class SmartRouting
         return $name === $suffix || str_ends_with($name, '.' . $suffix);
     }
 
-    public static function checkOverlap(array $services, string $editedId, array $domains): void
+    public static function checkOverlap(array $services, string $editedId, array $destinations): void
     {
         $existing = [];
         $parents = [];
+        $addresses = [];
         foreach ($services as $id => $service) {
             if ($id === $editedId) {
                 continue;
             }
-            foreach ($service['domains'] as $domain) {
+            foreach (self::domainEntries($service['domains']) as $domain) {
                 $domain = ltrim($domain, '.');
                 $existing[$domain] = true;
                 foreach (self::parentDomains($domain) as $parent) {
                     $parents[$parent] = true;
                 }
             }
+            $addresses += array_fill_keys(self::addressEntries($service['domains']), true);
         }
-        foreach ($domains as $domain) {
+        foreach (self::domainEntries($destinations) as $domain) {
             $domain = ltrim($domain, '.');
             if (isset($existing[$domain]) || isset($parents[$domain])) {
                 throw new DomainException('A domain overlaps another routed list.');
@@ -127,6 +151,40 @@ final class SmartRouting
             foreach (self::parentDomains($domain) as $parent) {
                 if (isset($existing[$parent])) {
                     throw new DomainException('A domain overlaps another routed list.');
+                }
+            }
+        }
+        $pending = self::addressEntries($destinations);
+        if ($pending !== [] && $addresses !== []) {
+            self::checkAddressOverlap(array_keys($addresses), $pending);
+        }
+    }
+
+    private static function checkAddressOverlap(array $existing, array $pending): void
+    {
+        $ranges = [];
+        foreach ([$existing, $pending] as $current => $prefixes) {
+            foreach ($prefixes as $network) {
+                [$ip, $prefix] = explode('/', $network);
+                $start = inet_pton($ip);
+                $width = strlen($start);
+                $end = $start;
+                for ($byte = 0; $byte < $width; $byte++) {
+                    $hostBits = min(8, max(0, $byte * 8 + 8 - (int)$prefix));
+                    $end[$byte] = chr(ord($start[$byte]) | ((1 << $hostBits) - 1));
+                }
+                $ranges[$width][] = [$start, $end, $current];
+            }
+        }
+        foreach ($ranges as $family) {
+            usort($family, static fn (array $a, array $b): int => strcmp($a[0], $b[0]));
+            $farthest = ['', ''];
+            foreach ($family as [$start, $end, $current]) {
+                if (strcmp($start, $farthest[1 - $current]) <= 0) {
+                    throw new DomainException('An IP address or CIDR overlaps another routed list.');
+                }
+                if (strcmp($end, $farthest[$current]) > 0) {
+                    $farthest[$current] = $end;
                 }
             }
         }
@@ -140,11 +198,41 @@ final class SmartRouting
         }
     }
 
+    private static function domainEntries(array $destinations): array
+    {
+        return array_filter($destinations, static fn (string $entry): bool => !str_contains($entry, '/'));
+    }
+
+    public static function hasDomains(array $destinations): bool
+    {
+        return self::domainEntries($destinations) !== [];
+    }
+
+    public static function addressEntries(array $destinations): array
+    {
+        return array_values(array_filter($destinations, static fn (string $entry): bool => str_contains($entry, '/')));
+    }
+
     public static function table(array $service): string
     {
-        $domains = $service['domains'];
-        sort($domains, SORT_STRING);
-        return 'bvs_' . substr(hash('sha256', implode(',', [$service['id'], $service['profile'], ...$domains])), 0, 24);
+        return self::tableName('bvs_', self::domainEntries($service['domains']), [$service['id'], $service['profile']]);
+    }
+
+    public static function addressTable(array $service): string
+    {
+        return self::tableName('bvi_', self::addressEntries($service['domains']), [$service['id'], $service['profile']]);
+    }
+
+    public static function bypassAddressTable(array $services): string
+    {
+        return self::tableName('bvx_', self::addressEntries(array_merge(...array_column($services, 'domains'))));
+    }
+
+    private static function tableName(string $prefix, array $entries, array $identity = []): string
+    {
+        $entries = array_unique($entries);
+        sort($entries, SORT_STRING);
+        return $prefix . substr(hash('sha256', implode(',', [...$identity, ...$entries])), 0, 24);
     }
 
     public static function profileDns(array $profile): array
@@ -172,7 +260,7 @@ final class SmartRouting
             $servers = self::profileDns($profile);
             $bypass = $service['profile'] === self::BYPASS;
             $table = $bypass ? $bypassTable : self::table($service);
-            foreach ($service['domains'] as $domain) {
+            foreach (self::domainEntries($service['domains']) as $domain) {
                 $domain = ltrim($domain, '.');
                 $lines[] = "ipset=/{$domain}/{$table}";
                 if ($bypass) {
@@ -209,7 +297,8 @@ final class SmartRouting
 
     private static function learnedTables(array $settings, array $services): array
     {
-        $active = self::activeServices($settings, $services);
+        $active = array_filter(self::activeServices($settings, $services),
+            static fn (array $service): bool => self::hasDomains($service['domains']));
         if ($active !== [] && self::usesBypass($settings)) {
             return array_fill_keys(array_keys($active), self::bypassTable($active));
         }

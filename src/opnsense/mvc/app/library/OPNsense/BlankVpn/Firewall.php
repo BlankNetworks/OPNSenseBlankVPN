@@ -9,7 +9,9 @@ use OPNsense\Firewall\Plugin;
 final class Firewall
 {
     // All 16 service-specific pass/block pairs precede the combined policy's default route.
-    private const COMBINED_BASE = Policy::PRIORITY + 30 + SmartRouting::MAX_SERVICES * 2 + 2;
+    private const STATIC_DESTINATIONS = Policy::PRIORITY + 30;
+    private const LEARNED_DESTINATIONS = self::STATIC_DESTINATIONS + SmartRouting::MAX_SERVICES * 2;
+    private const COMBINED_BASE = self::LEARNED_DESTINATIONS + SmartRouting::MAX_SERVICES * 2 + 2;
 
     public static function installRules(Plugin $firewall): void
     {
@@ -76,7 +78,7 @@ final class Firewall
         if ($settings['coverage'] === 'network') {
             self::registerNetworkPolicy(
                 $firewall, $settings, $interfaces, $profiles, $health, $multiOutage,
-                $bypass && $services !== [] ? SmartRouting::bypassTable($services) : ''
+                $bypass ? $services : []
             );
         } else {
             self::registerAssignments(
@@ -118,7 +120,7 @@ final class Firewall
         array $profiles,
         array $health,
         bool $multiOutage = false,
-        string $bypassTable = ''
+        array $bypass = []
     ): void {
         $mode = $settings['networkMode'];
         $killSwitch = $settings['networkKillSwitch'] ?? $mode === 'full';
@@ -127,8 +129,19 @@ final class Firewall
         }
         $base = Policy::usesBase($mode) ? ($profiles[$settings['networkProfile']] ?? []) : [];
         $profile = self::selectProfile($firewall, $base, [], $health);
-        if ($profile !== null && $bypassTable !== '') {
-            $firewall->registerTable($bypassTable, true);
+        $bypassTables = [];
+        if ($profile !== null && $bypass !== []) {
+            $entries = array_merge(...array_column($bypass, 'domains'));
+            if (SmartRouting::hasDomains($entries)) {
+                $bypassTables[] = SmartRouting::bypassTable($bypass);
+                $firewall->registerTable($bypassTables[0], true);
+            }
+            $addresses = SmartRouting::addressEntries($entries);
+            if ($addresses !== []) {
+                $table = SmartRouting::bypassAddressTable($bypass);
+                self::registerAddressTable($firewall, $table, $addresses);
+                $bypassTables[] = $table;
+            }
         }
         foreach ($settings['interfaces'] as $interface) {
             if (!Policy::interfaceId($interface) || empty($interfaces[$interface]['if'])) {
@@ -141,15 +154,8 @@ final class Firewall
             }
             $scope = [];
             if ($profile !== null) {
-                if ($bypassTable !== '') {
-                    $tag = Policy::marker('network_tunnel', $id);
-                    $firewall->registerFilterRule(Policy::PRIORITY + 8, [
-                        'type' => 'match', 'direction' => 'in', 'interface' => $interface,
-                        'ipprotocol' => 'inet46', 'to' => '<' . $bypassTable . '>', 'to_not' => true,
-                        'quick' => false, 'tag' => $tag, 'label' => Policy::marker('bypass', $id),
-                        'descr' => 'Blank VPN applies native policy to learned bypass destinations'
-                    ]);
-                    $scope = ['tagged' => $tag];
+                if ($bypassTables !== []) {
+                    $scope = self::registerBypassScope($firewall, $id, $interface, $bypassTables);
                 }
                 $firewall->registerFilterRule(Policy::PRIORITY + 10, [
                     'type' => 'pass', 'direction' => 'in', 'interface' => $interface, 'ipprotocol' => 'inet',
@@ -158,9 +164,9 @@ final class Firewall
                     'label' => Policy::marker('device', $id), 'descr' => 'Blank VPN Whole-Network coverage'
                 ] + $scope + self::stateOptions($profile));
                 self::registerClientNat($firewall, $profile, $interface, 'any', 60);
-                $port = $bypassTable === '' ? (int)$profile['dnsPort'] : SmartRouting::PORT;
+                $port = $bypassTables === [] ? (int)$profile['dnsPort'] : SmartRouting::PORT;
                 self::redirectDns($firewall, $interface, 'any', $port, $id, 58);
-                if ($bypassTable !== '') {
+                if ($bypassTables !== []) {
                     self::redirectDns($firewall, $interface, 'any', $port, $id, 58, false, 'inet6');
                 }
             }
@@ -173,6 +179,28 @@ final class Firewall
                 self::registerGuard($firewall, $id, $interface, 'any', 'inet6', $scope);
             }
         }
+    }
+
+    private static function registerBypassScope(
+        Plugin $firewall,
+        string $id,
+        string $interface,
+        array $tables
+    ): array {
+        $last = count($tables) - 1;
+        $scope = [];
+        foreach ($tables as $index => $table) {
+            $tag = Policy::marker($index === $last ? 'network_tunnel' : 'bypass_check', $id);
+            $firewall->registerFilterRule(Policy::PRIORITY + 8 + $index, [
+                'type' => 'match', 'direction' => 'in', 'interface' => $interface,
+                'ipprotocol' => 'inet46', 'to' => '<' . $table . '>', 'to_not' => true,
+                'quick' => false, 'tag' => $tag,
+                'label' => Policy::marker($index === $last ? 'bypass' : 'bypass_stage', $id),
+                'descr' => 'Blank VPN applies native policy to bypass destinations'
+            ] + $scope);
+            $scope = ['tagged' => $tag];
+        }
+        return $scope;
     }
 
     private static function registerAssignments(
@@ -443,10 +471,22 @@ final class Firewall
         $combinedInterfaces = self::combinedInterfaces($assignments);
         $combinedNetwork = ($settings['coverage'] ?? '') === 'network' && $settings['networkMode'] === 'full_multi';
         $routes = [];
-        foreach ($services as $service) {
-            $table = SmartRouting::table($service);
-            $firewall->registerTable($table, true);
-            $routes[] = [$service['id'], $table, self::selectProfile($firewall, $profiles[$service['profile']] ?? [], [], $health)];
+        $hasDomains = false;
+        foreach (array_values($services) as $index => $service) {
+            $profile = self::selectProfile($firewall, $profiles[$service['profile']] ?? [], [], $health);
+            $addresses = SmartRouting::addressEntries($service['domains']);
+            if ($addresses !== []) {
+                $table = SmartRouting::addressTable($service);
+                self::registerAddressTable($firewall, $table, $addresses);
+                $routes[] = [$service['id'], $table, $profile, self::STATIC_DESTINATIONS + $index * 2, 'service'];
+            }
+            if (SmartRouting::hasDomains($service['domains'])) {
+                $hasDomains = true;
+                $table = SmartRouting::table($service);
+                $firewall->registerTable($table, true);
+                $routes[] = [$service['id'], $table, $profile, self::LEARNED_DESTINATIONS + $index * 2,
+                    $addresses === [] ? 'service' : 'service_dns'];
+            }
         }
         foreach ($settings['smartInterfaces'] as $interface) {
             $strict = in_array($interface, $settings['strictInterfaces'], true);
@@ -461,7 +501,7 @@ final class Firewall
                 in_array($interface, $settings['deviceMultiInterfaces'] ?? [], true);
             $sources = [];
             $combinedSources = [];
-            if (!$assignedOnly && !$combinedNetwork) {
+            if ($hasDomains && !$assignedOnly && !$combinedNetwork) {
                 foreach (['inet', 'inet6'] as $family) {
                     self::redirectDns($firewall, $interface, 'any', SmartRouting::PORT, $interface, 64, true, $family);
                 }
@@ -493,7 +533,7 @@ final class Firewall
                     } else {
                         $sources[] = $source;
                     }
-                    if (!$combined && $assignedOnly && $mode === 'multi') {
+                    if ($hasDomains && !$combined && $assignedOnly && $mode === 'multi') {
                         self::redirectDns($firewall, $interface, $source, SmartRouting::PORT, $id, 64, false, $family);
                     } elseif (Policy::assignmentPaused($row) || ($row['ip'] === '' && $mode === 'disabled')) {
                         self::bypassSmartDns($firewall, $interface, $source, $family);
@@ -506,19 +546,18 @@ final class Firewall
             if ($combinedNetwork || $combinedSources !== []) {
                 self::registerSmartScope($firewall, $interface, $tag, Policy::COMBINED_LOCAL_TABLE, $combinedSources, false);
             }
-            foreach ($routes as $index => [$id, $table, $profile]) {
+            foreach ($routes as [$id, $table, $profile, $priority, $marker]) {
                 $id .= ':' . $interface;
                 $table = '<' . $table . '>';
                 $base = [
                     'direction' => 'in', 'interface' => $interface, 'to' => $table,
                     'tagged' => $tag, 'quick' => true, 'disablereplyto' => true
                 ];
-                $priority = Policy::PRIORITY + 30 + $index * 2;
                 if ($profile !== null) {
                     $firewall->registerFilterRule($priority, [
                         'type' => 'pass', 'ipprotocol' => 'inet', 'gateway' => $profile['gateway'],
                         'skip_rules_gw_down' => true, 'statetype' => 'keep',
-                        'label' => Policy::marker('service', $id)
+                        'label' => Policy::marker($marker, $id)
                     ] + self::stateOptions($profile) + $base);
                     $source = $interface === Policy::TAILSCALE_DEVICE ? Policy::TAILSCALE_V4 : $interface;
                     self::registerClientNat($firewall, $profile, $source, $table, 61);
@@ -527,10 +566,16 @@ final class Firewall
                 // IPv6 for learned destinations is blocked until VPN egress supports it.
                 $firewall->registerFilterRule($priority + 1, [
                     'type' => 'block', 'ipprotocol' => 'inet46',
-                    'label' => Policy::marker('service_guard', $id)
+                    'label' => Policy::marker($marker . '_guard', $id)
                 ] + $base);
             }
         }
+    }
+
+    private static function registerAddressTable(Plugin $firewall, string $table, array $addresses): void
+    {
+        $file = Policy::writeState($table, implode("\n", array_unique($addresses)) . "\n");
+        $firewall->registerTable($table, true, $file);
     }
 
     private static function registerSmartScope(
@@ -829,8 +874,13 @@ final class Firewall
                     !isset($combinedInterfaces[$interface])) {
                     continue;
                 }
-                $marker = Policy::marker('service_guard', $id . ':' . $interface);
-                if (($loaded[$marker]['action'] ?? '') !== 'block') {
+                $rule = $id . ':' . $interface;
+                $marker = Policy::marker('service_guard', $rule);
+                $mixed = SmartRouting::hasDomains($service['domains']) &&
+                    SmartRouting::addressEntries($service['domains']) !== [];
+                $dnsGuard = Policy::marker('service_dns_guard', $rule);
+                if (($loaded[$marker]['action'] ?? '') !== 'block' ||
+                    ($mixed && ($loaded[$dnsGuard]['action'] ?? '') !== 'block')) {
                     throw new \RuntimeException('A Multi-Path destination guard is missing.');
                 }
             }

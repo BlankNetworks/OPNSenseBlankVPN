@@ -76,9 +76,10 @@ final class Resolver
                 $wanted[$port] = self::configuration($port, $hostname, $host, $upstreams);
             }
             $directives = SmartRouting::dnsDirectives($services, $profiles);
-            if ($services !== [] && self::usesSharedDns($settings, $assignments)) {
+            $bypass = SmartRouting::usesBypass($settings);
+            if (($directives !== [] || ($bypass && $services !== [])) && self::usesSharedDns($settings, $assignments)) {
                 $default = 'server=127.0.0.1#53';
-                if (SmartRouting::usesBypass($settings)) {
+                if ($bypass) {
                     $profile = $profiles[$settings['networkProfile']] ?? [];
                     // Use the same tunnel resolver as Whole-Network coverage for all other queries.
                     $dnsPort = (int)($profile['dnsPort'] ?? 0);

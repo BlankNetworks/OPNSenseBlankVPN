@@ -167,7 +167,9 @@ final class RoutingBackup
             }
         }
         $combined = array_filter($incoming['assignments'], static fn (array $row): bool => $row['mode'] === 'full_multi');
-        foreach ([$incoming['settings']['networkProfile'], ...array_column($incoming['services'], 'profile'),
+        $dnsLists = array_filter($incoming['services'], static fn (array $list): bool =>
+            SmartRouting::hasDomains($list['domains']));
+        foreach ([$incoming['settings']['networkProfile'], ...array_column($dnsLists, 'profile'),
             ...array_column($combined, 'profile')] as $id) {
             if ($id !== '' && $id !== SmartRouting::BYPASS && !SmartRouting::canResolve($live[$id])) {
                 throw new DomainException('A saved network or Multi-Path exit needs working IPv4 DNS.');
@@ -424,7 +426,7 @@ final class RoutingBackup
             foreach ($domains as $domain) {
                 self::text($domain, 254);
             }
-            if (SmartRouting::domains(implode(',', $domains)) !== $domains) {
+            if (SmartRouting::destinations(implode(',', $domains)) !== $domains) {
                 throw new DomainException('The backup contains an improperly formatted Multi-Path domain list.');
             }
             if ($profile === SmartRouting::BYPASS) {

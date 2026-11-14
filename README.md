@@ -151,7 +151,7 @@ Open **Network Settings**, check the Ethernet ports or VLANs under **Interface**
 | Off | Follow the native network policy and bypass Blank VPN service routing for the assigned addresses. |
 | Blocked | Block internet traffic from the assigned addresses and keep approved local access subject to native firewall rules. |
 
-In **Network Settings**, choose **Only Devices I choose** and press **Refresh** to see LAN devices and Tailscale peers. **Select** fills the addresses and MAC where available. The LAN list shows IPv4 neighbors from OPNsense’s current ARP table. Saved rules stay visible for devices that go offline. For a matching active Kea or Dnsmasq lease, **Reserve IP and save rule** adds a DHCP reservation and applies the rule. For other devices, create a unique reservation in OPNsense first. Selecting Multi-Path for a device uses the domain lists assigned in **Multi-Path Settings**. Add the device’s stable IPv6 address to cover that address as well. On shared LANs, other IPv6 addresses follow the native policy. Use a dedicated strict interface for network-wide internet IPv6 blocking.
+In **Network Settings**, choose **Only Devices I choose** and press **Refresh** to see LAN devices and Tailscale peers. **Select** fills the addresses and MAC where available. The LAN list shows IPv4 neighbors and current Kea or Dnsmasq leases on eligible local interfaces. A **DHCP lease** label means OPNsense assigned the address and has yet to confirm it in ARP. Devices outside your saved coverage appear with setup guidance. Saved rules stay visible for devices that go offline. For a matching active Kea or Dnsmasq lease, **Reserve IP and save rule** adds a DHCP reservation and applies the rule. For other devices, create a unique reservation in OPNsense first. Selecting Multi-Path for a device uses the domain lists assigned in **Multi-Path Settings**. Add the device’s stable IPv6 address to cover that address as well. On shared LANs, other IPv6 addresses follow the native policy. Use a dedicated strict interface for network-wide internet IPv6 blocking.
 
 **On Demand** is checked by default for new and existing LAN and Tailscale rules that use one server or Multi-Path. With routing enabled, a device’s first matching traffic uses its saved rule. Dedicated WireGuard tunnels with a Kill Switch can idle between uses. Shared tunnels and exits that require monitoring can stay ready. You can use **Kill Switch** with **On Demand**. On Demand leaves Blocked and Off rules as selected.
 
@@ -163,11 +163,13 @@ Use **Ping** beside an active device rule with a base server for a LAN or Tailsc
 
 ### Use a base VPN with Multi-Path
 
-For an entire LAN or VLAN, choose **Whole-Network + Multi-Path** and select a **Base VPN or proxy**. For one device or Tailscale peer, choose **Base VPN + Multi-Path** in its device rule. Set each service's exit under **Multi-Path Settings**. For example, set Chicago as the base, Korea for Netflix and Hong Kong for Disney+. Unmatched IPv4 traffic and ordinary DNS use Chicago. Existing Bypass lists have no special routing in the combined mode. Connected local networks and router access are still governed by your OPNsense rules.
+For an entire LAN or VLAN, select the interface under **Network Settings → Routing coverage → Whole-Network coverage**. Choose **Whole-Network + Multi-Path**, select a **Base server**, then click **Save and Enable VPN**. Every client on the selected interface is covered, including clients still missing from the device list. For one device or Tailscale peer, choose **Base VPN + Multi-Path** in its device rule. Set each service's exit under **Multi-Path Settings**. For example, set Chicago as the base, Korea for Netflix and Hong Kong for Disney+. Unmatched IPv4 traffic and ordinary DNS use Chicago. Existing Bypass lists have no special routing in the combined mode. Connected local networks and router access are still governed by your OPNsense rules.
 
 The base VPN is required for unmatched internet traffic. The Kill Switch blocks WAN fallback. A learned service whose exit is down is blocked, while other paths can stay up. Domain classification still requires DNS visible to Blank VPN. Unlearned requests use the base. Start a fresh connection after changing a service or clearing the client DNS cache.
 
 Whole-Network + Multi-Path covers all IPv6 on the selected interfaces and blocks public IPv6. Individual rules cover the IPv4 identity and any saved stable IPv6 address, including the peer's Tailscale IPv6 address. For LAN clients with temporary IPv6 addresses, use Whole-Network coverage for that LAN or enable **Block devices without a rule** on a dedicated managed interface.
+
+To verify both paths from a client, temporarily route `api.ipify.org` to a VPN server in **Multi-Path Settings**, then open `https://api.ipify.org` in a browser or run `curl -4 https://api.ipify.org`. Compare that IP with the result from a separate IP checker such as `https://ifconfig.co/ip`, keeping that second domain out of all destination lists for the test. The first should show the selected service exit and the second should show the base exit. Use new connections and ordinary DNS, then remove the temporary list.
 
 ### Assign a Tailscale peer
 
@@ -179,7 +181,18 @@ Test the public IPv4 from the peer, verify local management access, then test wi
 
 ## Route Netflix or another service
 
-1. Open **Multi-Path Settings**. Choose the Netflix preset, paste your own domains, or load a plain-text or comma-separated file. Each list accepts up to 1,000 unique domains and 128 KiB of input. Enter domains on separate lines or separated by commas. Lines may include `#` comments. Both `netflix.com` and `*.netflix.com` cover the apex and its subdomains. Use `.cn` or `*.cn` to match the entire `.cn` top-level domain, including `example.cn` and `service.example.com.cn`.
+1. Open **Multi-Path Settings**. Choose the Netflix preset, paste your own domains, or load a plain-text or comma-separated file. Each list accepts up to 1,000 unique destinations and 128 KiB of input. Enter domains, IP addresses or CIDRs on separate lines or separated by commas. Lines may include `#` comments.
+
+   | Entry | Matches |
+   | --- | --- |
+   | `example.com` or `*.example.com` | `example.com`, `shop.example.com`, and other subdomains |
+   | `.cn` or `*.cn` | Domains ending in `.cn`, such as `example.cn` and `shop.example.cn` |
+   | `*.example.*` | Rejected. Enter a specific suffix, such as `*.example.com`. |
+   | `203.0.113.42` or `203.0.113.42/32` | One IPv4 address |
+   | `198.51.100.0/24` | An IPv4 range from `198.51.100.0` through `198.51.100.255` |
+   | `2001:db8:1234::/48` | An IPv6 range. VPN and proxy routes block its public IPv6 traffic because their egress is IPv4. |
+
+   IP and CIDR entries apply without a DNS lookup. Blank VPN normalizes a CIDR to the start of its network. Use a specific prefix to target a range. Use the base VPN setting to cover all internet traffic.
 2. Save the list with an exit selected, or leave it unassigned and edit it later. An unassigned list adds no DNS or firewall rules. Edit any list to replace the domains from a file, change its exit, or download the editor contents as a text file.
 3. Choose **Multi-Path** under **Whole-Network coverage** on the **Network Settings** page, or enable Multi-Path for selected interfaces under **More routing options** and assign the Multi-Path mode to devices. Use ordinary DNS on the managed interface. Restart the test application and refresh its DNS cache. Check the learned address count and confirm the expected path from the client.
 
@@ -187,7 +200,7 @@ Use the **Destination** dropdown beside a saved list and choose **Save** to swit
 
 Choose **Bypass (regular internet)** for domains that should follow the normal OPNsense policy while **Whole-Network coverage → Use one VPN or proxy** is enabled. Bypass uses the native resolver and takes effect when DNS learns the destination IP. The Whole-Network Kill Switch also covers bypassed destinations if the tunnel goes offline.
 
-Multi-Path forwards matching DNS through the chosen tunnel and uses the regular resolver for other names. Learned IPv4 destinations use the VPN and learned IPv6 destinations are blocked. When the exit is unavailable, known destinations are blocked. Multi-Path classifies DNS-observed IPs. Shared IPs, existing connections, encrypted DNS, HTTPS record address hints, and endpoints obtained without an observed DNS lookup can affect which connections match. If two services learn the same destination IP, the first saved service rule has precedence. Learned entries are aged out after about a day and relearned from DNS. Mullvad exit IPs may be blocked by Netflix. [Mullvad Netflix guidance](https://mullvad.net/en/help/watching-netflix-with-split-tunneling)
+Multi-Path forwards matching DNS through the chosen tunnel and uses the regular resolver for other names. Learned IPv4 destinations use the VPN and learned IPv6 destinations are blocked. When the exit is unavailable, known destinations are blocked. Multi-Path classifies DNS-observed IPs. Shared IPs, existing connections, encrypted DNS, HTTPS record address hints, and endpoints obtained without an observed DNS lookup can affect which connections match. An explicit IP or CIDR takes precedence over a DNS-learned match. Two enabled route lists cannot claim overlapping IP ranges. If two services learn the same destination IP, the first saved service rule has precedence. Learned entries are aged out after about a day and relearned from DNS. Mullvad exit IPs may be blocked by Netflix. [Mullvad Netflix guidance](https://mullvad.net/en/help/watching-netflix-with-split-tunneling)
 
 ## Enable and test the Kill Switch
 

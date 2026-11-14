@@ -18,3 +18,8 @@
 - Use a base VPN for ordinary internet traffic with Multi-Path service overrides under Whole-Network coverage or in an individual LAN or Tailscale device rule. Combined routing keeps the Kill Switch on.
 - The proxy list keeps pagination and removes the duplicate search and protocol filters.
 - Device discovery gathers independent router diagnostics concurrently and reuses the DHCP reservation index. The dashboard avoids rebuilding device tables on unrelated edits.
+
+## 0.8.17
+
+- Device discovery uses active LAN DHCP leases alongside ARP. Blank VPN shows eligible LAN devices outside the current coverage and displays discovered clients while viewing Whole-Network coverage.
+- Multi-Path lists accept domain suffixes, individual IP addresses and CIDRs in the same editor or import file. Explicit IPv4 targets route without DNS learning. The editor shows the exact wildcard syntax.

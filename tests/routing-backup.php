@@ -79,8 +79,12 @@ $corrupt = $policy;
 $corrupt['interfaces'] = ['opt2' => str_repeat('c', 64)];
 expectFail(fn () => RoutingBackup::envelope($corrupt, $key), 'valid references');
 $corrupt = $policy;
-$corrupt['services'][0]['domains'] = ['192.168.2.1'];
-expectFail(fn () => RoutingBackup::envelope($corrupt, $key), 'DNS domain');
+$corrupt['services'][0]['domains'] = ['192.168.2.1/97'];
+expectFail(fn () => RoutingBackup::envelope($corrupt, $key), 'CIDR');
+$mixed = $policy;
+$mixed['services'][0]['domains'] = ['.cn', '203.0.113.42/32', '198.51.100.0/24', '2001:db8::/32'];
+check(RoutingBackup::decode(json_encode(RoutingBackup::envelope($mixed, $key)), $key) === $mixed,
+    'Mixed routing lists should retain exact address prefixes and DNS suffixes.');
 
 $legacy = $policy;
 unset($legacy['assignments'][0]['onDemand'], $legacy['assignments'][0]['bindMac']);
