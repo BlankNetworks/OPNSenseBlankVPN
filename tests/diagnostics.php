@@ -146,12 +146,19 @@ namespace {
         'filter list states' => ['total_entries' => 102, 'details' => [
             ['id' => '0000000012345678/abcdef01', 'src_addr' => '192.168.10.5', 'src_port' => '10000',
                 'dst_addr' => '198.51.100.2', 'dst_port' => '443', 'proto' => 'tcp', 'iface' => 'igc0',
-                'direction' => 'out', 'state' => 'ESTABLISHED:ESTABLISHED', 'age' => '00:04:05',
+                'direction' => 'out', 'state' => 'ESTABLISHED:ESTABLISHED', 'age' => '00:00:05',
                 'bytes' => [321, 4321], 'pkts' => [4, 5], 'route-to' => '10.10.0.2', 'label' => 'blankvpn_device_fixture'],
             ['id' => '0000000012345679/abcdef01', 'src_addr' => '192.168.10.6', 'dst_addr' => '198.51.100.4',
                 'nat_addr' => '192.168.10.5'],
             ['id' => '0000000012345680/abcdef01', 'src_addr' => '10.64.0.2', 'dst_addr' => '198.51.100.5',
-                'nat_addr' => '100.101.102.103', 'direction' => 'out', 'pkts' => [4, 5], 'label' => 'blankvpn_tailnet_fixture'],
+                'nat_addr' => '100.101.102.103', 'direction' => 'out', 'pkts' => [4, 5], 'age' => '00:00:10',
+                'label' => 'blankvpn_tailnet_fixture'],
+            ['id' => '0000000012345681/abcdef01', 'src_addr' => '10.64.0.2', 'dst_addr' => '198.51.100.7',
+                'nat_addr' => '100.101.102.103', 'direction' => 'out', 'pkts' => [4, 0], 'age' => '00:00:40',
+                'proto' => 'tcp', 'label' => 'blankvpn_tailnet_oneway'],
+            ['id' => '0000000012345682/abcdef01', 'src_addr' => '10.64.0.2', 'dst_addr' => '198.51.100.6',
+                'nat_addr' => '100.101.102.103', 'direction' => 'out', 'pkts' => [4, 5], 'age' => '00:04:05',
+                'proto' => 'tcp', 'label' => 'blankvpn_tailnet_oneway'],
         ]],
         'wireguard show' => ['status' => 'ok', 'records' => [
             ['type' => 'interface', 'if' => 'wg4', 'status' => 'up', 'public-key' => 'do-not-return'],
@@ -264,17 +271,21 @@ namespace {
     check($sessions['connections'][0]['stateId'] === '0000000012345678'
         && $sessions['connections'][0]['creatorId'] === 'abcdef01', 'Native PF state identifiers');
 
-    check($diagnostics->hasRoutedTraffic('192.168.10.5', ['blankvpn_device_fixture']) &&
-        !$diagnostics->hasRoutedTraffic('192.168.10.5', ['blankvpn_other_rule']) &&
-        !$diagnostics->hasRoutedTraffic('192.168.10.6', ['blankvpn_device_fixture']),
+    check($diagnostics->routedTraffic('192.168.10.5', ['blankvpn_device_fixture']) === 'seen' &&
+        $diagnostics->routedTraffic('192.168.10.5', ['blankvpn_other_rule']) === 'unseen' &&
+        $diagnostics->routedTraffic('192.168.10.6', ['blankvpn_device_fixture']) === 'unseen',
         'A device probe requires both the saved address and the policy rule label.');
-    check($diagnostics->hasRoutedTraffic('192.168.10.0/24', ['blankvpn_device_fixture']) &&
-        !$diagnostics->hasRoutedTraffic('100.64.0.0/10', ['blankvpn_device_fixture']),
+    check($diagnostics->routedTraffic('192.168.10.0/24', ['blankvpn_device_fixture']) === 'seen' &&
+        $diagnostics->routedTraffic('100.64.0.0/10', ['blankvpn_device_fixture']) === 'unseen',
         'A whole-network probe confirms bidirectional traffic only from its allowed source range.');
-    check($diagnostics->hasRoutedTraffic('100.101.102.103', ['blankvpn_tailnet_fixture']) &&
-        $diagnostics->hasRoutedTraffic('100.64.0.0/10', ['blankvpn_tailnet_fixture']) &&
-        !$diagnostics->hasRoutedTraffic('10.64.0.2', ['blankvpn_tailnet_fixture']),
+    check($diagnostics->routedTraffic('100.101.102.103', ['blankvpn_tailnet_fixture']) === 'seen' &&
+        $diagnostics->routedTraffic('100.64.0.0/10', ['blankvpn_tailnet_fixture']) === 'seen' &&
+        $diagnostics->routedTraffic('10.64.0.2', ['blankvpn_tailnet_fixture']) === 'unseen',
         'The egress NAT state identifies the original device, including for whole-Tailscale tests.');
+    check($diagnostics->routedTraffic('100.101.102.103', ['blankvpn_tailnet_oneway']) === 'oneway',
+        'Recent one-way TCP attempts cannot be masked by an older established state on the tunnel.');
+    check($diagnostics->routedTraffic('100.64.0.0/10', ['blankvpn_tailnet_oneway', 'blankvpn_tailnet_fixture']) === 'partial',
+        'Distinguish confirmed replies on one recent connection from other unanswered TCP attempts.');
 
     $tunnels = $diagnostics->tunnels();
     check($tunnels['wg4']['handshakeRecent'] && $tunnels['wg4']['reachability'] === 'unverified', 'Handshake and path status');

@@ -1,6 +1,7 @@
 const requests = [];
 let settingsError = null;
 let exitTestError = null;
+let tailnetTraffic = 'unseen';
 const updateStatus = {ok:true, supported:true, enabled:false, running:false, installed:'0.1.39',
     available:'', message:'Check for a Blank VPN & Proxy update.'};
 const routingBackup = {schema:1, version:1, routing:{enabled:false}, assignments:[], services:[]};
@@ -175,7 +176,7 @@ window.jQuery.ajax = async (request) => {
         return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:'unseen'};
     }
     if (action === 'testDeviceRoute') {
-        return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:data.id === 'tailnet1' ? 'unseen' : 'seen', usingBackup:false};
+        return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:data.id === 'tailnet1' ? tailnetTraffic : 'seen', usingBackup:false};
     }
     if (action === 'testExit' && exitTestError) {
         return {ok:true, reachable:false, detail:exitTestError};
@@ -846,6 +847,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     latency.click();
     assert(bv('ping-dialog').open && bv('ping-dialog-detail').textContent.includes('No completed connection observed'),
         'Clicking the measured latency explains the separate peer traffic result.');
+    bv('ping-dialog').close();
+    tailnetTraffic = 'oneway';
+    tailnetTable.querySelector('[aria-label="Test Remote iPad"]').click();
+    await wait();
+    latency.click();
+    assert(bv('ping-dialog-detail').textContent.includes('OPNsense saw no reply') &&
+        bv('ping-dialog-detail').textContent.includes('router HTTPS 22.4 ms'),
+        'A router HTTPS success does not conceal unanswered TCP attempts from the peer.');
     bv('ping-dialog').close();
     tailnetTable.querySelector('[aria-label="Disable Remote iPad"]').click();
     await wait();

@@ -592,26 +592,36 @@ final class Diagnostics
         return true;
     }
 
-    public function hasRoutedTraffic(string $source, array $rules): bool
+    public function routedTraffic(string $source, array $rules): string
     {
         $prefix = Policy::cidr($source);
         if ($prefix === null && filter_var($source, FILTER_VALIDATE_IP) === false) {
-            return false;
+            return 'unseen';
         }
+        $replies = false;
+        $unanswered = false;
         foreach ($rules as $rule) {
-            $states = $this->read('filter list states', [$prefix ?? $source, (string)self::STATE_LIMIT, '0', $rule, '']);
+            $states = $this->read('filter list states', [$prefix ?? $source, (string)self::STATE_LIMIT, '0', $rule, 'age asc']);
             if (!is_array($states['details'] ?? null)) {
                 throw new RuntimeException('Firewall sessions are unavailable. Try again.');
             }
             foreach ($states['details'] as $state) {
                 $ip = self::stateSource($state);
-                if ($ip !== null && ($prefix !== null ? Policy::contains($prefix, $ip) : $source === $ip) &&
-                    ($state['label'] ?? '') === $rule && ($state['pkts'][0] ?? 0) > 0 && ($state['pkts'][1] ?? 0) > 0) {
-                    return true;
+                // An older connection can remain open while new connections fail.
+                if ($ip === null || ($prefix !== null ? !Policy::contains($prefix, $ip) : $source !== $ip) ||
+                    ($state['label'] ?? '') !== $rule || !preg_match('/^00:0[01]:[0-5][0-9]$/D', $state['age'] ?? '')) {
+                    continue;
                 }
+                [$sent, $received] = self::counterPair($state['pkts'] ?? null) ?? [0, 0];
+                $replies = $replies || ($sent > 0 && $received > 0);
+                $unanswered = $unanswered || (($state['proto'] ?? '') === 'tcp' &&
+                    (($sent > 1 && $received === 0) || ($received > 1 && $sent === 0)));
             }
         }
-        return false;
+        if ($replies) {
+            return $unanswered ? 'partial' : 'seen';
+        }
+        return $unanswered ? 'oneway' : 'unseen';
     }
 
     private static function stateSource(array $state): ?string

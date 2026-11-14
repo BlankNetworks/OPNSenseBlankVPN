@@ -377,15 +377,41 @@ namespace {
         'dnsPort' => 46651
     ]];
     $probe = Policy::marker('probe', 'jp' . Policy::PROBE_IP);
+    $alternateTarget = array_keys(Policy::PROBE_TARGETS)[1];
+    $alternateProbe = Policy::marker('probe', 'jp' . $alternateTarget);
     $probeOnly = new Plugin();
     (new ReflectionMethod(Firewall::class, 'registerProfile'))->invoke(null, $probeOnly, $profiles['jp'], false);
-    checkRouting(array_keys($probeOnly->rules) === [$probe, $probe . '_block'] &&
-        $probeOnly->rules[$probe]['from'] === '10.64.0.9' && $probeOnly->rules[$probe]['direction'] === 'out',
-        'A VPN test while routing is off installs only a source-bound router probe and its guard.');
-    $loaded = [$probe => ['action' => 'pass', 'source' => '10.64.0.9', 'gateway' => 'wg0']];
-    checkRouting(!Firewall::probePathInstalled($profiles['jp'], $loaded), 'A manual exit test requires a fallback guard.');
-    $loaded[$probe . '_block'] = ['action' => 'block', 'source' => '10.64.0.9'];
-    checkRouting(Firewall::probePathInstalled($profiles['jp'], $loaded), 'A protected source may test its configured exit.');
+    checkRouting(array_keys($probeOnly->rules) === [$probe, $probe . '_block', $alternateProbe, $alternateProbe . '_block'],
+        'A VPN test while routing is off installs two independent router test paths.');
+    foreach ([$probe => Policy::PROBE_IP, $alternateProbe => $alternateTarget] as $label => $destination) {
+        foreach ([$label, $label . '_block'] as $rule) {
+            checkRouting($probeOnly->rules[$rule]['from'] === '10.64.0.9' &&
+                $probeOnly->rules[$rule]['direction'] === 'out' && $probeOnly->rules[$rule]['to'] === $destination,
+                'Each router probe and guard uses the exact tunnel source and intended destination.');
+        }
+    }
+    $probeRules = "pass out quick route-to (wg0 ?) inet proto tcp from 10.64.0.9 to " . Policy::PROBE_IP .
+        " port = https flags S/SA keep state label \"$probe\"\n";
+    $primaryGuard = "block drop out quick inet proto tcp from 10.64.0.9 to " . Policy::PROBE_IP .
+        " port = https label \"{$probe}_block\"\n";
+    $alternateRules = "pass out quick route-to (wg0 ?) inet proto tcp from 10.64.0.9 to $alternateTarget port = 443 " .
+        "flags S/SA keep state label \"$alternateProbe\"\n" .
+        "block drop out quick inet proto tcp from 10.64.0.9 to $alternateTarget port = 443 label \"{$alternateProbe}_block\"\n";
+    $probePaths = static fn (string $rules): array => Firewall::probePathsInstalled($profiles['jp'], Firewall::parseLoadedRules($rules));
+    checkRouting($probePaths($probeRules) === [], 'A manual exit test requires a fallback guard.');
+    checkRouting($probePaths($probeRules . $primaryGuard) === [Policy::PROBE_IP], 'Retain the original protected test path during upgrades.');
+    checkRouting($probePaths($probeRules . $primaryGuard . $alternateRules) === array_keys(Policy::PROBE_TARGETS),
+        'A protected source can test both configured HTTPS endpoints.');
+    foreach ([
+        str_replace($alternateTarget, '192.0.2.20', $alternateRules),
+        str_replace('wg0', 'igc0', $alternateRules),
+        str_replace('port = 443', 'port = 53', $alternateRules),
+        str_replace('out quick', 'in quick', $alternateRules),
+        str_replace('block drop out quick', 'block drop out', $alternateRules),
+    ] as $misconfiguredAlternate) {
+        checkRouting($probePaths($probeRules . $primaryGuard . $misconfiguredAlternate) === [Policy::PROBE_IP],
+            'A mismatched alternate rule cannot authorize a probe.');
+    }
     checkRouting(SmartRouting::dnsDirectives($chinaService, $profiles) === [
         'ipset=/cn/' . SmartRouting::table($chinaService['china']), 'server=/cn/10.64.0.1@10.64.0.9'
     ], 'Compile a top-level suffix to label-boundary DNS learning and tunnel forwarding.');

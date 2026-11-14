@@ -46,15 +46,17 @@ final class OnDemand
         return array_diff_key($onDemand, $always);
     }
 
-    public static function reconcileWireGuard(BlankVpn $model, array $onDemand): bool
+    public static function reconcileWireGuard(BlankVpn $model, array $onDemand, ?array $runtime = null): bool
     {
         $profiles = Policy::profiles($model);
         if ($profiles === []) {
             return true;
         }
-        // Query the local kernel directly. This also runs inside a configd action.
-        $keys = self::records(Resolver::command(['/usr/bin/wg', 'show', 'all', 'public-key'], false), 2);
-        $peers = self::records(Resolver::command(['/usr/bin/wg', 'show', 'all', 'persistent-keepalive'], false), 3);
+        $runtime ??= self::wireGuardRuntime();
+        if ($runtime === null) {
+            return false;
+        }
+        ['keys' => $keys, 'peers' => $peers] = $runtime;
         $complete = true;
         foreach ($profiles as $id => $profile) {
             $interface = $profile['interface'] ?? '';
@@ -82,6 +84,19 @@ final class OnDemand
         return $complete;
     }
 
+    public static function wireGuardRuntime(): ?array
+    {
+        // A failed kernel query is distinct from a successful empty inventory.
+        try {
+            $keys = self::records(Resolver::command(['/usr/bin/wg', 'show', 'all', 'public-key']), 2);
+            $peers = self::records(Resolver::command(['/usr/bin/wg', 'show', 'all', 'persistent-keepalive']), 3);
+            $allowed = self::records(Resolver::command(['/usr/bin/wg', 'show', 'all', 'allowed-ips']), 3);
+            return ['keys' => $keys, 'peers' => $peers, 'allowed' => $allowed];
+        } catch (\RuntimeException) {
+            return null;
+        }
+    }
+
     public static function keepalive(array $profile, bool $idle): int
     {
         return $idle ? 0 : ((int)($profile['keepalive'] ?? 0) ?: 25);
@@ -91,13 +106,17 @@ final class OnDemand
     {
         $records = [];
         foreach (explode("\n", trim($output)) as $line) {
+            if ($line === '') {
+                continue;
+            }
             $row = explode("\t", $line);
-            if (count($row) === $fields) {
-                if ($fields === 2) {
-                    $records[$row[0]] = $row[1];
-                } else {
-                    $records[$row[0]][$row[1]] = $row[2];
-                }
+            if (count($row) !== $fields || in_array('', $row, true)) {
+                throw new \RuntimeException('WireGuard returned an incomplete runtime record.');
+            }
+            if ($fields === 2) {
+                $records[$row[0]] = $row[1];
+            } else {
+                $records[$row[0]][$row[1]] = $row[2];
             }
         }
         return $records;

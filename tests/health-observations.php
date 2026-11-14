@@ -40,4 +40,41 @@ expectHealth($retry['health']['reachable'] && !$retry['reload'] &&
     !Operations::probeObservation($retry['health'], $proxy, false, false, 202)['health']['reachable'],
     'Unchecked exits tolerate one failed probe.');
 
+$runtimeState = new ReflectionMethod(Operations::class, 'wireGuardRuntimeState');
+$managed = ['interface' => 'wg2', 'identityKey' => 'local-key', 'peerKey' => 'expected-peer'];
+$runtime = [
+    'keys' => ['wg2' => 'local-key'], 'peers' => ['wg2' => ['expected-peer' => '25']],
+    'allowed' => ['wg2' => ['expected-peer' => '0.0.0.0/0']]
+];
+$interfaces = ['wg2' => ['up' => true]];
+expectHealth($runtimeState->invoke(null, $managed, $runtime, $interfaces) === 'ready',
+    'The expected interface and sole peer are usable.');
+expectHealth($runtimeState->invoke(null, $managed, ['keys' => [], 'peers' => []], []) === 'missing',
+    'Only a unit absent from both inventories can be recreated safely.');
+expectHealth($runtimeState->invoke(null, $managed, ['keys' => [], 'peers' => []], $interfaces) === 'conflict',
+    'An existing interface with an unknown identity must not be overwritten.');
+expectHealth($runtimeState->invoke(null, $managed, ['keys' => ['wg2' => 'other-key'], 'peers' => []], $interfaces) === 'conflict',
+    'A changed identity must not be overwritten.');
+expectHealth($runtimeState->invoke(null, $managed, ['keys' => ['wg9' => 'local-key'], 'peers' => []], []) === 'conflict',
+    'An identity already live on a different unit must not be duplicated.');
+expectHealth($runtimeState->invoke(null, $managed, ['keys' => $runtime['keys'], 'peers' => []], $interfaces) === 'missing',
+    'A managed interface that lost its sole peer can be restored.');
+$unexpectedPeer = ['keys' => $runtime['keys'], 'peers' => ['wg2' => ['unexpected-peer' => '25']]];
+expectHealth($runtimeState->invoke(null, $managed, $unexpectedPeer, $interfaces) === 'conflict',
+    'A changed peer must not be overwritten.');
+expectHealth($runtimeState->invoke(null, $managed, $runtime, ['wg2' => ['up' => false]]) === 'missing',
+    'The owned instance can be reapplied when the kernel interface is down.');
+
+$missingDefault = array_replace($runtime, ['allowed' => ['wg2' => ['expected-peer' => '(none)']]]);
+expectHealth($runtimeState->invoke(null, $managed, $missingDefault, $interfaces) === 'missing',
+    'The correct peer without the IPv4 default needs its owned configuration restored.');
+$dualStack = $managed + ['address6' => 'fd00::2/128'];
+expectHealth($runtimeState->invoke(null, $dualStack, $runtime, $interfaces) === 'missing',
+    'A dual stack managed peer also requires an IPv6 default.');
+$bothDefaults = array_replace($runtime, ['allowed' => ['wg2' => ['expected-peer' => '::/0 0.0.0.0/0']]]);
+expectHealth($runtimeState->invoke(null, $dualStack, $bothDefaults, $interfaces) === 'ready',
+    'Both defaults are accepted regardless of their reported order.');
+expectHealth($runtimeState->invoke(null, $managed, array_replace($runtime, ['allowed' => []]), $interfaces) === 'conflict',
+    'Disagreeing kernel peer inventories are not safe to overwrite.');
+
 echo "Tunnel health observation fixtures passed.\n";

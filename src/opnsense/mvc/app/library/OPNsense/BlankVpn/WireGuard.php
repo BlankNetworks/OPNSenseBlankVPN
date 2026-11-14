@@ -17,10 +17,6 @@ use RuntimeException;
 
 final class WireGuard
 {
-    public const PROBE_ADDRESS = '1.1.1.1';
-    public const PROBE_PORT = 443;
-
-    private const PROBE_HOST = 'cloudflare-dns.com';
     private const HANDSHAKE_WINDOW = 300;
 
     /** Stage objects under the caller's configuration lock. The caller commits and applies them. */
@@ -420,12 +416,12 @@ final class WireGuard
     }
 
     /**
-     * Caller verifies the source-bound output route and fallback block in the running filter
-     * before requesting this probe. Its result is router tunnel reachability.
+     * The caller supplies only endpoints with a verified source-bound output route and fallback
+     * block in the running firewall. The result describes reachability from the router.
      */
-    public static function probe(array $profile, bool $routeInstalled = false): array
+    public static function probe(array $profile, array $protectedTargets = []): array
     {
-        if (!$routeInstalled) {
+        if ($protectedTargets === []) {
             return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
                 'detail' => 'The protected tunnel test route is unavailable.'];
         }
@@ -435,30 +431,52 @@ final class WireGuard
                 'detail' => 'The WireGuard interface or peer is missing from the kernel.'];
         }
 
-        $result = self::probeSource(explode('/', $profile['address'], 2)[0]);
+        $result = self::probeSource(explode('/', $profile['address'], 2)[0], $protectedTargets);
         if ($result['reachable'] === false && (self::status($profile)['handshake'] ?? 0) < time() - self::HANDSHAKE_WINDOW) {
             $result['detail'] = 'The server has no recent WireGuard handshake. Check whether outbound UDP reaches the relay.';
         }
         return $result;
     }
 
-    public static function probeSource(string $address): array
+    public static function probeSource(string $address, array $protectedTargets): array
     {
         if (!filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
             return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
                 'detail' => 'The tunnel has no usable IPv4 source address.'];
         }
+        $targets = array_intersect_key(Policy::PROBE_TARGETS, array_fill_keys($protectedTargets, true));
+        if ($targets === []) {
+            return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
+                'detail' => 'The protected tunnel test route is unavailable.'];
+        }
         if (!function_exists('curl_init')) {
             throw new RuntimeException('The OPNsense PHP cURL extension is unavailable.');
         }
-        $curl = curl_init('https://' . self::PROBE_HOST . '/dns-query?name=cloudflare.com&type=A');
+        foreach ($targets as $destination => $target) {
+            $latency = self::probeEndpoint($address, $destination, $target['host'], $target['path']);
+            if ($latency !== null) {
+                return ['reachable' => true, 'checkedAt' => time(), 'status' => 'reachable',
+                    'milliseconds' => $latency, 'detail' => null];
+            }
+        }
+        if (count($targets) !== count(Policy::PROBE_TARGETS)) {
+            return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
+                'detail' => 'The tested endpoint did not respond. A second protected test route is unavailable.'];
+        }
+        return ['reachable' => false, 'checkedAt' => time(), 'status' => 'probe failed', 'milliseconds' => null,
+            'detail' => 'Neither independent HTTPS endpoint responded through the tunnel.'];
+    }
+
+    private static function probeEndpoint(string $address, string $destination, string $host, string $path): ?float
+    {
+        $curl = curl_init('https://' . $host . $path);
         if ($curl === false) {
             throw new RuntimeException('OPNsense could not initialize the HTTPS tunnel test.');
         }
         $body = '';
         curl_setopt_array($curl, [
             CURLOPT_INTERFACE => $address,
-            CURLOPT_RESOLVE => [self::PROBE_HOST . ':' . self::PROBE_PORT . ':' . self::PROBE_ADDRESS],
+            CURLOPT_RESOLVE => [$host . ':' . Policy::PROBE_PORT . ':' . $destination],
             CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
             CURLOPT_PROXY => '',
             CURLOPT_PROTOCOLS_STR => 'HTTPS',
@@ -467,7 +485,7 @@ final class WireGuard
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_CONNECTTIMEOUT => 3,
-            CURLOPT_TIMEOUT => 5,
+            CURLOPT_TIMEOUT => 4,
             CURLOPT_WRITEFUNCTION => static function ($handle, $chunk) use (&$body) {
                 if (strlen($body) + strlen($chunk) > 8192) {
                     return 0;
@@ -482,11 +500,9 @@ final class WireGuard
         $reachable = $transport &&
             ($info['http_code'] ?? 0) === 200 &&
             ($info['local_ip'] ?? '') === $address &&
-            ($info['primary_ip'] ?? '') === self::PROBE_ADDRESS &&
+            ($info['primary_ip'] ?? '') === $destination &&
             ($answer['Status'] ?? null) === 0;
-        return ['reachable' => $reachable, 'checkedAt' => time(), 'status' => $reachable ? 'reachable' : 'probe failed',
-            'milliseconds' => $reachable ? round($info['total_time'] * 1000, 1) : null,
-            'detail' => $reachable ? null : 'The HTTPS probe did not complete through the tunnel.'];
+        return $reachable ? round($info['total_time'] * 1000, 1) : null;
     }
 
     private static function createInterface(string $device, string $owner): string

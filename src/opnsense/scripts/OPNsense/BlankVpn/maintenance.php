@@ -130,7 +130,9 @@ try {
                 $previousProxies = ProxyRuntime::lastStatus()['active'];
                 $runningProxies = ProxyRuntime::reconcile($model, background: true)['active'];
                 $onDemand = OnDemand::exits($model);
-                OnDemand::reconcileWireGuard($model, $onDemand);
+                $wireGuardProfiles = Policy::profiles($model);
+                $wireGuardRuntime = $wireGuardProfiles === [] ? null : OnDemand::wireGuardRuntime();
+                OnDemand::reconcileWireGuard($model, $onDemand, $wireGuardRuntime);
                 $hourly = gmdate('i') === '00';
                 if ($hourly) {
                     try {
@@ -162,6 +164,12 @@ try {
                 $previousProxySet = array_fill_keys($previousProxies, true);
                 $forward = SmartRouting::forwardServices($settings, $services);
                 $selected = Operations::policyProbeExits($settings, $assignments, $forward);
+                $repair = Operations::repairManagedWireGuard(
+                    array_intersect_key($wireGuardProfiles, $selected), $wireGuardRuntime
+                );
+                if ($repair['repaired']) {
+                    OnDemand::reconcileWireGuard($model, $onDemand);
+                }
                 $watchedExits = array_fill_keys(Operations::killSwitchProbeExits(
                     $settings, $assignments, $forward
                 ), true);
@@ -169,14 +177,15 @@ try {
                 $old = Firewall::health();
                 $routes = Policy::routes($model);
                 $health = array_intersect_key($old, $routes);
-                $changed = $runningProxies !== $previousProxies ||
+                $changed = $repair['repaired'] || $runningProxies !== $previousProxies ||
                     @file_get_contents(Policy::STATE_DIR . '/local-networks') !==
                         implode("\n", Policy::localNetworks($settings)) . "\n";
                 foreach ($routes as $id => $profile) {
                     if (!isset($selected[$id]) || !empty($profile['disabled'])) {
                         continue;
                     }
-                    if (isset($onDemand[$id]) &&
+                    $runtimeUnavailable = isset($repair['unavailable'][$id]);
+                    if (!$runtimeUnavailable && isset($onDemand[$id]) &&
                         (($profile['kind'] ?? '') !== 'proxy' || isset($runningProxySet[$id]))) {
                         // A routed first packet starts the tunnel. An old probe failure
                         // must not prevent the client from reaching an idle exit again.
@@ -190,7 +199,11 @@ try {
                         }
                         continue;
                     }
-                    if (($profile['kind'] ?? '') === 'proxy') {
+                    if ($runtimeUnavailable) {
+                        // A confirmed missing or foreign instance invalidates an old
+                        // positive probe even when the protected probe pins are absent.
+                        $probe = ['reachable' => false];
+                    } elseif (($profile['kind'] ?? '') === 'proxy') {
                         if ($profile['slot'] % 4 !== (int)gmdate('i') % 4 &&
                             isset($runningProxySet[$id], $previousProxySet[$id]) &&
                             empty($old[$id]['onDemand'])) {
@@ -198,17 +211,19 @@ try {
                         }
                         $probe = ProxyRuntime::probe($profile);
                     } else {
-                        $verified = Firewall::probePathInstalled($profile, $loaded);
-                        if (!$verified && ($profile['address'] ?? '') !== '' && (int)gmdate('i') % 4 === 0) {
-                            // Rebuild a missing pin after a tunnel starts late. Never send an unpinned probe.
+                        $targets = Firewall::probePathsInstalled($profile, $loaded);
+                        if (count($targets) < count(Policy::PROBE_TARGETS) &&
+                            ($profile['address'] ?? '') !== '' && (int)gmdate('i') % 4 === 0) {
+                            // Rebuild missing pins without sending any unpinned probes.
                             $changed = true;
                         }
                         $probe = ($profile['kind'] ?? '') === 'native'
-                            ? WireGuard::probeSource($verified ? $profile['address'] : '')
-                            : WireGuard::probe($profile, $verified);
+                            ? WireGuard::probeSource($profile['address'], $targets)
+                            : WireGuard::probe($profile, $targets);
                     }
                     $observation = Operations::probeObservation(
-                        $old[$id] ?? [], $profile, $probe['reachable'] ?? null, isset($watchedExits[$id]), time()
+                        $old[$id] ?? [], $profile, $probe['reachable'] ?? null,
+                        $runtimeUnavailable || isset($watchedExits[$id]), time()
                     );
                     if ($observation['health'] !== []) {
                         $health[$id] = $observation['health'];

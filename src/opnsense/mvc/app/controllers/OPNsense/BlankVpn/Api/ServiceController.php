@@ -460,9 +460,8 @@ class ServiceController extends ApiControllerBase
                     $observed = 'inactive';
                     $forwardingIssue = 'The selected tunnel is missing its Tailscale source NAT or return rule.';
                 } else {
-                    $seen = (new Diagnostics())->hasRoutedTraffic($source,
+                    $observed = (new Diagnostics())->routedTraffic($source,
                         Firewall::forwardedReplyMarkers($loaded, $paths, $route));
-                    $observed = $seen ? 'seen' : 'unseen';
                 }
             } catch (\RuntimeException) {
                 $observed = 'unavailable';
@@ -485,18 +484,20 @@ class ServiceController extends ApiControllerBase
         if ($loaded === null) {
             throw new \RuntimeException('Blank VPN & Proxy could not read the active firewall rules from configd.');
         }
-        if (!Firewall::probePathInstalled($route, $loaded)) {
+        $targets = Firewall::probePathsInstalled($route, $loaded);
+        if (count($targets) !== count(Policy::PROBE_TARGETS)) {
             $settings = Policy::effectiveRouting($model);
             $assignments = Policy::deviceAssignments($settings,
                 Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()));
             Operations::reloadRoutingPaths($model, $settings, $assignments, $loaded);
-            if (!Firewall::probePathInstalled($route, Firewall::loadedRules() ?? [])) {
+            $targets = Firewall::probePathsInstalled($route, Firewall::loadedRules() ?? []);
+            if ($targets === []) {
                 throw new \RuntimeException('OPNsense did not load the protected test route. Check the exit gateway and firewall status.');
             }
         }
         return ($route['kind'] ?? '') === 'native'
-            ? WireGuard::probeSource($route['address'])
-            : WireGuard::probe($route, true);
+            ? WireGuard::probeSource($route['address'], $targets)
+            : WireGuard::probe($route, $targets);
     }
 
     public function testProxyNodeAction()

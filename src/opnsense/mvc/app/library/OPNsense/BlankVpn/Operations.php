@@ -9,6 +9,8 @@ final class Operations
 {
     private const PATH_RELOAD = 'health-reload';
     private const TABLE_FILE_MAX_AGE = 86400;
+    private const WIREGUARD_REPAIR_STATE = 'wireguard-runtime-repair.json';
+    private const WIREGUARD_REPAIR_INTERVAL = 300;
 
     public static function exclusive(callable $work, bool $skipBusy = false): mixed
     {
@@ -207,6 +209,89 @@ final class Operations
         } else {
             Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
         }
+    }
+
+    public static function repairManagedWireGuard(array $profiles, ?array $runtime): array
+    {
+        $result = ['unavailable' => [], 'repaired' => false];
+        if ($profiles === [] || $runtime === null || !is_array($interfaces = net_get_interfaces())) {
+            return $result;
+        }
+        $path = Policy::STATE_DIR . '/' . self::WIREGUARD_REPAIR_STATE;
+        $raw = is_file($path) ? file_get_contents($path, false, null, 0, 16385) : false;
+        $saved = is_string($raw) && strlen($raw) <= 16384 ? json_decode($raw, true) : null;
+        $saved = is_array($saved) ? $saved : [];
+        $now = time();
+        $attempts = array_filter(array_intersect_key($saved, $profiles), static fn ($time): bool =>
+            is_int($time) && $time <= $now && $time > $now - self::WIREGUARD_REPAIR_INTERVAL);
+        $repair = null;
+        foreach ($profiles as $id => $profile) {
+            if (!empty($profile['disabled'])) {
+                continue;
+            }
+            $state = self::wireGuardRuntimeState($profile, $runtime, $interfaces);
+            if ($state === 'ready') {
+                continue;
+            }
+            $result['unavailable'][$id] = true;
+            if ($state === 'missing' && $repair === null && !isset($attempts[$id]) && WireGuard::check($profile)['ok']) {
+                // At most one validated instance per maintenance run. Record the
+                // attempt before applying so a timeout cannot cause a retry loop.
+                $repair = $profile;
+                $attempts[$id] = $now;
+            }
+        }
+        if ($attempts !== $saved) {
+            Policy::writeState(self::WIREGUARD_REPAIR_STATE, json_encode($attempts, JSON_THROW_ON_ERROR));
+        }
+        if ($repair !== null) {
+            try {
+                // The native configure action can skip syncconf when a
+                // running interface lost its peer but the file hash is unchanged.
+                $backend = new Backend();
+                if (trim($backend->configdpRun('template reload', ['OPNsense/Wireguard'])) !== 'OK' ||
+                    trim($backend->configdpRun('wireguard start', [$repair['instance']])) !== 'OK') {
+                    throw new \RuntimeException('OPNsense could not restore the managed WireGuard instance.');
+                }
+                $live = OnDemand::wireGuardRuntime();
+                $interfaces = net_get_interfaces();
+                if ($live === null || !is_array($interfaces) ||
+                    self::wireGuardRuntimeState($repair, $live, $interfaces) !== 'ready') {
+                    throw new \RuntimeException('The expected WireGuard peer and AllowedIPs did not appear in the kernel.');
+                }
+                unset($result['unavailable'][$repair['id']]);
+                $result['repaired'] = true;
+            } catch (\RuntimeException) {
+                syslog(LOG_WARNING, 'Blank VPN could not restore a managed WireGuard instance.');
+            }
+        }
+        return $result;
+    }
+
+    private static function wireGuardRuntimeState(array $profile, array $runtime, array $interfaces): string
+    {
+        $device = $profile['interface'] ?? '';
+        $identity = $profile['identityKey'] ?? '';
+        $peer = $profile['peerKey'] ?? '';
+        if (!preg_match('/^wg[0-9]+$/D', $device) || $identity === '' || $peer === '') {
+            return 'conflict';
+        }
+        $key = $runtime['keys'][$device] ?? null;
+        $peers = $runtime['peers'][$device] ?? [];
+        $allowed = $runtime['allowed'][$device] ?? [];
+        if ($key === null) {
+            // An existing interface outside the WireGuard inventory could be
+            // foreign. Do not rebind it or duplicate an identity on another unit.
+            return isset($interfaces[$device]) || $peers !== [] || $allowed !== [] ||
+                in_array($identity, $runtime['keys'], true) ? 'conflict' : 'missing';
+        }
+        if ($key !== $identity || array_diff_key($peers + $allowed, [$peer => true]) !== [] ||
+            isset($peers[$peer]) !== isset($allowed[$peer])) {
+            return 'conflict';
+        }
+        $expected = empty($profile['address6']) ? ['0.0.0.0/0'] : ['0.0.0.0/0', '::/0'];
+        $prefixes = explode(' ', $allowed[$peer] ?? '');
+        return !empty($interfaces[$device]['up']) && array_diff($expected, $prefixes) === [] ? 'ready' : 'missing';
     }
 
     public static function probeObservation(array $prior, array $profile, ?bool $observed, bool $protected, int $now): array

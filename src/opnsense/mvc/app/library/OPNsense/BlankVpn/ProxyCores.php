@@ -362,7 +362,7 @@ final class ProxyCores
     private static function activate(string $core, ?array $target, ?array $prior, array $state): void
     {
         $model = new BlankVpn();
-        $affected = array_filter(ProxyRuntime::routes($model), static fn (array $route): bool => self::uses($route, $core));
+        $affected = array_filter(ProxyRuntime::assignedRoutes($model), static fn (array $route): bool => self::uses($route, $core));
         $live = Policy::anyEnabled(Policy::settings($model)) && $affected !== [];
         $state['pending'] = ['core' => $core, 'restore' => $state['cores'][$core] ?? [], 'paused' => true];
         self::save($state);

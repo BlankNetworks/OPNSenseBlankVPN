@@ -2062,7 +2062,9 @@
                         ? target + ' · router HTTPS ' + result.milliseconds + ' ms'
                         : target + ' · ' + (result.detail || 'router HTTPS failed');
                     const observation = {
-                        seen: 'Device traffic seen in both directions',
+                        seen: 'Recent device traffic seen in both directions',
+                        partial: 'Some recent device connections received replies. Other TCP attempts have no observed reply.',
+                        oneway: 'Recent TCP attempts reached the selected route. OPNsense saw no reply for those attempts.',
                         unseen: 'No completed connection observed from the device. Open a new page on the device and try again.',
                         inactive: result.forwardingIssue || 'Device rule has no active VPN path',
                         unavailable: 'Device traffic status unavailable'

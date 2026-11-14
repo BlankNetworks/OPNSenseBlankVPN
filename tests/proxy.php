@@ -241,6 +241,23 @@ assertProxy(str_contains($probeFailure->invoke(null, CURLE_SSL_CACERT, 0), 'cert
     str_contains($probeFailure->invoke(null, CURLE_OPERATION_TIMEDOUT, 0, 0.001), 'upstream') &&
     str_contains($probeFailure->invoke(null, CURLE_OPERATION_TIMEDOUT, 0, 0.001, 0.2), 'response timed out'),
     'Report PHP cURL failures without throwing an undefined-constant error.');
+$targets = (new ReflectionClassConstant(ProxyRuntime::class, 'PROBE_TARGETS'))->getValue();
+assertProxy(count($targets) === 3 && array_sum(array_column($targets, 1)) === 8000 &&
+    count(array_unique(array_map(static fn (string $url): string => (string)parse_url($url, PHP_URL_HOST),
+        array_keys($targets)))) === 3,
+    'Scheduled proxy tests cover independent HTTPS destinations within their existing time budget.');
+
+$hasListeners = new ReflectionMethod(ProxyRuntime::class, 'hasListeners');
+$listeners = [47220 => [300, 'tcp4'], 47200 => [300, 'udp4'], 47240 => [301, 'tcp4']];
+$socks = "root     mihomo    300   6  tcp4   127.0.0.1:47220       *:*";
+$dns = "root     mihomo    300   7  udp4   127.0.0.1:47200       *:*";
+$adapter = "root     xray      301   8  tcp4   127.0.0.1:47240       *:*";
+assertProxy($hasListeners->invoke(null, implode("\n", [$socks, $dns, $adapter]), $listeners) &&
+    !$hasListeners->invoke(null, implode("\n", [$socks, $adapter]), $listeners) &&
+    !$hasListeners->invoke(null, implode("\n", [$socks, $dns, str_replace('301', '999', $adapter)]), $listeners) &&
+    !$hasListeners->invoke(null, implode("\n", [$socks, $dns, $adapter, str_replace('301', '999', $adapter)]), $listeners) &&
+    !$hasListeners->invoke(null, implode("\n", [$socks, $dns, str_replace('127.0.0.1', '*', $adapter)]), $listeners),
+    'Proxy readiness needs all owned loopback listeners and rejects a missing or competing process.');
 $singNode = proxyNode('{"outbounds":[{"tag":"example","type":"anytls","server":"192.0.2.2","server_port":443,"password":"fixture-pass","tls":{"enabled":true,"server_name":"example.com"}}]}');
 $sing = ProxyRuntime::configuration($route, $singNode);
 assertProxy($sing['adapter']['route']['final'] === 'selected', 'sing-box has exactly one selected outbound.');

@@ -15,6 +15,11 @@ final class ProxyRuntime
     private const CONFIG_VERSION = 3;
     private const RETRY_LIMIT = 900;
     private const STATUS_FILE = 'proxy-status.json';
+    private const PROBE_TARGETS = [
+        'https://1.1.1.1/dns-query?name=example.com&type=A' => [200, 3000],
+        'https://223.5.5.5/resolve?name=example.com&type=A' => [200, 3000],
+        'https://www.gstatic.com/generate_204' => [204, 2000]
+    ];
     private const BIN = [
         'mihomo' => '/usr/local/libexec/blankvpn/mihomo',
         'tun2socks' => '/usr/local/libexec/blankvpn/tun2socks',
@@ -198,13 +203,28 @@ final class ProxyRuntime
         ]);
         if (($state['configVersion'] ?? 0) !== self::CONFIG_VERSION || $recorded !== $paths ||
             ($state['node'] ?? null) !== $route['node'] || ($state['id'] ?? null) !== $route['id'] ||
-            self::pid($slot, 'bridge', $state) === null || self::pid($slot, 'mihomo', $state) === null ||
-            ($route['core'] !== 'mihomo' && self::pid($slot, 'adapter', $state) === null)) {
+            self::pid($slot, 'bridge', $state) === null) {
             return false;
         }
         $interface = self::ifconfig($route['interface']);
-        return self::ownedInterface($route, $interface) &&
-            preg_match('/^\s*inet\s+' . preg_quote(explode('/', $route['address'])[0], '/') . '\s/m', $interface) === 1;
+        if (!self::ownedInterface($route, $interface) ||
+            preg_match('/^' . preg_quote($route['interface'], '/') . ': flags=[0-9a-f]+<(?:[^>]+,)?UP(?:,[^>]+)?>/im', $interface) !== 1 ||
+            preg_match('/^\s*inet\s+' . preg_quote(explode('/', $route['address'])[0], '/') . '\s/m', $interface) !== 1) {
+            return false;
+        }
+        $mihomo = self::pid($slot, 'mihomo', $state);
+        if ($mihomo === null) {
+            return false;
+        }
+        $listeners = [$route['socksPort'] => [$mihomo, 'tcp4'], $route['proxyDns'] => [$mihomo, 'udp4']];
+        if ($route['core'] !== 'mihomo') {
+            $adapter = self::pid($slot, 'adapter', $state);
+            if ($adapter === null) {
+                return false;
+            }
+            $listeners[$route['adapterPort']] = [$adapter, 'tcp4'];
+        }
+        return self::boundListeners($listeners);
     }
 
     public static function reconcile(BlankVpn $model, bool $background = false): array
@@ -407,28 +427,23 @@ final class ProxyRuntime
         };
     }
 
-    private static function probeSocks(int $port, bool $tryAlternate = false): array
+    private static function probeSocks(int $port, bool $manual = false): array
     {
         if (!function_exists('curl_init')) {
             throw new RuntimeException('The OPNsense PHP cURL extension is unavailable.');
         }
-        // Use IP-based endpoints in different regions before a hostname-based HTTPS check.
-        $targets = [
-            'https://1.1.1.1/dns-query?name=example.com&type=A' => 200,
-            'https://223.5.5.5/resolve?name=example.com&type=A' => 200
-        ];
-        if ($tryAlternate) {
-            $targets['https://www.gstatic.com/generate_204'] = 204;
-        }
+        // Try two numeric-IP TLS endpoints before testing hostname resolution through SOCKS.
+        // Keep the background budget at eight seconds even when every destination stalls.
         $detail = 'The proxy did not complete the HTTPS test.';
-        foreach ($targets as $url => $expectedStatus) {
+        foreach (self::PROBE_TARGETS as $url => [$expectedStatus, $backgroundTimeout]) {
+            $timeout = $manual ? 5000 : $backgroundTimeout;
             $curl = curl_init($url);
             if ($curl === false || !curl_setopt_array($curl, [
                 CURLOPT_PROXY => 'socks5h://127.0.0.1:' . $port,
                 CURLOPT_NOPROXY => '', CURLOPT_PROTOCOLS_STR => 'https', CURLOPT_FOLLOWLOCATION => false,
                 CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
                 CURLOPT_HTTPHEADER => ['Accept: application/dns-json'],
-                CURLOPT_CONNECTTIMEOUT => $tryAlternate ? 4 : 3, CURLOPT_TIMEOUT => $tryAlternate ? 5 : 4,
+                CURLOPT_CONNECTTIMEOUT_MS => $manual ? 4000 : $timeout, CURLOPT_TIMEOUT_MS => $timeout,
                 CURLOPT_WRITEFUNCTION => static fn ($handle, string $body) => strlen($body)
             ])) {
                 throw new RuntimeException('OPNsense could not configure the proxy connection test.');
@@ -558,19 +573,39 @@ final class ProxyRuntime
     {
         for ($attempt = 0; $attempt < 25; $attempt++) {
             $pid = self::pid($slot, $name);
-            if ($pid !== null) {
-                $rows = Resolver::command(['/usr/bin/sockstat', '-4', '-l', '-p', (string)$port], false);
-                foreach (preg_split('/\R/', $rows) as $row) {
-                    $fields = preg_split('/\s+/', trim($row));
-                    if (($fields[2] ?? '') === (string)$pid && ($fields[4] ?? '') === $protocol &&
-                        ($fields[5] ?? '') === '127.0.0.1:' . $port) {
-                        return;
-                    }
-                }
+            if ($pid !== null && self::boundListeners([$port => [$pid, $protocol]])) {
+                return;
             }
             usleep(100000);
         }
         throw new RuntimeException('A proxy core rejected the configuration or could not bind its local port.');
+    }
+
+    private static function boundListeners(array $listeners): bool
+    {
+        $ports = implode(',', array_keys($listeners));
+        $rows = Resolver::command(['/usr/bin/sockstat', '-4', '-l', '-p', $ports], false);
+        return self::hasListeners($rows, $listeners);
+    }
+
+    private static function hasListeners(string $rows, array $listeners): bool
+    {
+        $expected = [];
+        $found = [];
+        foreach ($listeners as $port => [$pid, $protocol]) {
+            $expected[$protocol . ' 127.0.0.1:' . $port] = (string)$pid;
+        }
+        foreach (preg_split('/\R/', $rows) as $row) {
+            $fields = preg_split('/\s+/', trim($row));
+            $listener = ($fields[4] ?? '') . ' ' . ($fields[5] ?? '');
+            if (isset($expected[$listener])) {
+                if ($expected[$listener] !== $fields[2]) {
+                    return false;
+                }
+                $found[$listener] = true;
+            }
+        }
+        return count($found) === count($expected);
     }
 
     private static function path(int $slot): string

@@ -15,6 +15,11 @@ final class Policy
     public const COMBINED_LOCAL_TABLE = 'blankvpn_combined_local';
     public const STATE_DIR = '/var/db/blank-vpn';
     public const PROBE_IP = '1.1.1.1';
+    public const PROBE_PORT = 443;
+    public const PROBE_TARGETS = [
+        self::PROBE_IP => ['host' => 'cloudflare-dns.com', 'path' => '/dns-query?name=cloudflare.com&type=A'],
+        '8.8.8.8' => ['host' => 'dns.google', 'path' => '/resolve?name=google.com&type=A'],
+    ];
     private const FAILURE = ['block', 'backup', 'wan'];
     private const LIVE_IPV6 = ['track6', 'idassoc6', 'dhcp6', 'slaac', 'linklocal'];
 

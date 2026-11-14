@@ -1172,9 +1172,10 @@ final class Firewall
         if ($ready && $tailnet) {
             self::registerTailnetOutput($firewall, $profile, 'inet', self::TAILNET_TUNNEL_TAG);
         }
-        $destinations = [
-            ['to' => self::probeIp(), 'to_port' => '443', 'protocol' => 'tcp', 'kind' => 'probe']
-        ];
+        $destinations = [];
+        foreach (array_keys(Policy::PROBE_TARGETS) as $target) {
+            $destinations[] = ['to' => $target, 'to_port' => (string)Policy::PROBE_PORT, 'protocol' => 'tcp', 'kind' => 'probe'];
+        }
         foreach ($includeDns ? ($profile['dns'] ?? []) : [] as $dns) {
             if (filter_var($dns, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
                 $destinations[] = ['to' => $dns, 'to_port' => '53', 'protocol' => 'tcp/udp', 'kind' => 'dns_out'];
@@ -1200,11 +1201,6 @@ final class Firewall
         }
     }
 
-    public static function probeIp(): string
-    {
-        return Policy::PROBE_IP;
-    }
-
     public static function health(): array
     {
         $path = Policy::STATE_DIR . '/health.json';
@@ -1215,18 +1211,25 @@ final class Firewall
         return is_array($data) ? $data : [];
     }
 
-    public static function probePathInstalled(array $profile, array $loaded): bool
+    public static function probePathsInstalled(array $profile, array $loaded): array
     {
         $source = explode('/', $profile['address'] ?? '', 2)[0];
-        if (!filter_var($source, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-            return false;
+        if (!filter_var($source, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || empty($profile['interface'])) {
+            return [];
         }
-        $marker = Policy::marker('probe', $profile['id'] . Policy::PROBE_IP);
-        $pass = $loaded[$marker] ?? [];
-        $guard = $loaded[$marker . '_block'] ?? [];
-        return ($pass['action'] ?? '') === 'pass' && ($pass['source'] ?? '') === $source &&
-            ($pass['gateway'] ?? null) === ($profile['interface'] ?? '') &&
-            ($guard['action'] ?? '') === 'block' && ($guard['source'] ?? '') === $source;
+        $verified = [];
+        foreach (array_keys(Policy::PROBE_TARGETS) as $target) {
+            $marker = Policy::marker('probe', $profile['id'] . $target);
+            $pass = $loaded[$marker] ?? [];
+            $guard = $loaded[$marker . '_block'] ?? [];
+            if (($pass['action'] ?? '') === 'pass' && ($pass['source'] ?? '') === $source &&
+                ($pass['gateway'] ?? null) === $profile['interface'] && ($pass['probeTarget'] ?? '') === $target &&
+                ($guard['action'] ?? '') === 'block' && ($guard['source'] ?? '') === $source &&
+                ($guard['probeTarget'] ?? '') === $target) {
+                $verified[] = $target;
+            }
+        }
+        return $verified;
     }
 
     public static function parseLoadedRules(string $output): array
@@ -1255,6 +1258,12 @@ final class Firewall
                 'tagged' => $tagged[1] ?? null, 'tag' => $tag[1] ?? null,
                 'quick' => preg_match('/^.+?\bquick\s+(?:on|inet|inet6|proto|from|all)\b/', $line) === 1
             ] + (isset($ingress[1]) ? ['ingress' => $ingress[1]] : []);
+            if (str_starts_with($match[1], 'blankvpn_probe_') &&
+                preg_match('/^(?:@\d+\s+)?(?:pass|block)(?:\s+(?:drop|return))?\s+out\s+quick\b.*' .
+                    '\binet\s+proto\s+tcp\s+from\s+\S+\s+to\s+([0-9.]+)(?:\/32)?\s+port\s*=\s*(?:443|https)\b/',
+                    ltrim($line), $probe)) {
+                $rules[$match[1]]['probeTarget'] = $probe[1];
+            }
             if (preg_match('/\bmax-mss\s+([0-9]+)\b/', $line, $mss)) {
                 $rules[$match[1]]['mss'] = (int)$mss[1];
             }
