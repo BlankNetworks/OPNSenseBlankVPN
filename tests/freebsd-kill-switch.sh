@@ -113,11 +113,13 @@ fail() {
 }
 
 probe() {
-    jexec "$client" ping "-$1" -n -c "$4" -t "$5" -S "$2" "$3" >"$stage/ping" 2>&1
+    family=$1 source=$2 target=$3 count=$4 deadline=$5
+    shift 5
+    jexec "$client" ping "-$family" -n -c "$count" -t "$deadline" -S "$source" "$@" "$target" >"$stage/ping" 2>&1
 }
 
 reachable() {
-    if ! probe "$@" 3 5; then
+    if ! probe "$@" 3 5 -o; then
         cat "$stage/ping" >&2
         fail "Expected IPv$1 reachability from $2 to $3."
     fi
@@ -160,6 +162,11 @@ block drop in quick on $lan_link inet6 from $protected6 to ! <connected> label "
 EOF
 }
 
+# Resolve the IPv6 next hops before using their packet counters as assertions.
+reachable 6 "$regular6" 2001:db8:10::1
+reachable 6 "$regular6" "$wan_gateway6"
+reachable 6 "$regular6" "$wan6"
+
 # Independently demonstrate the tagged WAN guard when an inbound permissive rule
 # lets a protected packet reach output evaluation without an established state.
 {
@@ -171,15 +178,6 @@ EOF
 pf -f "$rules"
 pf -e
 reachable 4 "$regular4" "$wan4"
-jexec "$wan" tcpdump -U -ni "$wan_peer" -w "$stage/wan.pcap" ip6 >"$stage/tcpdump-error" 2>&1 &
-capture_pid=$!
-sleep 1
-probe 6 "$regular6" "$wan_gateway6" 2 4 || cat "$stage/ping"
-probe 6 "$regular6" "$wan6" 2 4 || cat "$stage/ping"
-kill "$capture_pid" || :
-wait "$capture_pid" || :
-cat "$stage/tcpdump-error"
-tcpdump -nn -r "$stage/wan.pcap" || :
 reachable 6 "$regular6" "$wan6"
 blocked 4 "$protected4" "$wan4"
 blocked 6 "$protected6" "$wan6"
@@ -236,3 +234,11 @@ reachable 6 "$regular6" "$wan6"
 reachable 4 "$protected4" 192.0.2.1
 reachable 6 "$protected6" 2001:db8:10::1
 echo 'Scoped eviction cleared stale protected states. Tunnel loss kept WAN blocked and preserved local access.'
+
+jexec "$router" ifconfig "$vpn_link" up
+write_protected_rules healthy
+reachable 4 "$protected4" "$vpn4"
+blocked 4 "$protected4" "$wan4"
+blocked 6 "$protected6" "$wan6"
+rule_matched vpn_route
+echo 'VPN access recovered while protected direct WAN traffic remained blocked.'
