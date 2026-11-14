@@ -99,10 +99,12 @@ final class Firewall
                 'label' => Policy::marker('block_dns', $interface),
                 'descr' => 'Blank VPN prevents use of the default resolver'
             ]);
-            $priority = isset($combinedInterfaces[$interface]) ? self::COMBINED_BASE + 2 : Policy::PRIORITY + 22;
+            $combined = isset($combinedInterfaces[$interface]);
+            $priority = $combined ? self::COMBINED_BASE + 2 : Policy::PRIORITY + 22;
             $firewall->registerFilterRule($priority, [
                 'type' => 'block', 'interface' => $interface, 'ipprotocol' => 'inet46',
-                'to' => '<' . Policy::LOCAL_TABLE . '>', 'to_not' => true, 'quick' => true,
+                'to' => '<' . ($combined ? Policy::COMBINED_LOCAL_TABLE : Policy::LOCAL_TABLE) . '>',
+                'to_not' => true, 'quick' => true,
                 'label' => Policy::marker('block', $interface),
                 'descr' => 'Blank VPN managed segment default deny'
             ]);
