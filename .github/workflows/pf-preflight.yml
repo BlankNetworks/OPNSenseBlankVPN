@@ -1,0 +1,20 @@
+name: FreeBSD PF forwarding preflight
+on:
+  push:
+    branches: [ci/blankvpn-pf-preflight]
+permissions:
+  contents: read
+jobs:
+  pf-forwarding:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b
+        with:
+          release: "15.1"
+          arch: x86_64
+          copyback: false
+          run: sh tests/freebsd-kill-switch.sh --isolated-vm
