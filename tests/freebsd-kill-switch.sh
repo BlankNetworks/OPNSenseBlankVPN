@@ -171,6 +171,15 @@ EOF
 pf -f "$rules"
 pf -e
 reachable 4 "$regular4" "$wan4"
+jexec "$wan" tcpdump -U -ni "$wan_peer" -w "$stage/wan.pcap" ip6 >"$stage/tcpdump-error" 2>&1 &
+capture_pid=$!
+sleep 1
+probe 6 "$regular6" "$wan_gateway6" 2 4 || cat "$stage/ping"
+probe 6 "$regular6" "$wan6" 2 4 || cat "$stage/ping"
+kill "$capture_pid" || :
+wait "$capture_pid" || :
+cat "$stage/tcpdump-error"
+tcpdump -nn -r "$stage/wan.pcap" || :
 reachable 6 "$regular6" "$wan6"
 blocked 4 "$protected4" "$wan4"
 blocked 6 "$protected6" "$wan6"
