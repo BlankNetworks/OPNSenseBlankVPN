@@ -77,7 +77,7 @@ jobs:
           cp "$RUNNER_TEMP/blankvpn-runtime/bin/sing-box" "dist/sing-box-$ARCH"
           cd dist
           sha256sum -c "os-blank-vpn-$PACKAGE_VERSION-$ARCH.pkg.sha256"
-      - name: Verify package and cores in FreeBSD 15.1
+      - name: Verify package, cores, and PF in FreeBSD 15.1
         uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
         env:
           PACKAGE_ARCH: ${{ matrix.arch }}
@@ -87,7 +87,12 @@ jobs:
           envs: PACKAGE_ARCH PACKAGE_VERSION
           copyback: false
           prepare: env ASSUME_ALWAYS_YES=yes pkg bootstrap
-          run: sh tests/freebsd-package.sh "dist/os-blank-vpn-$PACKAGE_VERSION-$PACKAGE_ARCH.pkg" "$PACKAGE_ARCH"
+          run: |
+            set -eu
+            sh tests/freebsd-package.sh "dist/os-blank-vpn-$PACKAGE_VERSION-$PACKAGE_ARCH.pkg" "$PACKAGE_ARCH"
+            if [ "$PACKAGE_ARCH" = amd64 ]; then
+              sh tests/freebsd-kill-switch.sh --isolated-vm
+            fi
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: blank-vpn-release-${{ matrix.arch }}

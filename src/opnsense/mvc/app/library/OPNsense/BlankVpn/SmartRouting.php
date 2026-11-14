@@ -15,6 +15,9 @@ final class SmartRouting
     public const MAX_DOMAINS = 1000;
     public const MAX_DOMAIN_BYTES = 131072;
     public const TABLE_MAX_AGE = 86400;
+    private const MAX_ADDRESS_TEST_BATCH = 128;
+    private const ORPHAN_CANDIDATES = 'learned-table-orphans.json';
+    private const MAX_ORPHAN_PRUNE_BATCH = 128;
     public const PRESETS = [
         'Netflix' => ['netflix.com', 'netflix.net', 'nflxext.com', 'nflximg.com', 'nflximg.net',
             'nflxsearch.net', 'nflxso.net', 'nflxvideo.net'],
@@ -46,7 +49,8 @@ final class SmartRouting
     {
         return !empty($settings['enabled']) && !empty($settings['interfaces']) &&
             (($settings['coverage'] ?? '') !== 'network' ||
-            in_array($settings['networkMode'] ?? '', ['full', 'full_multi', 'multi'], true));
+            (empty($settings['networkKillSwitch']) &&
+                in_array($settings['networkMode'] ?? '', ['full', 'full_multi', 'multi'], true)));
     }
 
     public static function activeServices(array $settings, array $services): array
@@ -350,16 +354,43 @@ final class SmartRouting
 
     public static function matchedAddresses(string $table, array $addresses): array
     {
-        if (!preg_match('/^bvs_[a-f0-9]{24}$/D', $table) ||
-            array_filter($addresses, static fn ($ip): bool => !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4))) {
+        if (!self::validAddressTest($table, $addresses)) {
             return [];
         }
-        $raw = (new Backend())->configdpRun('blankvpn matched_service_addresses', [$table], false, 10);
-        $learned = json_decode($raw, true);
-        if (!is_array($learned)) {
-            throw new \RuntimeException('The live Multi-Path destination table could not be read.');
+        $backend = new Backend();
+        $learned = [];
+        foreach (array_chunk(array_unique($addresses), self::MAX_ADDRESS_TEST_BATCH) as $batch) {
+            $raw = $backend->configdpRun('blankvpn matched_service_addresses', [$table, implode(',', $batch)], false, 10);
+            $matches = json_decode($raw, true);
+            if (!is_array($matches)) {
+                throw new \RuntimeException('The live Multi-Path destination table could not be read.');
+            }
+            array_push($learned, ...$matches);
         }
         return array_values(array_intersect($addresses, $learned));
+    }
+
+    public static function testLearnedAddresses(string $table, string $input): array
+    {
+        if (strlen($input) > 16 * self::MAX_ADDRESS_TEST_BATCH) {
+            throw new \InvalidArgumentException('Invalid Multi-Path destination test.');
+        }
+        $addresses = explode(',', $input);
+        if (count($addresses) > self::MAX_ADDRESS_TEST_BATCH || !self::validAddressTest($table, $addresses)) {
+            throw new \InvalidArgumentException('Invalid Multi-Path destination test.');
+        }
+        // FreeBSD pfctl returns 2 if any tested address is absent.
+        $output = Resolver::command(['/sbin/pfctl', '-v', '-t', $table, '-T', 'test', ...$addresses],
+            successStatuses: [0, 2]);
+        preg_match_all('/^M[ \t]+([0-9.]+)[ \t]*$/m', $output, $matches);
+        return array_values(array_intersect($addresses, $matches[1]));
+    }
+
+    private static function validAddressTest(string $table, array $addresses): bool
+    {
+        return preg_match('/^bvs_[a-f0-9]{24}$/D', $table) === 1 &&
+            !array_filter($addresses, static fn ($ip): bool =>
+                !is_string($ip) || !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4));
     }
 
     public static function status(): array
@@ -380,21 +411,76 @@ final class SmartRouting
 
     public static function countLearned(array $settings, array $services): array
     {
-        $counts = [];
-        $tableCounts = [];
-        foreach (self::learnedTables($settings, $services) as $id => $table) {
-            if (!array_key_exists($table, $tableCounts)) {
-                try {
-                    $output = Resolver::command(['/sbin/pfctl', '-t', $table, '-T', 'show']);
-                    $lines = preg_split('/\R/', trim($output), -1, PREG_SPLIT_NO_EMPTY);
-                    $tableCounts[$table] = count($lines);
-                } catch (\RuntimeException) {
-                    $tableCounts[$table] = null;
+        $tables = self::learnedTables($settings, $services);
+        if ($tables === []) {
+            return [];
+        }
+        $stats = self::learnedTableStats();
+        return array_map(static fn (string $table): ?int => $stats[$table]['count'] ?? null, $tables);
+    }
+
+    private static function learnedTableStats(): array
+    {
+        return self::parseLearnedTableStats(Resolver::command(['/sbin/pfctl', '-vv', '-s', 'Tables'], false));
+    }
+
+    private static function parseLearnedTableStats(string $output): array
+    {
+        // Restrict to Blank VPN tables in the main ruleset. An anchor may reuse a name.
+        preg_match_all('/^([cpairhC-]{7})\t(bv[sb]_[a-f0-9]{24})\R\h+Addresses:\h*(\d+)\h*$/m',
+            $output, $matches, PREG_SET_ORDER);
+        $tables = [];
+        foreach ($matches as [, $flags, $table, $count]) {
+            $tables[$table] = [
+                'count' => (int)$count,
+                'referenced' => strpbrk($flags, 'irh') !== false,
+            ];
+        }
+        return $tables;
+    }
+
+    public static function pruneLearnedTables(array $settings, array $services): void
+    {
+        // OPNsense holds this same lock while compiling and installing its PF rules.
+        $lock = @fopen('/tmp/rules.debug', 'r');
+        if ($lock === false) {
+            return;
+        }
+        try {
+            if (!flock($lock, LOCK_EX | LOCK_NB)) {
+                return;
+            }
+            $active = array_fill_keys(self::learnedTables($settings, $services), true);
+            $orphans = self::orphanLearnedTables(self::learnedTableStats(), $active);
+            $path = Policy::STATE_DIR . '/' . self::ORPHAN_CANDIDATES;
+            $previous = is_file($path) ? json_decode((string)file_get_contents($path), true) : [];
+            // Unreferenced tables must survive two hourly scans before removal.
+            foreach (array_intersect_key($orphans, is_array($previous) ? $previous : []) as $table => $unused) {
+                Resolver::command(['/sbin/pfctl', '-t', $table, '-T', 'kill']);
+                unset($orphans[$table]);
+            }
+            if ($orphans !== []) {
+                Policy::writeState(self::ORPHAN_CANDIDATES, json_encode($orphans, JSON_THROW_ON_ERROR));
+            } elseif (is_file($path)) {
+                unlink($path);
+            }
+        } finally {
+            fclose($lock);
+        }
+    }
+
+    private static function orphanLearnedTables(array $stats, array $active): array
+    {
+        $orphans = [];
+        foreach (array_diff_key($stats, $active) as $table => $entry) {
+            if (!$entry['referenced']) {
+                $orphans[$table] = true;
+                if (count($orphans) === self::MAX_ORPHAN_PRUNE_BATCH) {
+                    break;
                 }
             }
-            $counts[$id] = $tableCounts[$table];
         }
-        return $counts;
+        return $orphans;
     }
 
     public static function expire(array $settings, array $services): void

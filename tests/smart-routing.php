@@ -6,13 +6,33 @@ namespace OPNsense\Core {
     final class Backend
     {
         public static array $interfaces = [];
+        public static ?array $loaded = null;
+        public static bool $failStateReset = false;
+        public static array $resets = [];
 
         public function configdRun(string $action, bool $async, int $timeout): string
         {
+            if (self::$loaded !== null) {
+                if (in_array($action, ['blankvpn reload', 'blankvpn resolver'], true)) {
+                    return 'ok';
+                }
+                if ($action === 'blankvpn loaded') {
+                    return json_encode(self::$loaded, JSON_THROW_ON_ERROR);
+                }
+            }
             if ($action !== 'interface list ifconfig') {
                 throw new \RuntimeException('Unexpected interface query.');
             }
             return json_encode(self::$interfaces, JSON_THROW_ON_ERROR);
+        }
+
+        public function configdpRun(string $action, array $args, bool $async, int $timeout): string
+        {
+            if ($action !== 'blankvpn reset_ip' || self::$loaded === null) {
+                throw new \RuntimeException('Unexpected firewall command.');
+            }
+            self::$resets[] = $args[0];
+            return self::$failStateReset ? 'failed' : 'ok';
         }
     }
 
@@ -55,6 +75,48 @@ namespace OPNsense\BlankVpn {
             return unlink($from);
         }
         return \rename($from, $to);
+    }
+
+    function is_file(string $path): bool
+    {
+        return $path === Policy::STATE_DIR . '/health-reload' ? isset($GLOBALS['policyFiles']['health-reload']) : \is_file($path);
+    }
+
+    function file_get_contents(string $path, mixed ...$args): string|false
+    {
+        return $path === Policy::STATE_DIR . '/health-reload' ? ($GLOBALS['policyFiles']['health-reload'] ?? false)
+            : \file_get_contents($path, ...$args);
+    }
+
+    function unlink(string $path): bool
+    {
+        if ($path === Policy::STATE_DIR . '/health-reload') {
+            unset($GLOBALS['policyFiles']['health-reload']);
+            return true;
+        }
+        return \unlink($path);
+    }
+
+    final class BlankVpn
+    {
+        public object $settings;
+        public object $services;
+
+        public function __construct()
+        {
+            $this->settings = new class {
+                public function getNodeContent(): array
+                {
+                    return ['enabled' => '0', 'coverage' => 'network'];
+                }
+            };
+            $this->services = (object)['service' => new class {
+                public function iterateItems(): array
+                {
+                    return [];
+                }
+            }];
+        }
     }
 
     final class Diagnostics
@@ -110,14 +172,16 @@ namespace OPNsense\Firewall {
 
 namespace {
     use OPNsense\BlankVpn\Diagnostics;
+    use OPNsense\BlankVpn\BlankVpn;
     use OPNsense\BlankVpn\Firewall;
     use OPNsense\BlankVpn\NativeVpn;
+    use OPNsense\BlankVpn\Operations;
     use OPNsense\BlankVpn\Policy;
     use OPNsense\BlankVpn\Resolver;
     use OPNsense\BlankVpn\SmartRouting;
     use OPNsense\Firewall\Plugin;
 
-    foreach (['Policy', 'NativeVpn', 'Resolver', 'SmartRouting', 'ProxyRuntime', 'WanEgress', 'Firewall'] as $file) {
+    foreach (['Policy', 'NativeVpn', 'Resolver', 'SmartRouting', 'ProxyRuntime', 'WanEgress', 'Firewall', 'Operations'] as $file) {
         require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/' . $file . '.php';
     }
 
@@ -157,6 +221,89 @@ namespace {
     checkRouting(Policy::segmentNetworks(['lan', 'opt1']) === [
         '192.168.2.0/24', '2001:db8:12::/64', '10.12.0.0/24', '2001:db8:99::/64'
     ], 'Session resets must include the current tracked IPv6 prefix and static prefixes.');
+    $pathSettings = [
+        'enabled' => true, 'coverage' => 'network', 'networkMode' => 'full_multi',
+        'networkKillSwitch' => true, 'networkProfile' => 'base',
+        'interfaces' => ['lan', 'opt1'], 'smartInterfaces' => ['lan', 'opt1']
+    ];
+    $direct = ['action' => 'pass', 'gateway' => 'igb1'];
+    $vpn = ['action' => 'pass', 'gateway' => 'wg0'];
+    $guard = ['action' => 'block'];
+    $lanPath = Policy::marker('device', 'network:lan');
+    $vlanPath = Policy::marker('device', 'network:opt1');
+    $outage = Policy::marker('kill_outage', 'network:lan:inet');
+    $legacyBypass = Policy::marker('bypass', 'lan:inet:static');
+    $beforePaths = [$lanPath => $vpn, $vlanPath => $vpn, $legacyBypass => $direct];
+    $afterPaths = [$outage => $guard, $vlanPath => $vpn, $legacyBypass => $direct];
+    checkRouting(Operations::killSwitchStateScopes($pathSettings, [], [], $beforePaths, $afterPaths)
+        === ['192.168.2.0/24', '2001:db8:12::/64'],
+        'Closing a base tunnel or upgrading older Bypass states resets only the affected managed segment.');
+    checkRouting(Operations::killSwitchStateScopes($pathSettings, [], [], $afterPaths, $afterPaths, ['base'])
+        === ['192.168.2.0/24', '2001:db8:12::/64'],
+        'An observed outage reaps old states even when a native reload already installed its guard.');
+    checkRouting(Operations::killSwitchStateScopes($pathSettings, [], [], $afterPaths, $afterPaths, ['unrelated']) === [],
+        'A different exit failure must not reset a protected scope already blocking during its own outage.');
+    checkRouting(Operations::killSwitchStateScopes($pathSettings, [], [], $afterPaths, $afterPaths) === [],
+        'An unchanged active kill switch must leave unrelated states alone.');
+    $withoutBypass = array_diff_key($afterPaths, [$legacyBypass => true]);
+    checkRouting(Operations::killSwitchStateScopes($pathSettings, [], [], $afterPaths, $withoutBypass)
+        === ['192.168.2.0/24', '2001:db8:12::/64'],
+        'Upgrading a protected segment must drop previously admitted Bypass states even if its outage guard was active.');
+    \OPNsense\Core\Backend::$loaded = $afterPaths;
+    \OPNsense\Core\Backend::$failStateReset = true;
+    try {
+        Operations::reloadRoutingPaths(new BlankVpn(), $pathSettings, [], $beforePaths);
+        throw new LogicException('The simulated firewall connection reset must fail.');
+    } catch (RuntimeException $error) {
+        checkRouting(str_contains($error->getMessage(), 'reset previous connections') && Operations::pathReloadPending(),
+            'A failed state reset must retain the initial routing-path snapshot.');
+    }
+    \OPNsense\Core\Backend::$failStateReset = false;
+    \OPNsense\Core\Backend::$resets = [];
+    Operations::reloadRoutingPaths(new BlankVpn(), $pathSettings, [], $afterPaths);
+    checkRouting(\OPNsense\Core\Backend::$resets === ['192.168.2.0/24', '2001:db8:12::/64'] &&
+        !Operations::pathReloadPending(), 'Retry must reap states even if the desired guard is already loaded.');
+    \OPNsense\Core\Backend::$loaded = null;
+    $deviceSettings = array_replace($pathSettings, ['coverage' => 'device', 'interfaces' => ['lan', 'opt1', 'tailscale0']]);
+    $deviceRows = [
+        'lan-device' => ['interface' => 'lan', 'ip' => '192.168.2.9', 'ipv6' => '2001:db8:12::9', 'mode' => 'full'],
+        'vlan-device' => ['interface' => 'opt1', 'ip' => '10.12.0.4', 'mode' => 'full'],
+        'peer' => ['kind' => 'tailnet', 'interface' => 'tailscale0', 'ip' => '100.100.10.4', 'ipv6' => 'fd7a:115c:a1e0::4'],
+    ];
+    $devicePath = Policy::marker('device', 'lan-device');
+    checkRouting(Operations::killSwitchStateScopes($deviceSettings, $deviceRows, [], [$devicePath => $vpn], [])
+        === ['192.168.2.9', '2001:db8:12::9'], 'An individual failover resets only that device’s known addresses.');
+    checkRouting(Operations::killSwitchStateScopes($deviceSettings, $deviceRows, [], [], [
+        Policy::marker('kill_unbound_v4', 'lan') => $guard,
+        Policy::marker('kill_interface_v6', 'opt1') => $guard
+    ]) === ['192.168.2.0/24', '2001:db8:99::/64'],
+        'Unresolved DHCP and shared IPv6 guards reset only their affected interfaces and address families.');
+    checkRouting(Operations::killSwitchStateScopes($deviceSettings, $deviceRows, [], [], [
+        Policy::marker('kill_outage', 'peer:inet6') => $guard
+    ]) === ['100.100.10.4', 'fd7a:115c:a1e0::4'], 'A native Tailscale outage resets exact peer addresses.');
+    $monitoredServices = [['profile' => 'override'], ['profile' => 'base']];
+    checkRouting(Operations::killSwitchProbeExits($pathSettings, [], $monitoredServices) === ['base', 'override'] &&
+        Operations::killSwitchProbeExits(array_replace($pathSettings, ['networkMode' => 'full']), [], $monitoredServices)
+            === ['base'] &&
+        Operations::killSwitchProbeExits(array_replace($pathSettings, ['networkKillSwitch' => false]), [], $monitoredServices)
+            === [], 'Probe failures promptly enforce the chosen protected base and relevant service exits.');
+    $peerRule = array_replace($deviceRows['peer'], ['mode' => 'full', 'profile' => 'peer-exit', 'killSwitch' => '1']);
+    checkRouting(Operations::killSwitchProbeExits($deviceSettings, [$peerRule], $monitoredServices) === ['peer-exit'] &&
+        Operations::killSwitchProbeExits($deviceSettings, [array_replace($peerRule, ['paused' => '1'])], $monitoredServices)
+            === [], 'A paused peer must not make an unrelated exit fail closed.');
+    $wrongInterface = array_replace($peerRule, ['interface' => 'opt99', 'profile' => 'other-device']);
+    $unbound = array_replace($peerRule, ['ip' => '', 'profile' => 'unbound-device']);
+    $failover = array_replace($peerRule, ['profile' => 'primary', 'backup' => 'backup', 'failure' => 'backup', 'killSwitch' => '0']);
+    checkRouting(array_keys(Operations::policyProbeExits($deviceSettings,
+        [$peerRule, $wrongInterface, $unbound, $failover], $monitoredServices)) ===
+            ['override', 'base', 'peer-exit', 'primary', 'backup'],
+        'Periodic probes use in-scope active device and service exits only, including explicit failover.');
+    $tableCache = new ReflectionMethod(Operations::class, 'tableCacheName');
+    checkRouting($tableCache->invoke(null, 'bvi_' . str_repeat('0', 24)) &&
+        $tableCache->invoke(null, substr(Policy::marker('src', 'lan'), 0, 31)) &&
+        !$tableCache->invoke(null, 'bvs_' . str_repeat('0', 24)) &&
+        !$tableCache->invoke(null, 'proxy-catalog.json'),
+        'Firewall cache cleanup must target static plugin table files only.');
     $local = Policy::localNetworks(['localNetworks' => []]);
     checkRouting(in_array('2001:db8:12::/64', $local, true) &&
         !in_array('2001:db8:ffff::/64', $local, true), 'Keep the tracked LAN prefix local and exclude WAN IPv6.');
@@ -320,9 +467,12 @@ namespace {
         isset($wholeDown->rules[Policy::marker('kill', 'network:lan')],
             $wholeDown->rules[Policy::marker('kill_v6', 'network:lan')]) && $wholeDown->nat === [],
         'A VPN outage under Whole-Network coverage blocks both address families without WAN fallback.');
+    $networkOutage = Policy::marker('kill_outage', 'network:lan:inet');
+    $networkOutage6 = Policy::marker('kill_outage', 'network:lan:inet6');
+    $withoutKill = array_replace($networkSettings, ['networkKillSwitch' => false]);
     $bypassList = ['china' => array_replace($chinaService['china'], ['profile' => SmartRouting::BYPASS])];
     $bypassTable = SmartRouting::bypassTable($bypassList);
-    checkRouting(SmartRouting::activeServices($networkSettings, $bypassList + $services) === $bypassList &&
+    checkRouting(SmartRouting::activeServices($withoutKill, $bypassList + $services) === $bypassList &&
         SmartRouting::activeServices($settings, $bypassList + $services) === $services + $bypassList,
         'A single-tunnel network uses Bypass, and device coverage can use Bypass with other Multi-Path lists.');
     checkRouting(SmartRouting::dnsDirectives($bypassList, $profiles, ['9.9.9.9@203.0.113.11']) === [
@@ -343,8 +493,8 @@ namespace {
     ];
     $compileBypass = new ReflectionMethod(Firewall::class, 'registerBypass');
     $withBypass = new Plugin();
-    $network->invoke(null, $withBypass, $networkSettings, $interfaces, $profiles, [], false, $wan, true);
-    $compileBypass->invoke(null, $withBypass, $networkSettings, $interfaces, $bypassList, $wan, [], new Diagnostics());
+    $network->invoke(null, $withBypass, $withoutKill, $interfaces, $profiles, [], false, $wan, true);
+    $compileBypass->invoke(null, $withBypass, $withoutKill, $interfaces, $bypassList, $wan, [], new Diagnostics());
     $tag = $withBypass->rules[Policy::marker('bypass_default', 'lan:inet')];
     $directMarker = Policy::marker('bypass', 'lan:inet:learned');
     $directGuard = Policy::marker('bypass_guard', 'lan:inet:learned');
@@ -368,15 +518,17 @@ namespace {
         $dnsPass['to_port'] === '53' && $dnsPass['priority'] < $dnsGuard['priority'] && $dnsGuard['type'] === 'block',
         'Only the specific router-originated WAN DNS connection uses the early output route and guard.');
     $withBypassDown = new Plugin();
-    $network->invoke(null, $withBypassDown, $networkSettings, $interfaces, $profiles,
+    $withKill = array_replace($networkSettings, ['networkKillSwitch' => true]);
+    $network->invoke(null, $withBypassDown, $withKill, $interfaces, $profiles,
         ['jp' => ['reachable' => false]], false, $wan, true);
-    $compileBypass->invoke(null, $withBypassDown, $networkSettings, $interfaces, $bypassList, $wan, [], new Diagnostics());
-    checkRouting($withBypassDown->rules[$directMarker]['type'] === 'pass' &&
-        $withBypassDown->rules[$directMarker]['priority'] < $withBypassDown->rules[Policy::marker('kill', 'network:lan')]['priority'] &&
-        count($withBypassDown->dns) === 2, 'A tunnel outage preserves WAN Bypass and its classification while blocking other internet traffic.');
+    $compileBypass->invoke(null, $withBypassDown, $withKill, $interfaces, $bypassList, $wan, [], new Diagnostics());
+    checkRouting(!isset($withBypassDown->rules[$directMarker]) &&
+        isset($withBypassDown->rules[$networkOutage], $withBypassDown->rules[$networkOutage6]) &&
+        array_column($withBypassDown->dns, 'local-port') === array_fill(0, 2, (string)Resolver::LOCAL_PORT),
+        'The checked Kill Switch disables Bypass rules and provides only local DNS during a network outage.');
     $mixedBypass = ['china' => array_replace($bypassList['china'], ['domains' => ['.cn', '198.51.100.0/24']])];
     $withMixedBypass = new Plugin();
-    $compileBypass->invoke(null, $withMixedBypass, $networkSettings, $interfaces, $mixedBypass,
+    $compileBypass->invoke(null, $withMixedBypass, $withoutKill, $interfaces, $mixedBypass,
         ['inet' => $wan['inet']], [], new Diagnostics());
     $fixedDirect = $withMixedBypass->rules[Policy::marker('bypass', 'lan:inet:static')];
     $ipv6Guard = $withMixedBypass->rules[Policy::marker('bypass_guard', 'lan:inet6:learned')];
@@ -406,21 +558,26 @@ namespace {
     $wholeMulti = array_replace($networkSettings, ['networkMode' => 'multi', 'networkKillSwitch' => true]);
     $wholeMultiDown = new Plugin();
     $network->invoke(null, $wholeMultiDown, $wholeMulti, $interfaces, $profiles, [], true);
-    $networkKill = $wholeMultiDown->rules[Policy::marker('kill', 'network:lan')];
+    $networkKill = $wholeMultiDown->rules[$networkOutage];
     checkRouting($networkKill['interface'] === 'lan' && $networkKill['from'] === 'any' && $networkKill['to_not'] &&
         $networkKill['priority'] < $pass['priority'] &&
         isset($wholeMultiDown->rules[Policy::marker('kill_v6', 'network:lan')]) &&
-        $wholeMultiDown->dns[0]['nordr'] && $wholeMultiDown->dns[0]['priority'] < $good->dns[0]['priority'],
+        $wholeMultiDown->dns[0]['local-port'] === (string)Resolver::LOCAL_PORT &&
+        $wholeMultiDown->dns[0]['priority'] < $good->dns[0]['priority'],
         'A checked network Multi-Path outage blocks both families ahead of service routing and DNS forwarding.');
     $wholeMultiUp = new Plugin();
     $network->invoke(null, $wholeMultiUp, $wholeMulti, $interfaces, $profiles, $liveHealth, false);
-    $network->invoke(null, $wholeMultiUp, array_replace($wholeMulti, ['networkKillSwitch' => false]),
+    $wholeMultiUnchecked = new Plugin();
+    $network->invoke(null, $wholeMultiUnchecked, array_replace($wholeMulti, ['networkKillSwitch' => false]),
         $interfaces, $profiles, [], true);
-    checkRouting($wholeMultiUp->rules === [], 'Only a checked Multi-Path outage adds a network-wide guard.');
+    checkRouting($wholeMultiUnchecked->rules === [] && !isset($wholeMultiUp->rules[$networkOutage]) &&
+        $wholeMultiUp->rules[Policy::marker('kill', 'network:lan')]['priority'] > $pass['priority'] &&
+        $wholeMultiUp->dns[0]['local-port'] === (string)Resolver::PROTECTED_MULTI_PORT,
+        'Healthy protected Multi-Path allows listed traffic before denying unmatched traffic and isolates DNS.');
     $multiBypassOutage = new Plugin();
     $network->invoke(null, $multiBypassOutage, $wholeMulti, $interfaces, $profiles, [], true, $wan, true);
-    checkRouting(array_column($multiBypassOutage->dns, 'local-port') === array_fill(0, 2, (string)Resolver::BYPASS_PORT),
-        'An explicit Multi-Path Kill Switch outage only keeps DNS for Bypass destinations.');
+    checkRouting(array_column($multiBypassOutage->dns, 'local-port') === array_fill(0, 2, (string)Resolver::LOCAL_PORT),
+        'An explicit Multi-Path Kill Switch outage prevents native DNS including Bypass destinations.');
     $multiNetwork = Policy::routingSettings(array_replace($networkSettings, [
         'networkMode' => 'multi', 'interfaces' => ['lan', 'opt2'], 'tailscaleInterfaces' => ['opt2'],
         'strictInterfaces' => ['lan'], 'smartAssignedOnly' => true
@@ -442,15 +599,17 @@ namespace {
     $baseDnsKill = Policy::marker('kill_dns', 'network:lan');
     $netflixPass = Policy::marker('service', 'streaming:lan');
     $netflixKill = Policy::marker('service_guard', 'streaming:lan');
-    $compileCombined = function (array $health = [], array $wanRoutes = [], bool $kill = false) use (
+    $compileCombined = function (array $health = [], array $wanRoutes = [], bool $kill = false,
+        bool $serviceDown = false) use (
         $network, $compileSmart, $combinedNetwork, $interfaces, $combinedProfiles, $services,
         $compileBypass, $bypassList
     ): Plugin {
         $plan = new Plugin();
         $settings = array_replace($combinedNetwork, ['networkKillSwitch' => $kill]);
-        $network->invoke(null, $plan, $settings, $interfaces, $combinedProfiles, $health, false, $wanRoutes, true);
+        $network->invoke(null, $plan, $settings, $interfaces, $combinedProfiles, $health, false,
+            $wanRoutes, !$kill, $serviceDown);
         $compileSmart->invoke(null, $plan, $combinedNetwork, $interfaces, $services, $combinedProfiles, $health);
-        $compileBypass->invoke(null, $plan, $combinedNetwork, $interfaces, $bypassList, $wanRoutes, [], new Diagnostics());
+        $compileBypass->invoke(null, $plan, $settings, $interfaces, $bypassList, $wanRoutes, [], new Diagnostics());
         return $plan;
     };
     $combined = $compileCombined([], $wan);
@@ -472,8 +631,19 @@ namespace {
         'A failed service guard takes precedence over a healthy default VPN.');
     $baseDown = $compileCombined(['us' => ['reachable' => false]], $wan, true);
     checkRouting(!isset($baseDown->rules[$basePass]) && isset($baseDown->rules[$netflixPass], $baseDown->rules[$baseKill]) &&
-        !isset($baseDown->rules[$fallbackMarker]) && isset($baseDown->rules[$directMarker]) &&
-        count($baseDown->dns) === 2, 'A base outage still permits working overrides while ordinary traffic remains blocked.');
+        !isset($baseDown->rules[$fallbackMarker], $baseDown->rules[$directMarker]) &&
+        $baseDown->rules[$networkOutage]['priority'] < $baseDown->rules[$netflixPass]['priority'] &&
+        array_column($baseDown->dns, 'local-port') === array_fill(0, 2, (string)Resolver::LOCAL_PORT),
+        'A protected base outage blocks all internet traffic before the healthy overrides and keeps only local DNS.');
+    $protectedCombined = $compileCombined([], $wan, true);
+    checkRouting(!isset($protectedCombined->rules[$directMarker], $protectedCombined->rules[$networkOutage]) &&
+        isset($protectedCombined->rules[$basePass], $protectedCombined->rules[$netflixPass]) &&
+        $protectedCombined->dns[0]['local-port'] === (string)Resolver::protectedCombinedPort($chicago),
+        'Healthy protected combined routing uses both chosen tunnels and never enables ISP Bypass.');
+    $protectedServiceDown = $compileCombined(['jp' => ['reachable' => false]], $wan, true, true);
+    checkRouting(!isset($protectedServiceDown->rules[$basePass], $protectedServiceDown->rules[$directMarker]) &&
+        isset($protectedServiceDown->rules[$networkOutage], $protectedServiceDown->rules[$networkOutage6]),
+        'A failed configured override closes otherwise healthy protected base coverage.');
     $combinedFallback = $compileCombined(['us' => ['reachable' => false]], $wan);
     checkRouting($combinedFallback->rules[$netflixKill]['priority'] < $combinedFallback->rules[$fallbackMarker]['priority'] &&
         $combinedFallback->rules[$fallbackMarker]['priority'] < $combinedFallback->rules[$baseKill]['priority'] &&
@@ -492,18 +662,46 @@ namespace {
         'profile' => 'jp', 'backup' => '', 'failure' => 'block'];
     $compileDevice = new ReflectionMethod(Firewall::class, 'registerAssignments');
     $diag = new Diagnostics();
+    $protectedLan = ['device-a' => $assignment + ['mode' => 'full', 'ipv6' => '2001:db8::23']];
+    $sharedLan = new ReflectionMethod(Firewall::class, 'registerSharedLanGuards');
+    $deviceCoverage = array_replace($settings, ['coverage' => 'device']);
+    $privacyGuard = new Plugin();
+    $sharedLan->invoke(null, $privacyGuard, $interfaces, $deviceCoverage, $protectedLan, $diag);
+    $v6 = $privacyGuard->rules[Policy::marker('kill_interface_v6', 'lan')];
+    checkRouting($v6['from'] === 'any' && $v6['ipprotocol'] === 'inet6' && $v6['to_not'] &&
+        !isset($privacyGuard->rules[Policy::marker('kill_unbound_v4', 'lan')]) &&
+        $privacyGuard->dns[0]['priority'] < 64 && $privacyGuard->dns[0]['local-port'] === (string)Resolver::LOCAL_PORT,
+        'A protected LAN rule covers unknown IPv6 sources and intercepts DNS before shared Multi-Path DNS.');
+    $unbound = new Plugin();
+    $diag->reserved = false;
+    $sharedLan->invoke(null, $unbound, $interfaces, $deviceCoverage, $protectedLan, $diag);
+    $diag->reserved = true;
+    checkRouting(($unbound->rules[Policy::marker('kill_unbound_v4', 'lan')]['from'] ?? '') === 'any' &&
+        array_column($unbound->dns, 'priority') === [53, 53],
+        'An unconfirmed IPv4 identity closes upstream access and DNS for that interface.');
+    $uplink = new Plugin();
+    (new ReflectionMethod(Firewall::class, 'registerUplinkGuards'))->invoke(null, $uplink, [
+        'wan' => ['if' => 'igc0'], 'opt2' => ['if' => 'igc2', 'gatewayv6' => 'ISP6'],
+        'opt3' => ['if' => 'wg0', 'gateway' => 'VPN'], 'lan' => ['if' => 'igc1']
+    ]);
+    checkRouting(array_keys($uplink->rules) === [Policy::marker('tunnel_only', 'wan'), Policy::marker('tunnel_only', 'opt2')] &&
+        $uplink->rules[Policy::marker('tunnel_only', 'wan')]['ipprotocol'] === 'inet46' &&
+        $uplink->rules[Policy::marker('tunnel_only', 'opt2')]['tagged'] === 'blankvpn_tunnel_only',
+        'Tagged tunnel traffic is blocked outbound on primary and additional ISP gateways.');
     $deviceScopes = Firewall::bypassScopes($settings + ['coverage' => 'device'], [
         'protected' => $assignment + ['mode' => 'full', 'ipv6' => '2001:db8::23'],
         'blocked' => array_replace($assignment, ['mode' => 'blocked', 'ip' => '192.0.2.24']),
         'off' => array_replace($assignment, ['mode' => 'disabled', 'ip' => '192.0.2.25']),
         'unassigned' => array_replace($assignment, ['mode' => 'default', 'ip' => '192.0.2.26']),
+        'unprotected' => array_replace($assignment, ['mode' => 'full', 'ip' => '192.0.2.27', 'killSwitch' => '0']),
         'unmanaged' => array_replace($assignment, ['mode' => 'full', 'interface' => 'opt2'])
     ], $diag);
     checkRouting($deviceScopes === ['lan' => [
-        'inet' => ['all' => true, 'sources' => ['192.0.2.23'], 'excluded' => ['192.0.2.23', '192.0.2.24', '192.0.2.25']],
-        'inet6' => ['all' => true, 'sources' => ['2001:db8::23'], 'excluded' => ['2001:db8::23']]
+        'inet' => ['all' => true, 'sources' => ['192.0.2.27'],
+            'excluded' => ['192.0.2.23', '192.0.2.24', '192.0.2.25', '192.0.2.27']],
+        'inet6' => ['all' => true, 'sources' => [], 'excluded' => ['2001:db8::23']]
     ]] && Firewall::bypassScopes(array_replace($networkSettings, ['networkMode' => 'blocked']), [], $diag) === [],
-        'Direct Bypass covers the selected network or valid routed devices and excludes explicitly blocked or Off devices.');
+        'Direct Bypass excludes protected, Blocked, and Off devices while remaining available to eligible unchecked scopes.');
     $combinedDeviceSettings = $settings + ['smartAssignedOnly' => true];
     $combinedDevice = new Plugin();
     $combinedAssignments = [
@@ -526,7 +724,8 @@ namespace {
         $combinedDevice->rules[Policy::marker('device', 'device-a')]['from'] === '192.0.2.23' &&
         $combinedDevice->rules[Policy::marker('kill_v6', 'device-a')]['from'] === '2001:db8::23' &&
         array_column($combinedDevice->dns, 'local-port') === [
-            (string)Resolver::combinedPort($chicago), (string)Resolver::combinedPort($chicago), (string)SmartRouting::PORT
+            (string)Resolver::protectedCombinedPort($chicago), (string)Resolver::protectedCombinedPort($chicago),
+            (string)SmartRouting::PORT
         ], 'Device overrides carry their own local scope and DNS default while ordinary Multi-Path devices keep theirs.');
     $good = new Plugin();
     $compileDevice->invoke(null, $good, $settings, $interfaces, ['device-a' => $assignment], $profiles, [], $diag);
@@ -534,10 +733,20 @@ namespace {
     $kill = $good->rules[Policy::marker('kill', 'device-a')];
     checkRouting($device['from'] === '192.0.2.23' && $kill['from'] === $device['from'], 'A shared-LAN guard applies to only the assigned IPv4.');
     checkRouting($device['priority'] < $kill['priority'] && $kill['to_not'], 'Protect the assigned address without blocking approved local destinations.');
+    checkRouting($device['tag'] === 'blankvpn_tunnel_only', 'Every protected tunnel state carries the WAN egress tag.');
     $down = new Plugin();
     $compileDevice->invoke(null, $down, $settings, $interfaces, ['device-a' => $assignment], $profiles, ['jp' => ['reachable' => false]], $diag);
     checkRouting(isset($down->rules[Policy::marker('kill', 'device-a')]) &&
         !isset($down->rules[Policy::marker('device', 'device-a')]), 'Down exit must remove the pass and preserve the IPv4 guard.');
+    $legacyConflict = new Plugin();
+    $conflictingRule = array_replace($assignment, ['failure' => 'wan', 'killSwitch' => '1', 'ipv6' => '2001:db8::23']);
+    $compileDevice->invoke(null, $legacyConflict, $settings, $interfaces, ['device-a' => $conflictingRule],
+        $profiles, ['jp' => ['reachable' => false]], $diag, false, true);
+    checkRouting(isset($legacyConflict->rules[Policy::marker('kill_outage', 'device-a:inet')],
+        $legacyConflict->rules[Policy::marker('kill_outage', 'device-a:inet6')]) &&
+        !isset($legacyConflict->rules[Policy::marker('device', 'device-a')]) &&
+        array_column($legacyConflict->dns, 'local-port') === array_fill(0, 2, (string)Resolver::LOCAL_PORT),
+        'An explicit checked per-device switch overrides old or imported WAN fallback settings.');
     \OPNsense\Core\Config::$fixture = new SimpleXMLElement('<opnsense/>');
     $native = \OPNsense\Core\Config::$fixture->addChild('OPNsense')->addChild('tailscale')->addChild('settings');
     $native->addChild('enabled', '1');
@@ -582,12 +791,17 @@ namespace {
     ], $profiles, [], $diag, true);
     checkRouting($deviceMulti->rules[Policy::marker('kill', 'protected')]['from'] === '192.0.2.23' &&
         $deviceMulti->rules[Policy::marker('kill_v6', 'protected')]['from'] === '2001:db8::23' &&
+        isset($deviceMulti->rules[Policy::marker('kill_outage', 'protected:inet')]) &&
         !isset($deviceMulti->rules[Policy::marker('kill', 'unprotected')]) &&
-        $deviceMulti->dns[0]['nordr'], 'A device Multi-Path outage closes only the opted-in addresses.');
+        $deviceMulti->dns[0]['local-port'] === (string)Resolver::LOCAL_PORT,
+        'A device Multi-Path outage closes only the opted-in addresses.');
     $deviceMultiUp = new Plugin();
     $compileDevice->invoke(null, $deviceMultiUp, $settings, $interfaces,
         ['protected' => $multiAssignment], $profiles, $liveHealth, $diag, false);
-    checkRouting($deviceMultiUp->rules === [], 'Healthy Multi-Path does not block regular internet.');
+    checkRouting(isset($deviceMultiUp->rules[Policy::marker('kill', 'protected')]) &&
+        !isset($deviceMultiUp->rules[Policy::marker('kill_outage', 'protected:inet')]) &&
+        $deviceMultiUp->dns[0]['local-port'] === (string)Resolver::PROTECTED_MULTI_PORT,
+        'Healthy protected Multi-Path keeps a default-deny guard and uses the service-only resolver.');
     checkRouting(Policy::killSwitch($assignment) && !Policy::killSwitch(array_replace($assignment, ['mode' => 'multi'])) &&
         !Policy::killSwitch(array_replace($assignment, ['failure' => 'backup'])),
         'Existing one-exit, backup and Multi-Path policies keep their settings during an upgrade.');

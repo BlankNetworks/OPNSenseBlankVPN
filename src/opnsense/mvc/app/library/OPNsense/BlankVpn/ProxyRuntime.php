@@ -12,7 +12,9 @@ final class ProxyRuntime
     public const SLOTS = 8;
     public const FIRST_DNS_PORT = 46660;
     private const TEST_SLOT = self::SLOTS;
-    private const CONFIG_VERSION = 2;
+    private const CONFIG_VERSION = 3;
+    private const RETRY_LIMIT = 900;
+    private const STATUS_FILE = 'proxy-status.json';
     private const BIN = [
         'mihomo' => '/usr/local/libexec/blankvpn/mihomo',
         'tun2socks' => '/usr/local/libexec/blankvpn/tun2socks',
@@ -50,8 +52,13 @@ final class ProxyRuntime
             }
         } else {
             foreach (Policy::assignments($model, true) as $assignment) {
-                if (Policy::usesBase(Policy::mode($assignment))) {
-                    array_push($selected, $assignment['profile'], $assignment['backup']);
+                if (!Policy::usesBase(Policy::mode($assignment)) ||
+                    !in_array($assignment['interface'], $settings['interfaces'], true)) {
+                    continue;
+                }
+                $selected[] = $assignment['profile'];
+                if (($assignment['failure'] ?? '') === 'backup') {
+                    $selected[] = $assignment['backup'];
                 }
             }
         }
@@ -169,6 +176,7 @@ final class ProxyRuntime
                 'allow-lan' => false, 'bind-address' => '127.0.0.1', 'socks-port' => $route['socksPort'],
                 'mode' => 'rule', 'log-level' => 'silent', 'ipv6' => true,
                 'geo-auto-update' => false, 'tun' => ['enable' => false],
+                'profile' => ['store-selected' => false, 'store-fake-ip' => false],
                 'proxies' => [$target], 'rules' => ['MATCH,blankvpn-upstream'],
                 'dns' => [
                     'enable' => true, 'listen' => '127.0.0.1:' . $route['proxyDns'],
@@ -190,9 +198,10 @@ final class ProxyRuntime
             'bridge' => self::BIN['tun2socks'], 'mihomo' => self::BIN['mihomo'],
             'adapter' => $route['core'] === 'mihomo' ? null : self::base($route['core'])
         ]);
-        if (($state['configVersion'] ?? 0) !== self::CONFIG_VERSION || $recorded !== $paths || ($state['node'] ?? null) !== $route['node'] || ($state['id'] ?? null) !== $route['id'] ||
-            self::pid($slot, 'bridge') === null || self::pid($slot, 'mihomo') === null ||
-            ($route['core'] !== 'mihomo' && self::pid($slot, 'adapter') === null)) {
+        if (($state['configVersion'] ?? 0) !== self::CONFIG_VERSION || $recorded !== $paths ||
+            ($state['node'] ?? null) !== $route['node'] || ($state['id'] ?? null) !== $route['id'] ||
+            self::pid($slot, 'bridge', $state) === null || self::pid($slot, 'mihomo', $state) === null ||
+            ($route['core'] !== 'mihomo' && self::pid($slot, 'adapter', $state) === null)) {
             return false;
         }
         $interface = self::ifconfig($route['interface']);
@@ -200,7 +209,7 @@ final class ProxyRuntime
             preg_match('/^\s*inet\s+' . preg_quote(explode('/', $route['address'])[0], '/') . '\s/m', $interface) === 1;
     }
 
-    public static function reconcile(BlankVpn $model): array
+    public static function reconcile(BlankVpn $model, bool $background = false): array
     {
         // Maintenance holds the operation lock, so this only cleans an interrupted test.
         try {
@@ -209,18 +218,40 @@ final class ProxyRuntime
             syslog(LOG_WARNING, 'Blank VPN proxy test cleanup: ' . $error->getMessage());
         }
         $desired = Policy::settings($model)['enabled'] ? array_column(self::assignedRoutes($model), null, 'slot') : [];
-        $catalog = $desired === [] ? [] : ProxyCatalog::read()['nodes'];
+        $previous = self::statusRecord();
+        $catalog = null;
+        $catalogError = null;
         $errors = [];
         $active = [];
+        $retries = [];
         for ($slot = 0; $slot < self::SLOTS; $slot++) {
             $route = $desired[$slot] ?? null;
             if ($route !== null && self::ready($route)) {
                 $active[] = $route['id'];
                 continue;
             }
+            $key = $route === null ? '' : hash('sha256', $route['id'] . ':' . $route['node'] . ':' . $route['core']);
+            $retry = $previous['retries'][$slot] ?? [];
+            $retry = is_array($retry) ? $retry : [];
+            $now = time();
+            if ($route !== null && $background && self::waitingToRetry($retry, $key, $now)) {
+                $retries[$slot] = $retry;
+                $errors[$route['id']] = $previous['errors'][$route['id']] ?? 'The proxy tunnel is waiting to restart.';
+                continue;
+            }
             try {
                 self::stop($slot);
                 if ($route !== null) {
+                    if ($catalog === null && $catalogError === null) {
+                        try {
+                            $catalog = ProxyCatalog::read()['nodes'];
+                        } catch (RuntimeException $error) {
+                            $catalogError = $error;
+                        }
+                    }
+                    if ($catalogError !== null) {
+                        throw $catalogError;
+                    }
                     $node = $catalog[$route['node']] ?? null;
                     if (!is_array($node)) {
                         throw new DomainException('Restore the proxy catalog entry for this exit.');
@@ -231,21 +262,48 @@ final class ProxyRuntime
             } catch (DomainException | RuntimeException $error) {
                 if ($route !== null) {
                     $errors[$route['id']] = $error->getMessage();
+                    $retries[$slot] = self::nextRetry($retry, $key, time());
                 }
             }
         }
-        $result = ['active' => $active, 'errors' => $errors];
-        if ($desired !== [] || is_file(Policy::STATE_DIR . '/proxy-status.json')) {
-            Policy::writeState('proxy-status.json', json_encode($result, JSON_THROW_ON_ERROR));
+        $state = ['active' => $active, 'errors' => $errors, 'retries' => $retries];
+        if ($state !== $previous) {
+            Policy::writeState(self::STATUS_FILE, json_encode($state, JSON_THROW_ON_ERROR));
         }
-        return $result;
+        return ['active' => $active, 'errors' => $errors];
     }
 
     public static function lastStatus(): array
     {
-        $path = Policy::STATE_DIR . '/proxy-status.json';
-        $data = is_file($path) ? json_decode((string)file_get_contents($path), true, 8) : null;
-        return is_array($data) ? $data : ['active' => [], 'errors' => []];
+        $state = self::statusRecord();
+        return ['active' => $state['active'], 'errors' => $state['errors']];
+    }
+
+    private static function statusRecord(): array
+    {
+        $path = Policy::STATE_DIR . '/' . self::STATUS_FILE;
+        $raw = is_file($path) ? file_get_contents($path, false, null, 0, 32769) : false;
+        $data = is_string($raw) && strlen($raw) <= 32768 ? json_decode($raw, true, 8) : null;
+        return [
+            'active' => is_array($data['active'] ?? null) ? $data['active'] : [],
+            'errors' => is_array($data['errors'] ?? null) ? $data['errors'] : [],
+            'retries' => is_array($data['retries'] ?? null) ? $data['retries'] : []
+        ];
+    }
+
+    private static function waitingToRetry(array $previous, string $key, int $now): bool
+    {
+        $retryAt = $previous['retryAt'] ?? 0;
+        return ($previous['key'] ?? null) === $key && is_int($retryAt) &&
+            $retryAt > $now && $retryAt <= $now + self::RETRY_LIMIT;
+    }
+
+    private static function nextRetry(array $previous, string $key, int $now): array
+    {
+        $failures = ($previous['key'] ?? null) === $key && is_int($previous['failures'] ?? null)
+            ? min(5, max(1, $previous['failures']) + 1) : 1;
+        $delay = min(self::RETRY_LIMIT, 60 * (2 ** ($failures - 1)));
+        return ['key' => $key, 'failures' => $failures, 'retryAt' => $now + $delay];
     }
 
     public static function testNode(string $id, ?array $route = null): array
@@ -553,16 +611,16 @@ final class ProxyRuntime
         ]);
     }
 
-    private static function pid(int $slot, string $name): ?int
+    private static function pid(int $slot, string $name, ?array $marker = null): ?int
     {
         $paths = self::path($slot);
         $file = $paths . '/' . $name . '.pid';
-        $value = is_file($file) ? trim((string)file_get_contents($file)) : '';
+        $value = is_file($file) ? trim((string)file_get_contents($file, false, null, 0, 32)) : '';
         if (!ctype_digit($value) || (int)$value < 2) {
             return null;
         }
         $args = trim(Resolver::command(['/bin/ps', '-ww', '-p', $value, '-o', 'command='], false));
-        $marker = self::marker($slot);
+        $marker ??= self::marker($slot);
         $tool = match ($name) {
             'bridge' => 'tun2socks',
             'mihomo' => 'mihomo',
@@ -607,17 +665,24 @@ final class ProxyRuntime
         if (!is_dir($paths)) {
             return;
         }
+        if (is_link($paths) || (fileperms($paths) & 0077) !== 0) {
+            throw new RuntimeException('The proxy runtime directory is not private.');
+        }
         $owner = self::marker($slot);
         foreach (['bridge', 'mihomo', 'adapter'] as $name) {
-            $pid = self::pid($slot, $name);
+            $pid = self::pid($slot, $name, $owner);
             if ($pid === null) {
                 continue;
             }
             Resolver::command(['/bin/kill', '-TERM', (string)$pid], false);
-            for ($attempt = 0; $attempt < 15 && self::pid($slot, $name) !== null; $attempt++) {
-                usleep(100000);
+            if (self::waitForExit($slot, $name, $owner, $pid)) {
+                continue;
             }
-            if (self::pid($slot, $name) !== null) {
+            // Validate the child again immediately before escalating. Its PID may have been reused.
+            if (self::pid($slot, $name, $owner) === $pid) {
+                Resolver::command(['/bin/kill', '-KILL', (string)$pid], false);
+            }
+            if (!self::waitForExit($slot, $name, $owner, $pid)) {
                 throw new RuntimeException('A proxy core is still stopping. Retry after it exits.');
             }
         }
@@ -627,10 +692,21 @@ final class ProxyRuntime
                 Resolver::command(['/sbin/ifconfig', $device, 'destroy']);
             }
         }
-        foreach (['owner.json', 'adapter.json', 'mihomo.json', 'bridge.pid', 'mihomo.pid', 'adapter.pid'] as $file) {
+        foreach (['owner.json', 'adapter.json', 'mihomo.json', 'bridge.pid', 'mihomo.pid', 'adapter.pid', 'cache.db'] as $file) {
             if (is_file($paths . '/' . $file)) {
                 unlink($paths . '/' . $file);
             }
         }
+    }
+
+    private static function waitForExit(int $slot, string $name, array $owner, int $pid): bool
+    {
+        for ($attempt = 0; $attempt < 10; $attempt++) {
+            if (self::pid($slot, $name, $owner) !== $pid) {
+                return true;
+            }
+            usleep(100000);
+        }
+        return self::pid($slot, $name, $owner) !== $pid;
     }
 }

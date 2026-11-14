@@ -11,7 +11,10 @@ final class Resolver
     public const BYPASS_PORT = 46658;
     public const DEVICE_BYPASS_PORT = 46659;
     public const SERVICE_PORT = 46668;
+    public const PROTECTED_MULTI_PORT = 46669;
     private const COMBINED_PORT_OFFSET = 200;
+    private const PROTECTED_PORT_OFFSET = 400;
+    private const PROTECTED_COMBINED_PORT_OFFSET = 800;
 
     private static function vpnPorts(): array
     {
@@ -26,8 +29,23 @@ final class Resolver
 
     public static function combinedPort(array $profile): int
     {
+        return self::profilePort($profile, self::COMBINED_PORT_OFFSET);
+    }
+
+    public static function protectedPort(array $profile): int
+    {
+        return self::profilePort($profile, self::PROTECTED_PORT_OFFSET);
+    }
+
+    public static function protectedCombinedPort(array $profile): int
+    {
+        return self::profilePort($profile, self::PROTECTED_COMBINED_PORT_OFFSET);
+    }
+
+    private static function profilePort(array $profile, int $offset): int
+    {
         $base = (int)($profile['dnsPort'] ?? 0);
-        return in_array($base, self::profilePorts(), true) ? $base + self::COMBINED_PORT_OFFSET : 0;
+        return in_array($base, self::profilePorts(), true) ? $base + $offset : 0;
     }
 
     public static function allowedPort(int $port): bool
@@ -35,9 +53,11 @@ final class Resolver
         $profilePorts = self::profilePorts();
         return in_array($port, [
             self::LOCAL_PORT, self::FALLBACK_PORT, self::BYPASS_PORT, self::DEVICE_BYPASS_PORT,
-            self::SERVICE_PORT, SmartRouting::PORT
+            self::SERVICE_PORT, self::PROTECTED_MULTI_PORT, SmartRouting::PORT
         ], true) ||
             in_array($port, $profilePorts, true) ||
+            in_array($port - self::PROTECTED_PORT_OFFSET, $profilePorts, true) ||
+            in_array($port - self::PROTECTED_COMBINED_PORT_OFFSET, $profilePorts, true) ||
             in_array($port - self::COMBINED_PORT_OFFSET, $profilePorts, true);
     }
 
@@ -56,7 +76,6 @@ final class Resolver
     {
         $settings = Policy::effectiveRouting($model);
         $wanted = [];
-        $ipsetPorts = [];
         if ($settings['enabled']) {
             $hostname = $settings['hostname'];
             $bind = $hostname === 'blankvpn.local' ? 'lan' : $settings['dashboardBind'];
@@ -65,69 +84,23 @@ final class Resolver
                 throw new \DomainException('Set a valid local dashboard hostname.');
             }
             $profiles = Policy::routes($model);
-            $wanted[self::LOCAL_PORT] = self::configuration(self::LOCAL_PORT, $hostname, $host, []);
             $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model, true) : [];
-            $services = SmartRouting::activeServices($settings, SmartRouting::services($model));
+            $services = SmartRouting::services($model);
             $bypass = SmartRouting::bypassServices($settings, $services);
             $fallback = $settings['coverage'] === 'network' && Policy::usesBase($settings['networkMode']) &&
                 !$settings['networkKillSwitch'] && $settings['interfaces'] !== [];
-            $deviceBypass = $settings['coverage'] === 'network' &&
+            $deviceBypass = $settings['coverage'] === 'network' && empty($settings['networkKillSwitch']) &&
                 Policy::networkBypassAssignments($settings, Policy::assignments($model, true)) !== [];
             $wan = ($fallback || $deviceBypass || array_filter($bypass, static fn (array $list) =>
                 SmartRouting::hasDomains($list['domains'])) !== []) ? WanEgress::gateways() : [];
+            $loaded = $profiles !== [] || isset($wan['inet'])
+                ? Firewall::parseLoadedRules(self::command(['/sbin/pfctl', '-sr'], false)) : [];
+            $profiles = self::verifiedDnsProfiles($profiles, $loaded);
             $wanUpstreams = isset($wan['inet'])
-                ? WanEgress::dnsUpstreams($wan, Firewall::parseLoadedRules(self::command(['/sbin/pfctl', '-sr'], false)))
-                : [];
-            $bypassDirectives = SmartRouting::dnsDirectives($bypass, $profiles, $wanUpstreams);
-            $directives = SmartRouting::dnsDirectives($services, $profiles, $wanUpstreams, self::SERVICE_PORT);
-            $forward = SmartRouting::dnsDirectives($services, $profiles, forwardOnly: true);
-            if ($forward !== []) {
-                // HTTPS and SVCB address hints do not enter PF's learned-address table. Keep A/AAAA
-                // as the address source for routed suffixes while retaining those records on the base path.
-                $wanted[self::SERVICE_PORT] = self::configuration(self::SERVICE_PORT, $hostname, $host,
-                    ['filter-rr=64,65', ...$forward], true, true);
-                $ipsetPorts[self::SERVICE_PORT] = true;
-            }
-            if ($deviceBypass) {
-                $directUpstreams = array_map(static fn (string $server): string => 'server=' . $server, $wanUpstreams);
-                $wanted[self::DEVICE_BYPASS_PORT] = self::configuration(self::DEVICE_BYPASS_PORT, $hostname, $host,
-                    $directUpstreams, true, true);
-            }
-            if ($bypassDirectives !== [] && Operations::watchMultiPathOutages($settings, $assignments)) {
-                $wanted[self::BYPASS_PORT] = self::configuration(self::BYPASS_PORT, $hostname, $host,
-                    $bypassDirectives, true, true);
-                $ipsetPorts[self::BYPASS_PORT] = true;
-            }
-            foreach (array_intersect_key($profiles, self::defaultDnsProfiles($settings, $assignments)) as $profile) {
-                $port = (int)($profile['dnsPort'] ?? 0);
-                $upstreams = self::profileUpstreams($profile);
-                if ($upstreams === []) {
-                    continue;
-                }
-                $wanted[$port] = self::configuration($port, $hostname, $host, [...$upstreams, ...$bypassDirectives],
-                    $bypassDirectives !== [], true);
-                $ipsetPorts[$port] = $bypassDirectives !== [];
-            }
-            if ($directives !== [] && self::usesSharedDns($settings, $assignments)) {
-                $wanted[SmartRouting::PORT] = self::configuration(SmartRouting::PORT, $hostname, $host,
-                    ['server=127.0.0.1#53', ...$directives], true);
-                $ipsetPorts[SmartRouting::PORT] = $bypassDirectives !== [];
-            }
-            foreach (array_keys(Policy::combinedProfiles($settings, $assignments)) as $id) {
-                $profile = $profiles[$id] ?? [];
-                $port = self::combinedPort($profile);
-                if ($port !== 0) {
-                    $wanted[$port] = self::configuration($port, $hostname, $host,
-                        [...self::profileUpstreams($profile), ...$directives], true, true);
-                    $ipsetPorts[$port] = $bypassDirectives !== [];
-                }
-            }
-            if ($fallback) {
-                $upstreams = array_map(static fn (string $server): string => 'server=' . $server, $wanUpstreams);
-                $wanted[self::FALLBACK_PORT] = self::configuration(self::FALLBACK_PORT, $hostname, $host,
-                    [...$upstreams, ...$directives], true, true);
-                $ipsetPorts[self::FALLBACK_PORT] = $bypassDirectives !== [];
-            }
+                ? WanEgress::dnsUpstreams($wan, $loaded) : [];
+            $wanted = self::listenerPlan(
+                $settings, $hostname, $host, $assignments, $profiles, $services, $wanUpstreams, $fallback, $deviceBypass
+            );
         }
 
         $ipsetChecked = false;
@@ -152,7 +125,7 @@ final class Resolver
                 }
                 continue;
             }
-            if (!$ipsetChecked && ($ipsetPorts[$port] ?? false)) {
+            if (!$ipsetChecked && str_contains($next, "\nipset=")) {
                 $version = self::command(['/usr/local/sbin/dnsmasq', '--version']);
                 if (!preg_match('/(?:^|\s)ipset(?:\s|$)/i', $version)) {
                     throw new \RuntimeException('Multi-Path requires the OPNsense Dnsmasq build with PF ipset support.');
@@ -171,10 +144,114 @@ final class Resolver
         }
     }
 
+    private static function verifiedDnsProfiles(array $profiles, array $loaded): array
+    {
+        foreach ($profiles as $id => &$profile) {
+            if (!empty($profile['disabled'])) {
+                $profile['dns'] = [];
+                unset($profile['proxyDns']);
+                continue;
+            }
+            if (($profile['kind'] ?? '') === 'proxy') {
+                continue;
+            }
+            $source = explode('/', $profile['address'] ?? '', 2)[0];
+            $interface = $profile['interface'] ?? '';
+            $profile['dns'] = array_values(array_filter(SmartRouting::profileDns($profile),
+                static function (string $server) use ($id, $loaded, $source, $interface): bool {
+                    $marker = Policy::marker('dns_out', $id . $server);
+                    $route = $loaded[$marker] ?? [];
+                    $guard = $loaded[$marker . '_block'] ?? [];
+                    return $source !== '' && $interface !== '' &&
+                        ($route['action'] ?? '') === 'pass' && ($route['gateway'] ?? '') === $interface &&
+                        ($route['source'] ?? '') === $source &&
+                        ($guard['action'] ?? '') === 'block' && ($guard['source'] ?? '') === $source;
+                }));
+        }
+        unset($profile);
+        return $profiles;
+    }
+
+    private static function listenerPlan(
+        array $settings,
+        string $hostname,
+        string $host,
+        array $assignments,
+        array $profiles,
+        array $services,
+        array $wanUpstreams,
+        bool $fallback,
+        bool $deviceBypass
+    ): array {
+        $protectedNetwork = $settings['coverage'] === 'network' && !empty($settings['networkKillSwitch']);
+        $routed = SmartRouting::forwardServices($settings, $services);
+        $bypass = SmartRouting::bypassServices($settings, $services);
+        $publicLists = $routed + $bypass;
+        $bypassDirectives = SmartRouting::dnsDirectives($bypass, $profiles, $wanUpstreams);
+        $directives = SmartRouting::dnsDirectives($publicLists, $profiles, $wanUpstreams, self::SERVICE_PORT);
+        $protectedDirectives = SmartRouting::dnsDirectives($routed, $profiles, forwardPort: self::PROTECTED_MULTI_PORT);
+        $wanted = [self::LOCAL_PORT => self::configuration(self::LOCAL_PORT, $hostname, $host, [], true, true)];
+
+        // HTTPS and SVCB address hints do not enter PF's learned-IP tables.
+        $forward = SmartRouting::dnsDirectives($publicLists, $profiles, forwardOnly: true);
+        if ($forward !== [] && !$protectedNetwork) {
+            $wanted[self::SERVICE_PORT] = self::configuration(self::SERVICE_PORT, $hostname, $host,
+                ['filter-rr=64,65', ...$forward], true, true);
+        }
+        $protectedForward = SmartRouting::dnsDirectives($routed, $profiles, forwardOnly: true);
+        $protectedMulti = $protectedNetwork && Policy::usesMultiPath($settings['networkMode']);
+        foreach ($assignments as $row) {
+            if (Policy::usesMultiPath(Policy::mode($row)) && Policy::killSwitch($row)) {
+                $protectedMulti = true;
+                break;
+            }
+        }
+        if ($protectedMulti) {
+            $wanted[self::PROTECTED_MULTI_PORT] = self::configuration(self::PROTECTED_MULTI_PORT, $hostname, $host,
+                ['filter-rr=64,65', ...$protectedForward], true, true);
+        }
+        if ($deviceBypass) {
+            $directUpstreams = array_map(static fn (string $server): string => 'server=' . $server, $wanUpstreams);
+            $wanted[self::DEVICE_BYPASS_PORT] = self::configuration(self::DEVICE_BYPASS_PORT, $hostname, $host,
+                $directUpstreams, true, true);
+        }
+        foreach (self::defaultDnsProfiles($settings, $assignments) as [$id, $protected]) {
+            $profile = $profiles[$id] ?? [];
+            $port = $protected ? self::protectedPort($profile) : self::profilePort($profile, 0);
+            if ($port === 0) {
+                continue;
+            }
+            $upstreams = self::profileUpstreams($profile);
+            $extra = $protected ? [] : $bypassDirectives;
+            $wanted[$port] = self::configuration($port, $hostname, $host,
+                [...$upstreams, ...$extra], $extra !== [], true, $protected);
+        }
+        if ($directives !== [] && self::usesSharedDns($settings, $assignments)) {
+            $wanted[SmartRouting::PORT] = self::configuration(SmartRouting::PORT, $hostname, $host,
+                ['server=127.0.0.1#53', ...$directives], true);
+        }
+        foreach (array_keys(Policy::combinedProfiles($settings, $assignments)) as $id) {
+            $profile = $profiles[$id] ?? [];
+            // Per-device combined coverage always uses the Kill Switch.
+            $protected = $settings['coverage'] === 'device' || $protectedNetwork;
+            $port = $protected ? self::protectedCombinedPort($profile) : self::combinedPort($profile);
+            if ($port !== 0) {
+                $wanted[$port] = self::configuration($port, $hostname, $host,
+                    [...self::profileUpstreams($profile), ...($protected ? $protectedDirectives : $directives)], true, true);
+            }
+        }
+        if ($fallback) {
+            $upstreams = array_map(static fn (string $server): string => 'server=' . $server, $wanUpstreams);
+            $wanted[self::FALLBACK_PORT] = self::configuration(self::FALLBACK_PORT, $hostname, $host,
+                [...$upstreams, ...$directives], true, true);
+        }
+        return $wanted;
+    }
+
     private static function profileUpstreams(array $profile): array
     {
         if (($profile['kind'] ?? '') === 'proxy') {
-            return ['server=127.0.0.1#' . $profile['proxyDns']];
+            return isset($profile['proxyDns']) ? ['server=127.0.0.1#' . $profile['proxyDns']] : [];
         }
         $source = explode('/', $profile['address'] ?? '', 2)[0];
         if (!in_array((int)($profile['dnsPort'] ?? 0), self::vpnPorts(), true) ||
@@ -187,15 +264,18 @@ final class Resolver
     private static function defaultDnsProfiles(array $settings, array $assignments): array
     {
         if ($settings['coverage'] === 'network') {
-            return Policy::usesBase($settings['networkMode']) ? [$settings['networkProfile'] => true] : [];
+            return $settings['networkMode'] === 'full'
+                ? [[$settings['networkProfile'], !empty($settings['networkKillSwitch'])]] : [];
         }
         $profiles = [];
         foreach ($assignments as $row) {
-            if (Policy::usesBase(Policy::mode($row)) && in_array($row['interface'], $settings['interfaces'], true)) {
-                $profiles[$row['profile']] = true;
-                if ($row['failure'] === 'backup') {
-                    $profiles[$row['backup']] = true;
-                }
+            if (Policy::mode($row) !== 'full' || !in_array($row['interface'], $settings['interfaces'], true)) {
+                continue;
+            }
+            $protected = Policy::killSwitch($row);
+            $profiles[$row['profile'] . ':' . (int)$protected] = [$row['profile'], $protected];
+            if ($row['failure'] === 'backup') {
+                $profiles[$row['backup'] . ':' . (int)$protected] = [$row['backup'], $protected];
             }
         }
         return $profiles;
@@ -204,14 +284,15 @@ final class Resolver
     private static function usesSharedDns(array $settings, array $assignments): bool
     {
         if ($settings['coverage'] === 'network') {
-            return $settings['networkMode'] === 'multi';
+            return $settings['networkMode'] === 'multi' && empty($settings['networkKillSwitch']);
         }
         if (empty($settings['smartAssignedOnly']) &&
             array_diff($settings['smartInterfaces'], $settings['deviceMultiInterfaces'], $settings['strictInterfaces']) !== []) {
             return true;
         }
         foreach ($assignments as $row) {
-            if (Policy::mode($row) === 'multi' && in_array($row['interface'], $settings['smartInterfaces'], true) &&
+            if (Policy::mode($row) === 'multi' && !Policy::killSwitch($row) &&
+                in_array($row['interface'], $settings['smartInterfaces'], true) &&
                 !in_array($row['interface'], $settings['strictInterfaces'], true)) {
                 return true;
             }
@@ -344,11 +425,12 @@ final class Resolver
         string $host,
         array $upstreams,
         bool $smart = false,
-        bool $vpnOnly = false
+        bool $vpnOnly = false,
+        bool $ipv6 = false
     ): string {
         $rows = [
-            'port=' . $port, $smart ? 'listen-address=127.0.0.1,::1' : 'listen-address=127.0.0.1', 'bind-interfaces',
-            'no-resolv', 'no-hosts', 'no-poll', 'dns-forward-max=64',
+            'port=' . $port, $smart || $ipv6 ? 'listen-address=127.0.0.1,::1' : 'listen-address=127.0.0.1', 'bind-interfaces',
+            'no-resolv', 'no-hosts', 'no-poll', 'dns-forward-max=64', 'log-async=16',
             $smart ? 'cache-size=0' : 'cache-size=256',
             'pid-file=' . Policy::STATE_DIR . "/dns-{$port}.pid",
         ];
@@ -390,7 +472,7 @@ final class Resolver
         throw new \RuntimeException('A Blank VPN & Proxy DNS listener could not be stopped.');
     }
 
-    public static function command(array $command, bool $required = true): string
+    public static function command(array $command, bool $required = true, array $successStatuses = [0]): string
     {
         $process = proc_open($command, [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
         if (!is_resource($process)) {
@@ -402,7 +484,7 @@ final class Resolver
         $output = stream_get_contents($pipes[1]);
         fclose($pipes[1]);
         $status = proc_close($process);
-        if ($required && $status !== 0) {
+        if ($required && !in_array($status, $successStatuses, true)) {
             throw new \RuntimeException('A required OPNsense command failed.');
         }
         return (string)$output;

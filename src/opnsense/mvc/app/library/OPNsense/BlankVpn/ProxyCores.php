@@ -368,13 +368,7 @@ final class ProxyCores
         self::save($state);
         try {
             if ($live) {
-                Firewall::reload($model);
-                foreach (Policy::assignments($model, true) as $assignment) {
-                    if ($assignment['failure'] !== 'wan' &&
-                        (isset($affected[$assignment['profile']]) || isset($affected[$assignment['backup']]))) {
-                        Operations::resetKillSwitch($assignment['ip']);
-                    }
-                }
+                self::reloadPaths($model);
             }
             $state['cores'][$core] = ['active' => $target, 'previous' => $prior];
             self::save($state);
@@ -396,7 +390,7 @@ final class ProxyCores
         $state['pending']['paused'] = false;
         self::save($state);
         if ($reload) {
-            Firewall::reload($model);
+            self::reloadPaths($model);
         }
         unset($state['pending']);
         self::save($state);
@@ -415,11 +409,19 @@ final class ProxyCores
         self::save($state);
         $live = Policy::settings($model)['enabled'];
         if ($live) {
-            Firewall::reload($model);
+            self::reloadPaths($model);
             ProxyRuntime::reconcile($model);
         }
         self::finish($state, $model, $live);
         self::prune($core, $state);
+    }
+
+    private static function reloadPaths(BlankVpn $model): void
+    {
+        $settings = Policy::effectiveRouting($model);
+        $assignments = $settings['coverage'] === 'device'
+            ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
+        Operations::reloadRoutingPaths($model, $settings, $assignments, Firewall::loadedRules() ?? []);
     }
 
     private static function clearStaging(): void

@@ -129,20 +129,31 @@ class ServiceController extends ApiControllerBase
             foreach ($managedNord as $id => $server) {
                 $profiles['proxy-' . $id] = ['id' => 'proxy-' . $id, 'node' => $id, 'kind' => 'proxy'] + $server;
             }
+            $settings['killSwitchIpv6Interfaces'] = Policy::killSwitchIpv6Interfaces($routing, $effectiveAssignments);
+            $settings['killSwitchUnboundInterfaces'] = Policy::unboundKillSwitchInterfaces(
+                $routing, $effectiveAssignments, $diagnostics
+            );
             $activeLists = SmartRouting::activeServices($routing, $services);
             $multiActive = SmartRouting::forwardServices($routing, $services) !== [];
             foreach ($assignments as $id => $row) {
                 $rule = $loaded[Policy::marker('device', $id)] ?? null;
                 $guard = ($loaded[Policy::marker('kill', $id)]['action'] ?? '') === 'block';
+                $outage = ($loaded[Policy::marker('kill_outage', $id . ':inet')]['action'] ?? '') === 'block' ||
+                    ($loaded[Policy::marker('kill_outage', $id . ':inet6')]['action'] ?? '') === 'block';
                 $gateway = $rule['gateway'] ?? null;
                 $mode = Policy::mode($row);
                 $applied = $gateway !== null ? ($gatewayNames[$gateway] ?? $gateway)
-                    : ($guard ? 'Internet blocked' : match ($mode) {
-                        'multi' => $multiActive ? 'Multi-Path domain lists' : 'Waiting for domain lists',
-                        'full' => 'Using regular internet',
-                        'full_multi' => 'Base route unavailable',
-                        default => 'Regular internet'
-                    });
+                    : match (true) {
+                        $outage => 'Kill Switch blocking internet',
+                        $mode === 'multi' && $multiActive => 'Multi-Path domain lists',
+                        $guard => 'Internet blocked',
+                        default => match ($mode) {
+                            'multi' => 'Waiting for domain lists',
+                            'full' => 'Using regular internet',
+                            'full_multi' => 'Base route unavailable',
+                            default => 'Regular internet'
+                        }
+                    };
                 $row['mode'] = $mode;
                 $row['killSwitch'] = Policy::killSwitch($row);
                 $row['onDemand'] = Policy::onDemand($row);
@@ -160,6 +171,7 @@ class ServiceController extends ApiControllerBase
                     !self::networkBypassActive($settings) || $row['paused'] ||
                         !in_array($row['interface'], $lanInterfaces, true) ||
                         !in_array($row['interface'], $settings['interfaces'], true) => 'saved',
+                    $settings['networkKillSwitch'] => 'kill-switch',
                     $bypassSource !== null && ($bypassPass['source'] ?? '') === $bypassSource &&
                         ($bypassPass['action'] ?? '') === 'pass' => 'direct',
                     $bypassSource !== null && ($bypassGuard['source'] ?? '') === $bypassSource &&
@@ -169,7 +181,8 @@ class ServiceController extends ApiControllerBase
                 $assignments[$id] = $row + [
                     'device' => $row['interface'] . '/' . (($row['kind'] ?? '') === 'tailnet' ? $row['ip'] : $row['mac']),
                     'verified' => false,
-                    'killSwitchActive' => $guard && $rule === null && $row['killSwitch'] && $row['effectiveIp'] !== '',
+                    'killSwitchActive' => $row['killSwitch'] && ($outage ||
+                        in_array($row['interface'], $settings['killSwitchUnboundInterfaces'], true)),
                     'appliedRoute' => match (true) {
                         $row['effectiveIp'] === '' => 'Waiting for DHCP reservation',
                         $row['interface'] === Policy::TAILSCALE_DEVICE && !$settings['tailscaleSetup']['ready'] =>
@@ -190,8 +203,9 @@ class ServiceController extends ApiControllerBase
                     $settings['networkRouting'][$interface] = [
                         'gateway' => $base,
                         'wanFallback' => $fallback,
+                        'outage' => ($loaded[Policy::marker('kill_outage', $id . ':inet')]['action'] ?? '') === 'block',
                         'blocked' => ($loaded[Policy::marker('kill', $id)]['action'] ?? null) === 'block'
-                            && $base === null && !$fallback
+                            && $settings['networkMode'] !== 'multi' && $base === null && !$fallback
                     ];
                 }
             }
@@ -391,7 +405,10 @@ class ServiceController extends ApiControllerBase
             throw new \RuntimeException('Blank VPN & Proxy could not read the active firewall rules from configd.');
         }
         if (!Firewall::probePathInstalled($route, $loaded)) {
-            Firewall::reload($model);
+            $settings = Policy::effectiveRouting($model);
+            $assignments = $settings['coverage'] === 'device'
+                ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
+            Operations::reloadRoutingPaths($model, $settings, $assignments, $loaded);
             if (!Firewall::probePathInstalled($route, Firewall::loadedRules() ?? [])) {
                 throw new \RuntimeException('OPNsense did not load the protected test route. Check the exit gateway and firewall status.');
             }
@@ -1175,16 +1192,11 @@ class ServiceController extends ApiControllerBase
                 $networkChanged = $oldNetwork !== $newNetwork || ($newNetwork !== [] &&
                     ($networkMode !== $before['networkMode'] || $networkProfile !== $before['networkProfile'] ||
                         $after['networkKillSwitch'] !== $before['networkKillSwitch']));
-                $combinedSegments = $networkChanged && ($before['networkMode'] === 'full_multi' || $networkMode === 'full_multi')
-                    ? array_values(array_unique([...$oldNetwork, ...$newNetwork])) : [];
-                if ($combinedSegments !== []) {
-                    array_push($reset, ...Policy::segmentNetworks($combinedSegments));
-                }
+                $changedNetworkSegments = $networkChanged ? [...$oldNetwork, ...$newNetwork] : [];
+                array_push($reset, ...Policy::segmentNetworks(array_values(array_unique($changedNetworkSegments))));
                 return [
                     'reload' => $before['enabled'] || $enabled,
-                    'resetSegments' => array_values(array_unique(array_merge(
-                        $newStrict, $networkChanged && $combinedSegments === [] ? [...$oldNetwork, ...$newNetwork] : []
-                    ))),
+                    'resetSegments' => array_values($newStrict),
                     'killSwitchReset' => array_values(array_unique($reset)),
                     'networkProxy' => $newNetwork !== [] && Policy::usesBase($networkMode) &&
                         ($route['kind'] ?? '') === 'proxy' ? $route : null,
@@ -1237,13 +1249,10 @@ class ServiceController extends ApiControllerBase
                         throw new \DomainException('Leave at least one interface for Whole-Network coverage.');
                     }
                     $reset = [...array_diff($old, $new), ...array_diff($new, $old)];
-                    Policy::segmentNetworks($reset);
                 }
-                $combined = $after['coverage'] === 'network' && $after['networkMode'] === 'full_multi';
                 return [
                     'reload' => $after['enabled'],
-                    'resetSegments' => $combined ? [] : $reset,
-                    'killSwitchReset' => $combined ? Policy::segmentNetworks($reset) : [],
+                    'killSwitchReset' => Policy::segmentNetworks($reset),
                     'settings' => $after
                 ];
             });
@@ -1498,6 +1507,9 @@ class ServiceController extends ApiControllerBase
                 $changed = $bypass !== null && $wasBypassed !== $bypass;
                 $ipv6 = '';
                 if ($changed) {
+                    if ($bypass && self::networkBypassActive($settings) && $settings['networkKillSwitch']) {
+                        throw new \DomainException('Turn off the Whole-Network Kill Switch before enabling Bypass.');
+                    }
                     if ($bypass && !self::networkBypassInterface($settings, $identity)) {
                         throw new \DomainException('Choose a device on a managed LAN or VLAN to use Bypass.');
                     }
@@ -1697,15 +1709,38 @@ class ServiceController extends ApiControllerBase
             $results = [];
             $answerChecks = [];
             $wholeCombined = $settings['coverage'] === 'network' && $settings['networkMode'] === 'full_multi';
+            $protectedNetwork = $settings['coverage'] === 'network' && $settings['networkKillSwitch'];
             $base = $wholeCombined ? ($profiles[$settings['networkProfile']] ?? []) : [];
-            $nat = $wholeCombined ? Firewall::loadedNat() : '';
+            $nat = $wholeCombined || $protectedNetwork ? Firewall::loadedNat() : '';
+            $devices = $settings['coverage'] === 'device' ? Policy::assignments($model, true) : [];
+            $protectedDevices = [];
+            foreach ($devices as $deviceId => $device) {
+                if (!Policy::usesMultiPath(Policy::mode($device)) || !Policy::killSwitch($device)) {
+                    continue;
+                }
+                $dnsRule = $loaded[Policy::marker('dns', $deviceId . ':inet')] ?? [];
+                $port = $dnsRule['port'] ?? 0;
+                if ($port !== 0 && $port !== Resolver::LOCAL_PORT) {
+                    $protectedDevices[$device['interface']] = $port;
+                }
+            }
             foreach ($settings['smartInterfaces'] as $interface) {
                 $route = $loaded[Policy::marker($marker, $id . ':' . $interface)] ?? [];
                 $port = Resolver::SERVICE_PORT;
-                if ($wholeCombined) {
-                    $key = 'network:' . $interface;
+                $key = 'network:' . $interface;
+                if ($protectedNetwork) {
+                    if (($loaded[Policy::marker('kill_outage', $key . ':inet')]['action'] ?? '') === 'block') {
+                        $results[$interface] = 'Kill Switch is blocking internet';
+                        continue;
+                    }
+                    $port = $wholeCombined ? Resolver::protectedCombinedPort($base) : Resolver::PROTECTED_MULTI_PORT;
+                } elseif ($wholeCombined) {
                     $port = ($loaded[Policy::marker('wan_fallback', $key . ':inet')]['action'] ?? '') === 'pass'
                         ? Resolver::FALLBACK_PORT : Resolver::combinedPort($base);
+                } elseif (isset($protectedDevices[$interface])) {
+                    $port = $protectedDevices[$interface];
+                }
+                if ($wholeCombined || $protectedNetwork) {
                     if (!Firewall::dnsRedirectLoaded($loaded, $nat, $key, $port, 'inet')) {
                         $results[$interface] = 'Client DNS redirect missing';
                         continue;
@@ -1800,8 +1835,10 @@ class ServiceController extends ApiControllerBase
         $reset = [];
         if ($reload) {
             $assignments = Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics());
-            $reset = $bypassChanged ? Operations::bypassStateScopes($settings, $assignments)
-                : Operations::combinedStateScopes($settings, $assignments);
+            $reset = $bypassChanged ? [
+                ...Operations::bypassStateScopes($settings, $assignments),
+                ...Operations::serviceStateScopes($settings, $assignments)
+            ] : Operations::serviceStateScopes($settings, $assignments);
         }
         return ['reload' => $reload, 'killSwitchReset' => $reset];
     }

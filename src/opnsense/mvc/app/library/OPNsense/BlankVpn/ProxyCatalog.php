@@ -11,6 +11,7 @@ final class ProxyCatalog
 {
     public const MAX_URL_BYTES = 8192;
     private const FILE = 'proxy-catalog.json';
+    private const REFRESH_STATE = 'proxy-refresh.json';
     private const MANAGED_NORD = 'managed-nord';
     private const MAX_FEEDS = 12;
     private const MAX_CATALOG_BYTES = 25165824;
@@ -42,6 +43,7 @@ final class ProxyCatalog
             throw new DomainException('Remove unused proxy subscriptions or nodes to make room in the catalog.');
         }
         Policy::writeState(self::FILE, $bytes);
+        self::scheduleRefresh($data['feeds']);
     }
 
     public static function publicView(): array
@@ -234,30 +236,90 @@ final class ProxyCatalog
         if (!is_array($feed)) {
             throw new DomainException('The proxy subscription was removed.');
         }
+        return self::refreshSavedFeed($data, $feed, $pinned);
+    }
+
+    private static function refreshSavedFeed(array $data, array $feed, array $pinned): array
+    {
         try {
-            return self::refresh($data, $feed, $pinned);
+            $candidate = $data;
+            $result = self::refresh($candidate, $feed, $pinned);
+            self::save($candidate);
+            return $result;
         } catch (DomainException | RuntimeException $error) {
+            $id = $feed['id'];
             $data['feeds'][$id]['error'] = $error->getMessage();
             $data['feeds'][$id]['attempted'] = time();
+            try {
+                self::save($data);
+            } catch (DomainException | RuntimeException) {
+                self::scheduleRefresh($data['feeds'], time() + self::RETRY_INTERVAL);
+            }
             throw $error;
-        } finally {
-            self::save($data);
         }
     }
 
     public static function refreshDue(array $pinned): void
     {
-        foreach (self::read()['feeds'] as $feed) {
-            $now = time();
-            if (!empty($feed['auto']) && $now - ($feed['updated'] ?? 0) >= self::REFRESH_INTERVAL &&
-                $now - ($feed['attempted'] ?? 0) >= self::RETRY_INTERVAL) {
+        $now = time();
+        $fingerprint = self::catalogFingerprint();
+        if ($fingerprint === null) {
+            return;
+        }
+        $path = Policy::STATE_DIR . '/' . self::REFRESH_STATE;
+        $raw = @file_get_contents($path, false, null, 0, 512);
+        $schedule = is_string($raw) ? json_decode($raw, true, 4) : null;
+        if (($schedule['catalog'] ?? null) === $fingerprint &&
+            is_int($schedule['next'] ?? null) && ($schedule['next'] === 0 || $schedule['next'] > $now)) {
+            return;
+        }
+        try {
+            $data = self::read();
+        } catch (RuntimeException $error) {
+            self::scheduleRefresh([], $now + self::RETRY_INTERVAL);
+            throw $error;
+        }
+        foreach ($data['feeds'] as $feed) {
+            $next = self::nextRefresh($feed);
+            if ($next !== null && $next <= $now) {
                 try {
-                    self::refreshFeed($feed['id'], $pinned);
+                    self::refreshSavedFeed($data, $feed, $pinned);
                 } catch (DomainException | RuntimeException) {
                     // The previous usable list remains available, with an error shown in the dashboard.
                 }
                 return;
             }
+        }
+        self::scheduleRefresh($data['feeds']);
+    }
+
+    private static function nextRefresh(array $feed): ?int
+    {
+        return empty($feed['auto']) ? null : max(
+            (int)($feed['updated'] ?? 0) + self::REFRESH_INTERVAL,
+            (int)($feed['attempted'] ?? 0) + self::RETRY_INTERVAL
+        );
+    }
+
+    private static function catalogFingerprint(): ?array
+    {
+        $path = Policy::STATE_DIR . '/' . self::FILE;
+        clearstatcache(true, $path);
+        $status = @lstat($path);
+        return $status === false ? null : array_values(array_intersect_key($status, array_flip([
+            'dev', 'ino', 'mode', 'size', 'mtime', 'ctime'
+        ])));
+    }
+
+    private static function scheduleRefresh(array $feeds, int $notBefore = 0): void
+    {
+        $catalog = self::catalogFingerprint();
+        $dates = array_filter(array_map(self::nextRefresh(...), $feeds), 'is_int');
+        $next = max($notBefore, $dates === [] ? 0 : min($dates));
+        try {
+            Policy::writeState(self::REFRESH_STATE, json_encode(compact('catalog', 'next'), JSON_THROW_ON_ERROR));
+        } catch (RuntimeException) {
+            // The catalog is authoritative if the optional schedule cannot be saved.
         }
     }
 

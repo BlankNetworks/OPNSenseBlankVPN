@@ -768,7 +768,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('mode').dispatchEvent(new Event('change'));
     assert(bv('profile').required && bv('profile-label').textContent === 'Base server' &&
         bv('device-kill').checked && bv('device-kill').disabled && bv('failure-field').hidden &&
-        bv('route-note').textContent.includes('Bypass uses direct internet when available.'),
+        bv('route-note').textContent.includes('Bypass is unavailable while the Kill Switch is on.'),
         'Combined Tailscale rules must require a base server and prevent WAN fallback.');
     bv('assign-form').requestSubmit(bv('save-device'));
     await wait();
@@ -791,11 +791,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('mode').value = 'full_multi';
     bv('mode').dispatchEvent(new Event('change'));
     assert(bv('device-kill').checked && bv('device-kill').disabled &&
-        bv('route-note').textContent.includes('temporary IPv6 addresses'),
-        'Combined LAN rule must enforce the Kill Switch and explain temporary IPv6 coverage.');
+        bv('route-note').textContent.includes('Public IPv6 is blocked for this interface'),
+        'Combined LAN rule must enforce the Kill Switch and explain the interface-wide public IPv6 block.');
     bv('mode').value = 'full';
     bv('mode').dispatchEvent(new Event('change'));
     assert(!bv('device-kill').checked && !bv('device-kill').disabled, 'Switching away from combined mode should restore the draft preference.');
+    bv('mode').value = 'multi';
+    bv('mode').dispatchEvent(new Event('change'));
+    bv('device-kill').click();
+    assert(bv('route-note').textContent.includes('Other internet traffic is blocked.') &&
+        bv('route-note').textContent.includes('blocks all internet for this device if a required VPN or proxy goes offline'),
+        'A checked Multi-Path device must explain that unmatched traffic and all internet during an outage are blocked.');
+    bv('device-kill').click();
     bv('mode').value = 'full_multi';
     bv('mode').dispatchEvent(new Event('change'));
     bv('assign-form').requestSubmit(bv('save-device'));
@@ -803,6 +810,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'assign' && x.data.kind === 'lan' && x.data.mode === 'full_multi' &&
         x.data.profile === 'vpn1' && x.data.failure === 'block' && x.data.killSwitch === true),
         'LAN rules need to submit the combined mode and enforced Kill Switch.');
+    reply.dashboard.settings.killSwitchIpv6Interfaces = ['lan'];
+    reply.dashboard.settings.killSwitchUnboundInterfaces = ['lan'];
+    bv('refresh').click();
+    await wait();
+    assert(bv('current-routing').textContent.includes('Public IPv6 blocked on igc0') &&
+        bv('current-routing').textContent.includes('until protected devices have confirmed IPv4 addresses') &&
+        bv('device-list').textContent.includes('Internet is blocked on this interface until the protected device has a confirmed IPv4 address.'),
+        'The dashboard must explain IPv6 coverage and the temporary IPv4 block for an unbound protected device.');
+    delete reply.dashboard.settings.killSwitchIpv6Interfaces;
+    delete reply.dashboard.settings.killSwitchUnboundInterfaces;
     bv('coverage').value = 'network';
     bv('network-mode').value = 'full';
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
@@ -856,6 +873,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         bv('device-list').querySelector('[aria-label="Edit New console"]') &&
         bv('device-guide').textContent.includes('Only Devices I choose'),
         'Whole-Network coverage must let users edit discovered devices and explain individual assignments.');
+    assert(!bv('device-list').querySelector('[aria-label^="Bypass VPN"]') &&
+        bv('coverage-note').textContent.includes('Bypass is unavailable while the Kill Switch is on.'),
+        'Checked Whole-Network Kill Switch must prevent bypass selection and explain it.');
+    bv('network-kill').click();
+    bv('settings-form').requestSubmit(bv('save-routing'));
+    await wait();
     bv('device-list').querySelector('[aria-label="Edit <b>Device rule</b>"]').click();
     assert(!bv('network-device').hidden && !bv('network-device-bypass-field').hidden && bv('assignment').hidden,
         'Editing a Whole-Network device must offer Bypass without changing its individual rule.');
@@ -882,6 +905,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'setNetworkDevice' && x.data.label === 'New console' &&
         x.data.ip === '10.0.0.30' && x.data.reserveIp === true && x.data.networkBypass === true),
         'Saving a new device bypass must store the current identity and exception.');
+    bv('network-kill').click();
+    bv('settings-form').requestSubmit(bv('save-routing'));
+    await wait();
+    assert(networkAssign.networkBypass === true && bv('device-list').textContent.includes('Bypass paused by Kill Switch') &&
+        bv('device-list').querySelector('[aria-label="Use network rule for Renamed LAN device"]'),
+        'Checking the Kill Switch must pause existing bypass preferences while still allowing removal.');
+    reply.dashboard.settings.networkRouting = {lan:{gateway:'wg1',outage:true}};
+    bv('refresh').click();
+    await wait();
+    assert(bv('current-routing').textContent.includes('Kill Switch blocking internet') &&
+        bv('device-list').textContent.includes('Kill Switch blocking internet'),
+        'Reported Whole-Network outage must override stale base and bypass statuses.');
+    delete reply.dashboard.settings.networkRouting;
+    bv('network-kill').click();
+    bv('settings-form').requestSubmit(bv('save-routing'));
+    await wait();
     assert(!bv('tailnet-device-list').querySelector('[aria-label^="Bypass VPN"]'),
         'Tailscale devices must never offer a Whole-Network bypass.');
     bv('tailnet-device-list').querySelector('[aria-label="Edit Remote iPad"]').click();
@@ -912,6 +951,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         bv('device-list').querySelector('[aria-label="Bypass VPN for Renamed LAN device"]'),
         'Removing a Whole-Network bypass must preserve the individual rule.');
     assert(dismiss.hidden, 'Success messages must hide the error dismiss control.');
+    bv('network-kill').click();
     bv('network-mode').value = 'full_multi';
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
     bv('network-profile').value = '';
@@ -953,8 +993,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('service-list').firstElementChild === renderedService &&
         !bv('service-list').textContent.includes('YouTube'), 'Refresh must defer rendering the hidden Multi-Path panel.');
     document.querySelector('[data-bv-section="smart"]').click();
-    assert(bv('smart-status').textContent.includes('Bypass uses direct internet when available'),
-        'Multi-Path must describe the direct Bypass policy in combined mode.');
+    assert(bv('smart-status').textContent.includes('Bypass is unavailable while the Kill Switch is on.'),
+        'Multi-Path must explain that checked combined coverage pauses Bypass.');
     const youtubeRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('YouTube'));
     youtubeRow.querySelector('[aria-label="Test route for YouTube"]').click();
     await wait();
@@ -966,7 +1006,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         routing:{lan:{bypass:true}, opt1:{bypass:false, guard:true}}});
     bv('refresh').click();
     await wait();
-    const directRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('Direct test'));
+    const directServiceRow = () => [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('Direct test'));
+    assert(directServiceRow().cells[2].textContent.includes('Bypass paused by Kill Switch'),
+        'A saved Bypass row must show the Kill Switch is preventing direct internet.');
+    reply.dashboard.settings.networkKillSwitch = false;
+    bv('refresh').click();
+    await wait();
+    const directRow = directServiceRow();
     assert(directRow.cells[2].textContent.includes('Direct internet') &&
         directRow.cells[2].textContent.includes('Direct internet unavailable'),
         'Bypass status must distinguish a direct route from an unavailable direct gateway.');
@@ -978,6 +1024,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         bv('service-list').textContent.includes('Internet blocked'),
         'Bypass must disclose an explicit Whole-Network block.');
     reply.dashboard.settings.networkMode = 'full_multi';
+    reply.dashboard.settings.networkKillSwitch = true;
     reply.dashboard.services.pop();
     bv('refresh').click();
     await wait();

@@ -7,6 +7,9 @@ use OPNsense\Core\Config;
 
 final class Operations
 {
+    private const PATH_RELOAD = 'health-reload';
+    private const TABLE_FILE_MAX_AGE = 86400;
+
     public static function exclusive(callable $work, bool $skipBusy = false): mixed
     {
         $path = Policy::stateDirectory() . '/operations.lock';
@@ -54,7 +57,7 @@ final class Operations
                 WireGuard::applyRemoval($result['removed']);
             }
             if (!empty($result['reload'])) {
-                self::sync($model);
+                self::sync($model, $result['killSwitchReset'] ?? []);
             }
             if (isset($result['networkProxy'])) {
                 self::verifyNetworkProxy($result['networkProxy'], $result['settings']);
@@ -62,8 +65,10 @@ final class Operations
             if (!empty($result['resetSegments'])) {
                 self::resetSegments($result['resetSegments'], $result['settings']);
             }
-            foreach ($result['killSwitchReset'] ?? [] as $ip) {
-                self::resetKillSwitch($ip);
+            if (empty($result['reload'])) {
+                foreach ($result['killSwitchReset'] ?? [] as $ip) {
+                    self::resetKillSwitch($ip);
+                }
             }
         } catch (\Throwable $error) {
             try {
@@ -107,19 +112,26 @@ final class Operations
 
     private static function verifyNetworkProxy(array $proxy, array $settings): void
     {
-        if (!ProxyRuntime::ready($proxy)) {
-            $status = ProxyRuntime::lastStatus();
-            throw new \RuntimeException($status['errors'][$proxy['id']] ?? 'The selected proxy tunnel did not start.');
-        }
         $loaded = Firewall::loadedRules();
         $routing = Policy::routingSettings($settings);
+        $ready = ProxyRuntime::ready($proxy);
         foreach ($routing['interfaces'] as $interface) {
             $id = 'network:' . $interface;
-            if (($loaded[Policy::marker('device', $id)]['gateway'] ?? null) !== $proxy['interface']) {
+            $route = ($loaded[Policy::marker('device', $id)]['gateway'] ?? null) === $proxy['interface'];
+            $guarded = ($loaded[Policy::marker('kill_v6', $id)]['action'] ?? null) === 'block' &&
+                ($loaded[Policy::marker('kill', $id)]['action'] ?? null) === 'block';
+            if ($routing['networkKillSwitch'] && $guarded) {
+                continue;
+            }
+            if (!$ready) {
+                $status = ProxyRuntime::lastStatus();
+                throw new \RuntimeException($status['errors'][$proxy['id']] ?? 'The selected proxy tunnel did not start.');
+            }
+            if (!$route) {
                 throw new \RuntimeException('The selected proxy is unavailable for routing. Test the server in Proxies and try again.');
             }
             if (($loaded[Policy::marker('kill_v6', $id)]['action'] ?? null) !== 'block' ||
-                ($routing['networkKillSwitch'] && ($loaded[Policy::marker('kill', $id)]['action'] ?? null) !== 'block')) {
+                $routing['networkKillSwitch']) {
                 throw new \RuntimeException('OPNsense did not load the internet blocking rules for the selected proxy.');
             }
         }
@@ -156,7 +168,7 @@ final class Operations
         return hash('sha256', (string)$xml->C14N());
     }
 
-    public static function sync(BlankVpn $model): void
+    public static function sync(BlankVpn $model, array $reset = []): void
     {
         $backend = new Backend();
         if (trim($backend->configdRun('blankvpn proxies', false, 45)) !== 'ok') {
@@ -166,24 +178,10 @@ final class Operations
         Policy::refreshMacConflicts($model);
         $assignments = $settings['coverage'] === 'device'
             ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
-        $watchOutages = self::watchMultiPathOutages($settings, $assignments);
-        $before = Firewall::loadedRules();
-        $bindings = DeviceBindings::pending($model, $before ?? []);
+        $before = Firewall::loadedRules() ?? [];
+        $bindings = DeviceBindings::pending($model, $before);
         // Load DNS destination tables before a resolver can begin filling them.
-        Firewall::reload($model);
-        DeviceBindings::finish($bindings);
-        if ($watchOutages) {
-            self::resetOutageStates($settings, $assignments, $before ?? [], Firewall::loadedRules());
-        }
-        if (trim($backend->configdRun('blankvpn resolver', false, 45)) !== 'ok') {
-            throw new \RuntimeException('The Blank VPN & Proxy DNS listeners could not be reconciled.');
-        }
-        // Upgrade the legacy Bypass policy without keeping states that could use an old base tunnel.
-        $legacyBypass = array_filter($settings['interfaces'], static fn (string $interface): bool =>
-            ($before[Policy::marker('bypass', 'network:' . $interface)]['action'] ?? '') === 'match');
-        foreach (Policy::segmentNetworks($legacyBypass) as $network) {
-            self::resetKillSwitch($network);
-        }
+        self::reloadRoutingPaths($model, $settings, $assignments, $before, bindings: $bindings, reset: $reset);
     }
 
     public static function recordSuccessfulProbe(BlankVpn $model, array $route): void
@@ -202,91 +200,285 @@ final class Operations
         if (($route['kind'] ?? '') === 'native') {
             $health[$id]['source'] = $route['address'];
         }
-        Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
         $assignments = $settings['coverage'] === 'device'
             ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
         $recovering = ($previous['reachable'] ?? true) === false;
         $maxAge = ($route['kind'] ?? '') === 'proxy' ? 300 : 180;
         $services = SmartRouting::forwardServices($settings, SmartRouting::services($model));
-        $clearOutage = self::watchMultiPathOutages($settings, $assignments) &&
-            in_array($id, array_column($services, 'profile'), true) &&
+        $clearOutage = in_array($id, self::killSwitchProbeExits($settings, $assignments, $services), true) &&
             (empty($previous['probeSucceeded']) || time() - ($previous['checkedAt'] ?? 0) > $maxAge);
-        if ($recovering || $clearOutage) {
+        if ($recovering || $clearOutage || self::pathReloadPending()) {
             $before = Firewall::loadedRules() ?? [];
-            Policy::writeState('health-reload', '1');
-            Firewall::reload($model);
-            $after = Firewall::loadedRules() ?? [];
-            $scopes = Policy::segmentNetworks(self::networkPathChanges($settings, $before, $after));
-            if ($recovering) {
-                array_push($scopes, ...self::combinedStateScopes($settings, $assignments));
-            }
-            foreach (array_unique($scopes) as $scope) {
-                self::resetKillSwitch($scope);
-            }
-            unlink(Policy::STATE_DIR . '/health-reload');
+            self::reloadRoutingPaths($model, $settings, $assignments, $before, health: $health);
+        } else {
+            Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
         }
     }
 
-    public static function watchMultiPathOutages(array $settings, array $assignments): bool
+    public static function killSwitchProbeExits(array $settings, array $assignments, array $services): array
     {
         if (!$settings['enabled']) {
-            return false;
+            return [];
         }
+        $exits = [];
+        $watchServices = false;
         if ($settings['coverage'] === 'network') {
-            return $settings['networkMode'] === 'multi' && $settings['networkKillSwitch'];
+            $mode = $settings['networkMode'];
+            if ($settings['networkKillSwitch']) {
+                $watchServices = Policy::usesMultiPath($mode);
+                if (Policy::usesBase($mode)) {
+                    $exits[] = $settings['networkProfile'];
+                }
+            }
+        } else {
+            foreach ($assignments as $row) {
+                if (Policy::assignmentPaused($row) || !in_array($row['interface'], $settings['interfaces'], true) ||
+                    !Policy::killSwitch($row)) {
+                    continue;
+                }
+                $mode = Policy::mode($row);
+                $watchServices = $watchServices || Policy::usesMultiPath($mode);
+                if (Policy::usesBase($mode)) {
+                    $exits[] = $row['profile'];
+                }
+            }
         }
-        foreach ($assignments as $row) {
-            if (Policy::mode($row) === 'multi' && Policy::killSwitch($row)) {
+        if ($watchServices) {
+            array_push($exits, ...array_column($services, 'profile'));
+        }
+        return array_values(array_unique(array_filter($exits)));
+    }
+
+    public static function policyProbeExits(array $settings, array $assignments, array $services): array
+    {
+        $selected = array_column($services, 'profile');
+        if ($settings['coverage'] === 'network') {
+            if (Policy::usesBase($settings['networkMode'])) {
+                $selected[] = $settings['networkProfile'];
+            }
+        } else {
+            foreach ($assignments as $row) {
+                if (($row['ip'] ?? '') !== '' && !Policy::assignmentPaused($row) &&
+                    in_array($row['interface'], $settings['interfaces'], true) &&
+                    Policy::usesBase(Policy::mode($row))) {
+                    $selected[] = $row['profile'];
+                    if (!Policy::killSwitch($row) && ($row['failure'] ?? '') === 'backup') {
+                        $selected[] = $row['backup'];
+                    }
+                }
+            }
+        }
+        return array_fill_keys(array_filter($selected), true);
+    }
+
+    public static function pathReloadPending(): bool
+    {
+        return is_file(Policy::STATE_DIR . '/' . self::PATH_RELOAD);
+    }
+
+    public static function pruneTableFiles(): void
+    {
+        $output = Resolver::command(['/sbin/pfctl', '-s', 'Tables', '-v']);
+        $tables = preg_split('/\s+/', trim($output), -1, PREG_SPLIT_NO_EMPTY);
+        $seen = array_fill_keys($tables, true);
+        $cutoff = time() - self::TABLE_FILE_MAX_AGE;
+        foreach (new \FilesystemIterator(Policy::stateDirectory(), \FilesystemIterator::SKIP_DOTS) as $entry) {
+            $name = $entry->getFilename();
+            if (isset($seen[$name]) ||
+                !self::tableCacheName($name) ||
+                $entry->isLink() || !$entry->isFile()) {
+                continue;
+            }
+            $path = $entry->getPathname();
+            clearstatcache(true, $path);
+            $modified = @filemtime($path);
+            if ($modified !== false && $modified < $cutoff) {
+                @unlink($path);
+            }
+        }
+    }
+
+    private static function tableCacheName(string $name): bool
+    {
+        return preg_match('/^(?:bv[ix]_[a-f0-9]{24}|blankvpn_(?:(?:cs|bi|be)_[a-f0-9]{19}|src_[a-f0-9]{18}))$/D', $name) === 1;
+    }
+
+    public static function reloadRoutingPaths(
+        BlankVpn $model,
+        array $settings,
+        array $assignments,
+        array $before,
+        ?array $bindings = null,
+        array $failedExits = [],
+        ?array $health = null,
+        array $reset = []
+    ): void {
+        $path = Policy::STATE_DIR . '/' . self::PATH_RELOAD;
+        $raw = self::pathReloadPending() ? file_get_contents($path) : false;
+        $pending = is_string($raw) ? json_decode($raw, true) : null;
+        $originalRules = $pending['before'] ?? null;
+        $priorReset = $pending['reset'] ?? [];
+        $priorFailedExits = $pending['failedExits'] ?? [];
+        // Retain the original loaded rules if a reload or any subsequent reset is interrupted.
+        $before = is_array($originalRules) ? $originalRules : ($raw === false ? $before : []);
+        $legacyReset = !empty($pending['legacyReset']) || !empty($pending['observedOutage']) ||
+            (is_string($raw) && !is_array($originalRules));
+        $failedExits = array_values(array_unique([...$failedExits, ...(is_array($priorFailedExits) ? $priorFailedExits : [])]));
+        $reset = array_values(array_unique([...$reset, ...(is_array($priorReset) ? $priorReset : [])]));
+        Policy::writeState(self::PATH_RELOAD,
+            json_encode(compact('before', 'failedExits', 'legacyReset', 'reset'), JSON_THROW_ON_ERROR));
+        if ($health !== null) {
+            Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
+        }
+        Firewall::reload($model);
+        $after = Firewall::loadedRules();
+        if ($after === null) {
+            throw new \RuntimeException('The active firewall rules could not be read after updating routing paths.');
+        }
+        $services = SmartRouting::forwardServices($settings, SmartRouting::services($model));
+        $scopes = array_unique([
+            ...$reset, ...self::killSwitchStateScopes($settings, $assignments, $services, $before, $after, $failedExits, $legacyReset)
+        ]);
+        if ($bindings !== null) {
+            DeviceBindings::finish($bindings);
+            $scopes = array_diff($scopes, $bindings['reset']);
+        }
+        foreach ($scopes as $scope) {
+            self::resetKillSwitch($scope);
+        }
+        // Protected DNS verifies the newly installed PF pins before bringing listeners online.
+        if (trim((new Backend())->configdRun('blankvpn resolver', false, 45)) !== 'ok') {
+            throw new \RuntimeException('The Blank VPN & Proxy DNS listeners could not be reconciled.');
+        }
+        if (!unlink($path)) {
+            throw new \RuntimeException('The routing paths changed, but the pending connection reset could not be cleared.');
+        }
+    }
+
+    public static function killSwitchStateScopes(
+        array $settings,
+        array $assignments,
+        array $services,
+        array $before,
+        array $after,
+        array $failedExits = [],
+        bool $legacyReset = false
+    ): array {
+        if (!$settings['enabled']) {
+            return [];
+        }
+        $network = $settings['coverage'] === 'network';
+        $segments = [];
+        $ipv4Interfaces = [];
+        $ipv6Interfaces = [];
+        $scopes = [];
+        $serviceOutage = array_intersect($failedExits, array_column($services, 'profile')) !== [];
+        $byInterface = [];
+        foreach ($assignments as $id => $row) {
+            if (!Policy::assignmentPaused($row)) {
+                $byInterface[$row['interface']][$id] = $row;
+            }
+        }
+        foreach ($settings['interfaces'] as $interface) {
+            $serviceChanged = false;
+            $directRemoved = false;
+            foreach (['inet', 'inet6'] as $family) {
+                foreach (['static', 'learned'] as $type) {
+                    $bypass = Policy::marker('bypass', $interface . ':' . $family . ':' . $type);
+                    if (($before[$bypass]['action'] ?? '') === 'pass' && ($after[$bypass]['action'] ?? '') !== 'pass') {
+                        $directRemoved = true;
+                        break 2;
+                    }
+                }
+            }
+            if (in_array($interface, $settings['smartInterfaces'], true)) {
+                foreach ($services as $service) {
+                    foreach (['service', 'service_dns'] as $type) {
+                        $marker = Policy::marker($type, $service['id'] . ':' . $interface);
+                        if (($before[$marker] ?? null) !== ($after[$marker] ?? null)) {
+                            $serviceChanged = true;
+                            break 2;
+                        }
+                    }
+                }
+            }
+            $sharedIpv6 = Policy::marker('kill_interface_v6', $interface);
+            if (($after[$sharedIpv6]['action'] ?? '') === 'block' &&
+                ($before[$sharedIpv6]['action'] ?? '') !== 'block') {
+                $ipv6Interfaces[] = $interface;
+            }
+            $unbound = Policy::marker('kill_unbound_v4', $interface);
+            if (($after[$unbound]['action'] ?? '') === 'block' &&
+                ($before[$unbound]['action'] ?? '') !== 'block') {
+                $ipv4Interfaces[] = $interface;
+            }
+            if ($network) {
+                $id = 'network:' . $interface;
+                $mode = $settings['networkMode'];
+                $outage = $legacyReset || (Policy::usesBase($mode) && in_array($settings['networkProfile'], $failedExits, true)) ||
+                    (Policy::usesMultiPath($mode) && $serviceOutage);
+                if (self::routingPathChanged($id, $before, $after, $outage) ||
+                    (Policy::usesMultiPath($mode) && $serviceChanged) ||
+                    ($directRemoved && !empty($settings['networkKillSwitch']) &&
+                        (Policy::usesBase($mode) || Policy::usesMultiPath($mode))) ||
+                    ($before[Policy::marker('bypass', $id)]['action'] ?? '') === 'match') {
+                    $segments[] = $interface;
+                }
+                continue;
+            }
+            foreach ($byInterface[$interface] ?? [] as $id => $row) {
+                $mode = Policy::mode($row);
+                $outage = $legacyReset || (Policy::usesBase($mode) && in_array($row['profile'] ?? '', $failedExits, true)) ||
+                    (Policy::usesMultiPath($mode) && $serviceOutage);
+                if (self::routingPathChanged($id, $before, $after, $outage) ||
+                    ($directRemoved && Policy::killSwitch($row)) ||
+                    ($serviceChanged && Policy::usesMultiPath($mode))) {
+                    array_push($scopes, $row['ip'], $row['ipv6'] ?? '');
+                }
+            }
+        }
+        foreach ([$ipv4Interfaces, $ipv6Interfaces] as $v6 => $interfaces) {
+            foreach (Policy::segmentNetworks($interfaces) as $prefix) {
+                if (str_contains($prefix, ':') === (bool)$v6) {
+                    $scopes[] = $prefix;
+                }
+            }
+        }
+        return array_values(array_unique(array_filter([...$scopes, ...Policy::segmentNetworks($segments)])));
+    }
+
+    private static function routingPathChanged(string $id, array $before, array $after, bool $observedOutage): bool
+    {
+        foreach (['device', 'kill', 'kill_v6'] as $type) {
+            $marker = Policy::marker($type, $id);
+            if (($before[$marker] ?? null) !== ($after[$marker] ?? null)) {
+                return true;
+            }
+        }
+        foreach (['inet', 'inet6'] as $family) {
+            $fallback = Policy::marker('wan_fallback', $id . ':' . $family);
+            $outage = Policy::marker('kill_outage', $id . ':' . $family);
+            if (($before[$fallback] ?? null) !== ($after[$fallback] ?? null) ||
+                ($before[$outage] ?? null) !== ($after[$outage] ?? null) ||
+                ($observedOutage && ($after[$outage]['action'] ?? '') === 'block')) {
                 return true;
             }
         }
         return false;
     }
 
-    public static function resetOutageStates(array $settings, array $assignments, array $before, ?array $after): void
-    {
-        if ($after === null) {
-            throw new \RuntimeException('The active firewall rules could not be read after updating the kill switch.');
-        }
-        if ($settings['coverage'] === 'network') {
-            $segments = [];
-            foreach ($settings['interfaces'] as $interface) {
-                $marker = Policy::marker('kill', 'network:' . $interface);
-                if (($before[$marker]['action'] ?? '') !== 'block' && ($after[$marker]['action'] ?? '') === 'block') {
-                    $segments[] = $interface;
-                }
-            }
-            foreach (Policy::segmentNetworks($segments) as $network) {
-                self::resetKillSwitch($network);
-            }
-            return;
-        }
-        foreach ($assignments as $id => $row) {
-            if (Policy::mode($row) !== 'multi' || !Policy::killSwitch($row)) {
-                continue;
-            }
-            $marker = Policy::marker('kill', $id);
-            if (($before[$marker]['action'] ?? '') !== 'block' && ($after[$marker]['action'] ?? '') === 'block') {
-                foreach (array_filter([$row['ip'], $row['ipv6'] ?? '']) as $ip) {
-                    self::resetKillSwitch($ip);
-                }
-            }
-        }
-    }
-
-    public static function combinedStateScopes(array $settings, array $assignments): array
+    public static function serviceStateScopes(array $settings, array $assignments): array
     {
         if (!$settings['enabled']) {
             return [];
         }
         if ($settings['coverage'] === 'network') {
-            return $settings['networkMode'] === 'full_multi' ? Policy::segmentNetworks($settings['interfaces']) : [];
+            return Policy::usesMultiPath($settings['networkMode']) ? Policy::segmentNetworks($settings['interfaces']) : [];
         }
-
         $scopes = [];
         foreach ($assignments as $row) {
-            if (Policy::mode($row) === 'full_multi' && !Policy::assignmentPaused($row) &&
-                in_array($row['interface'], $settings['interfaces'], true)) {
+            if (Policy::usesMultiPath(Policy::mode($row)) && Policy::killSwitch($row) &&
+                !Policy::assignmentPaused($row) && in_array($row['interface'], $settings['interfaces'], true)) {
                 array_push($scopes, $row['ip'], $row['ipv6'] ?? '');
             }
         }
@@ -306,26 +498,6 @@ final class Operations
             }
         }
         return array_values(array_unique(array_filter($scopes)));
-    }
-
-    public static function networkPathChanges(array $settings, array $before, array $after): array
-    {
-        if ($settings['coverage'] !== 'network' || !Policy::usesBase($settings['networkMode'])) {
-            return [];
-        }
-        return array_values(array_filter($settings['interfaces'], static function (string $interface) use ($before, $after): bool {
-            $id = 'network:' . $interface;
-            foreach ([
-                Policy::marker('device', $id),
-                Policy::marker('wan_fallback', $id . ':inet'),
-                Policy::marker('wan_fallback', $id . ':inet6')
-            ] as $marker) {
-                if (($before[$marker] ?? null) !== ($after[$marker] ?? null)) {
-                    return true;
-                }
-            }
-            return false;
-        }));
     }
 
     public static function resetKillSwitch(string $source): void

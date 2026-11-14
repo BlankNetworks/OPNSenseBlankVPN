@@ -159,6 +159,7 @@ final class Policy
     public static function networkBypassAssignments(array $settings, array $assignments): array
     {
         if (empty($settings['enabled']) || ($settings['coverage'] ?? '') !== 'network' ||
+            !empty($settings['networkKillSwitch']) ||
             !in_array($settings['networkMode'] ?? '', ['full', 'multi', 'full_multi'], true)) {
             return [];
         }
@@ -212,8 +213,10 @@ final class Policy
     public static function refreshMacConflicts(BlankVpn $model): void
     {
         $assignments = self::assignments($model, true);
-        $exceptions = self::networkBypassAssignments(self::settings($model), $assignments);
-        $rules = array_filter($assignments, self::bindsMac(...)) + $exceptions;
+        $settings = self::settings($model);
+        $exceptions = self::networkBypassAssignments($settings, $assignments);
+        $protectedRules = self::protectedLanAssignments($settings, $assignments);
+        $rules = array_filter($assignments, self::bindsMac(...)) + $exceptions + $protectedRules;
         if ($rules === []) {
             return;
         }
@@ -225,7 +228,13 @@ final class Policy
         $addresses = array_fill_keys(array_values($confirmed), true);
         $rows = array_filter($reservations, static fn (array $row): bool => isset($addresses[$row['ip']]));
         $previous = self::macState();
-        $observations = $diagnostics->reservationClaims($rows, $previous['observations'] ?? []);
+        $protectedAddresses = [];
+        foreach ($protectedRules as $id => $row) {
+            if (isset($confirmed[$id])) {
+                $protectedAddresses[$row['interface'] . '/' . $row['mac']] = $confirmed[$id];
+            }
+        }
+        $observations = $diagnostics->reservationClaims($rows, $previous['observations'] ?? [], $protectedAddresses);
         $ipv6Requests = [];
         foreach ($exceptions as $id => $row) {
             $ip6 = self::networkBypassIpv6($row);
@@ -234,8 +243,10 @@ final class Policy
             }
         }
         $networkBypassIpv6 = $ipv6Requests === [] ? [] : $diagnostics->confirmedNeighborIpv6Addresses($ipv6Requests);
-        self::writeState('mac-claims.json',
-            json_encode(compact('confirmed', 'observations', 'networkBypassIpv6'), JSON_THROW_ON_ERROR));
+        $state = compact('confirmed', 'observations', 'networkBypassIpv6');
+        if ($state !== $previous) {
+            self::writeState('mac-claims.json', json_encode($state, JSON_THROW_ON_ERROR));
+        }
     }
 
     private static function macState(): array
@@ -247,19 +258,47 @@ final class Policy
 
     public static function routingAssignments(array $assignments, Diagnostics $diagnostics): array
     {
-        $macRules = array_filter($assignments, self::bindsMac(...));
-        if ($macRules === []) {
+        $boundRules = array_filter($assignments, static fn (array $row): bool =>
+            self::bindsMac($row) || self::killSwitch($row));
+        if ($boundRules === []) {
             return $assignments;
         }
         $state = self::macState();
         $claims = DeviceIdentity::combineClaims($state['observations'] ?? []);
         $reservations = DeviceIdentity::filterReservations($diagnostics->reservations(), $claims);
-        $bindings = DeviceIdentity::lanBindings($macRules, DeviceIdentity::index($reservations));
+        $bindings = DeviceIdentity::lanBindings($boundRules, DeviceIdentity::index($reservations));
         foreach ($bindings as $id => $ip) {
-            // Wait for the next refresh before using a new configured address on a native reload.
-            $assignments[$id]['ip'] = $ip === ($state['confirmed'][$id] ?? null) ? ($ip ?? '') : '';
+            $row = $assignments[$id];
+            // MAC-bound rules must see the refresh before moving. Fixed-IP guards quarantine a
+            // conflicting reservation instead of allowing the device's new IPv4 to escape.
+            $expected = self::bindsMac($row) ? ($state['confirmed'][$id] ?? null) : ($row['ip'] ?? null);
+            $assignments[$id]['ip'] = $ip === $expected ? ($ip ?? '') : '';
         }
         return $assignments;
+    }
+
+    public static function killSwitchIpv6Interfaces(array $settings, array $assignments): array
+    {
+        return array_values(array_unique(array_column(self::protectedLanAssignments($settings, $assignments), 'interface')));
+    }
+
+    public static function unboundKillSwitchInterfaces(array $settings, array $assignments, ?Diagnostics $diagnostics = null): array
+    {
+        $rows = array_filter(self::protectedLanAssignments($settings, $assignments), static fn (array $row): bool =>
+            !filter_var($row['ip'] ?? '', FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ||
+            ($diagnostics !== null && !$diagnostics->hasReservation($row['interface'], $row['ip'], $row['mac'])));
+        return array_values(array_unique(array_column($rows, 'interface')));
+    }
+
+    private static function protectedLanAssignments(array $settings, array $assignments): array
+    {
+        if (empty($settings['enabled']) || ($settings['coverage'] ?? '') !== 'device') {
+            return [];
+        }
+        return array_filter($assignments, static fn (array $row): bool =>
+            ($row['kind'] ?? 'lan') !== 'tailnet' && !self::assignmentPaused($row) && self::killSwitch($row) &&
+            self::interfaceId($row['interface']) && in_array($row['interface'], $settings['interfaces'], true) &&
+            !in_array($row['interface'], $settings['tailscaleInterfaces'] ?? [], true));
     }
 
     public static function killSwitch(array $assignment): bool

@@ -161,7 +161,7 @@ final class Diagnostics
         return $snapshot;
     }
 
-    public function reservationClaims(array $reservations, array $previous): array
+    public function reservationClaims(array $reservations, array $previous, array $protected = []): array
     {
         if ($reservations === []) {
             return [];
@@ -190,6 +190,15 @@ final class Diagnostics
             if (is_array($row) && empty($row['expired']) && empty($row['permanent']) &&
                 !in_array($row['type'] ?? '', ['published', 'proxy'], true)) {
                 $record($row, 'intf', 'ip', 'mac');
+                $interface = $interfaces[$row['intf'] ?? '']['id'] ?? '';
+                $mac = self::mac((string)($row['mac'] ?? ''));
+                $alternate = (string)($row['ip'] ?? '');
+                $expected = $protected[$interface . '/' . $mac] ?? null;
+                if ($expected !== null && $alternate !== $expected &&
+                    filter_var($alternate, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                    // Preserve evidence against the reserved address until ARP can confirm the conflict is gone.
+                    $claims[$interface . '/' . $expected]['alternate-v4'] = true;
+                }
             }
         }
         $observations['arp'] = $neighbors === null

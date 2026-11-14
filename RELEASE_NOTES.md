@@ -43,3 +43,10 @@
 - Saved VPN and proxy servers have a dedicated **Ping** column. Testing, reading errors, or clearing results leaves the server rows and actions in place.
 - Multi-Path builds its server choices once and renders destination pickers when the tab is open.
 - Dashboard refresh reuses a single proxy catalog read and shares WireGuard route lookups within each request.
+
+## 0.8.21
+
+- Whole-Network and device Kill Switches keep public client traffic off the ISP path. Bypass is paused in protected scopes, and a detected outage on any required base or Multi-Path exit closes the scope. Protected DNS uses the selected tunnel or local-only resolution.
+- Enabling protection or detecting an outage invalidates affected PF sessions. Unconfirmed device bindings temporarily block public IPv4 on their LAN or VLAN. LAN device rules with a Kill Switch also block public IPv6 on that interface, including temporary addresses.
+- Background proxy restarts use bounded retry delays. Healthy workers are kept running, unused tunnels are skipped by routine probes, and idle subscription checks avoid loading the catalog. Failed subscription refreshes retain the last good servers.
+- Obsolete firewall table files are cleaned up, and the Mihomo on-disk proxy cache is disabled. Upgrading restarts assigned proxy workers once to apply the cache setting.

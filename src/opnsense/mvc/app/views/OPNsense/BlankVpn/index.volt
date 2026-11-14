@@ -336,7 +336,7 @@
                     <div id="bv-managed" class="bv-interface-list"></div>
                 </fieldset>
                 <label class="bv-check" id="bv-network-kill-field" hidden>
-                    <input type="checkbox" id="bv-network-kill" checked> Kill Switch
+                    <input type="checkbox" id="bv-network-kill" aria-describedby="bv-coverage-note" checked> Kill Switch
                 </label>
                 <div id="bv-network-fields" class="bv-fields" hidden>
                     <label>How should their internet traffic be routed?
@@ -485,7 +485,7 @@
                 </label>
                 <p id="bv-device-on-demand-note" class="text-muted">Automatically uses this rule when the device connects.</p>
                 <label class="bv-check" id="bv-device-kill-field">
-                    <input type="checkbox" id="bv-device-kill" checked> Kill Switch
+                    <input type="checkbox" id="bv-device-kill" aria-describedby="bv-route-note" checked> Kill Switch
                 </label>
                 <p id="bv-identity" class="text-muted"></p>
                 <p id="bv-route-note" class="text-muted"></p>

@@ -107,6 +107,12 @@ assertProxy(ProxyCatalog::subscriptionUsage('Upload=12; download=34; total=100; 
     ['upload' => 12, 'download' => 34, 'total' => 100, 'expire' => 1798761600], 'Read quota and expiry headers.');
 assertProxy(ProxyCatalog::subscriptionUsage('upload=1; upload=2; total=9223372036854775808; expire=-1; download=0') ===
     ['download' => 0], 'Ignore duplicate, overflowed and negative metadata.');
+$nextRefresh = new ReflectionMethod(ProxyCatalog::class, 'nextRefresh');
+$feedClock = 1767225600;
+assertProxy($nextRefresh->invoke(null, ['auto' => false, 'updated' => $feedClock]) === null &&
+    $nextRefresh->invoke(null, ['auto' => true, 'updated' => $feedClock, 'attempted' => $feedClock]) === $feedClock + 21600 &&
+    $nextRefresh->invoke(null, ['auto' => true, 'updated' => 0, 'attempted' => $feedClock]) === $feedClock + 900,
+    'Automatic refresh preserves the six-hour cadence and backs off after a failed attempt.');
 
 $savedNode = proxyNode($ss);
 $id = $savedNode['id'];
@@ -238,6 +244,25 @@ assertProxy(str_contains($probeFailure->invoke(null, CURLE_SSL_CACERT, 0), 'cert
 $singNode = proxyNode('{"outbounds":[{"tag":"example","type":"anytls","server":"192.0.2.2","server_port":443,"password":"fixture-pass","tls":{"enabled":true,"server_name":"example.com"}}]}');
 $sing = ProxyRuntime::configuration($route, $singNode);
 assertProxy($sing['adapter']['route']['final'] === 'selected', 'sing-box has exactly one selected outbound.');
+assertProxy($ssConfig['mihomo']['profile'] === ['store-selected' => false, 'store-fake-ip' => false],
+    'One selected upstream and redir-host DNS do not need a persistent Mihomo routing cache.');
+
+$nextRetry = new ReflectionMethod(ProxyRuntime::class, 'nextRetry');
+$waiting = new ReflectionMethod(ProxyRuntime::class, 'waitingToRetry');
+$when = 1760000000;
+$retry = [];
+foreach ([60, 120, 240, 480, 900, 900] as $delay) {
+    $retry = $nextRetry->invoke(null, $retry, 'same-route', $when);
+    assertProxy($retry['retryAt'] === $when + $delay &&
+        $waiting->invoke(null, $retry, 'same-route', $when) &&
+        !$waiting->invoke(null, $retry, 'same-route', $when + $delay),
+        'Background proxy restarts should back off to a bounded retry time.');
+    $when += $delay;
+}
+assertProxy(!$waiting->invoke(null, $retry, 'different-route', $when - 1) &&
+    !$waiting->invoke(null, $retry, 'same-route', $when - 901) &&
+    $nextRetry->invoke(null, $retry, 'different-route', $when)['retryAt'] === $when + 60,
+    'Replacing an exit or a backward clock jump clears stale retry timing.');
 
 if (isset($argv[1])) {
     $dir = $argv[1];

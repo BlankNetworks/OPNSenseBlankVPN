@@ -164,6 +164,12 @@ namespace {
     check(!$diagnostics->hasReservation('wan', '192.168.10.5', '02:00:00:00:00:01'), 'Reservation scope');
     check($backend->calls === [], 'Firewall generation never calls configd for reservations');
 
+    $targets = [['interface' => 'lan', 'ip' => '192.168.10.18', 'mac' => '02:00:00:00:00:06']];
+    $observed = $diagnostics->reservationClaims($targets, [], ['lan/02:00:00:00:00:06' => '192.168.10.18']);
+    check(in_array('alternate-v4', $observed['arp']['lan/192.168.10.18'] ?? [], true) &&
+        !isset($observed['arp']['lan/192.168.10.16']),
+        'A protected MAC observed at any other active IPv4 invalidates its reserved address.');
+
     $snapshot = $diagnostics->devices();
     check($snapshot['warnings'] === [] && !$snapshot['truncated'], 'Healthy discovery result');
     $devices = array_column($snapshot['devices'], null, 'id');
