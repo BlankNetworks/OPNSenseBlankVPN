@@ -193,15 +193,22 @@
         <section class="bv-panel" aria-labelledby="bv-saved-vpn-title">
             <h2 id="bv-saved-vpn-title">Saved VPN servers</h2>
             <p class="text-muted">Use Network Settings to assign a saved server to devices or a whole network.</p>
-            <div class="bv-scroll">
-                <table class="table bv-table bv-profiles bv-server-table" role="table">
+            <div class="bv-scroll bv-server-scroll">
+                <table class="table bv-table bv-server-table" role="table">
+                    <colgroup>
+                        <col>
+                        <col>
+                        <col class="bv-server-status-column">
+                        <col class="bv-server-ping-column">
+                        <col class="bv-server-actions-column">
+                    </colgroup>
                     <thead role="rowgroup">
                         <tr role="row">
                             <th scope="col" role="columnheader">Profile</th>
                             <th scope="col" role="columnheader">VPN service and server</th>
                             <th scope="col" role="columnheader">Status</th>
-                            <th scope="col" role="columnheader" class="bv-ping-heading">Ping</th>
-                            <th scope="col" role="columnheader" class="bv-server-actions"><span class="sr-only">Actions</span></th>
+                            <th scope="col" role="columnheader">Ping</th>
+                            <th scope="col" role="columnheader" class="bv-server-actions-cell">Actions</th>
                         </tr>
                     </thead>
                     <tbody id="bv-profile-list" role="rowgroup"></tbody>
@@ -296,15 +303,22 @@
             </table>
         </div>
         <p id="bv-proxy-count" class="text-muted" role="status"></p>
-        <div class="bv-scroll">
+        <div class="bv-scroll bv-server-scroll">
             <table class="table bv-table bv-server-table" role="table">
+                <colgroup>
+                    <col>
+                    <col class="bv-server-protocol-column">
+                    <col class="bv-server-core-column">
+                    <col class="bv-server-ping-column">
+                    <col class="bv-server-actions-column">
+                </colgroup>
                 <thead role="rowgroup">
                     <tr role="row">
                         <th scope="col" role="columnheader">Server</th>
                         <th scope="col" role="columnheader">Protocol</th>
                         <th scope="col" role="columnheader">Core</th>
-                        <th scope="col" role="columnheader" class="bv-ping-heading">Ping</th>
-                        <th scope="col" role="columnheader" class="bv-server-actions">Actions</th>
+                        <th scope="col" role="columnheader">Ping</th>
+                        <th scope="col" role="columnheader" class="bv-server-actions-cell">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="bv-proxy-list" role="rowgroup"></tbody>

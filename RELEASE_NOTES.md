@@ -57,3 +57,7 @@
 - A checked Multi-Path rule without a base routes working service lists independently and blocks unmatched destinations.
 - An unavailable health probe preserves the last confirmed tunnel status. A verified failure still closes the affected path, and a successful probe reopens it.
 - The Network dashboard shows the active Whole-Network route for its devices. Saved individual rules are used when individual coverage is selected.
+
+## 0.8.23
+
+- Saved VPN and proxy servers use compact, aligned rows. Status and ping results stay on one line, and desktop actions sit side by side. The lists switch to a two-column layout when the dashboard has less room.

@@ -455,10 +455,6 @@
     vertical-align: middle;
 }
 
-.blankvpn .bv-vpn-status {
-    font-weight: 650;
-}
-
 .blankvpn .bv-table thead th {
     border-bottom: 1px solid var(--bv-line);
     background: var(--bv-raised);
@@ -477,7 +473,6 @@
     margin: .2rem .3rem .2rem 0;
 }
 
-.blankvpn .bv-profiles,
 .blankvpn .bv-empty {
     padding: 1rem;
     text-align: center;
@@ -619,46 +614,83 @@
     font-weight: 700;
 }
 
+.blankvpn .bv-server-scroll {
+    container: server-list / inline-size;
+}
+
 .blankvpn .bv-server-table {
     table-layout: fixed;
-    min-width: 43rem;
 }
 
-.blankvpn .bv-profiles th:nth-child(3) {
-    width: 6rem;
+.blankvpn .bv-server-status-column {
+    width: 6.5em;
 }
 
-.blankvpn .bv-server-table .bv-ping-heading {
-    width: 8.5rem;
+.blankvpn .bv-server-protocol-column {
+    width: 6em;
 }
 
-.blankvpn .bv-server-table .bv-server-actions {
-    width: 14rem;
+.blankvpn .bv-server-core-column {
+    width: 8em;
 }
 
-.blankvpn .bv-server-table td {
-    overflow-wrap: anywhere;
+.blankvpn .bv-server-ping-column {
+    width: 8em;
+}
+
+.blankvpn .bv-server-actions-column {
+    width: 18em;
+}
+
+.blankvpn .bv-server-table :is(td, th) {
+    padding: .6em .75em;
+    vertical-align: middle;
+    text-align: start;
+    overflow-wrap: break-word;
+    word-break: normal;
+}
+
+.blankvpn .bv-server-table .bv-empty {
+    text-align: center;
+}
+
+.blankvpn .bv-server-table .bv-vpn-status {
+    font-weight: 650;
+    white-space: nowrap;
+}
+
+.blankvpn .bv-server-table .bv-server-actions-cell {
+    text-align: end;
+}
+
+.blankvpn .bv-server-controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: .35em;
+}
+
+.blankvpn .bv-server-controls .btn {
+    min-height: 2em;
+    margin: 0;
+    padding: .3em .65em;
+    white-space: nowrap;
 }
 
 .blankvpn .bv-ping-result {
     position: relative;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 1.5rem;
+    grid-template-columns: minmax(0, 1fr) 1.5em;
     align-items: center;
-    gap: .15rem;
-    width: 7.25rem;
-    height: 1.75rem;
-    margin-inline: auto;
+    gap: .15em;
+    width: 7em;
+    height: 1.75em;
     line-height: 1.2;
     text-align: start;
     white-space: nowrap;
     color: var(--bv-muted);
     font-size: .9em;
     font-variant-numeric: tabular-nums;
-}
-
-.blankvpn #bv-proxy-list .bv-ping-result {
-    margin-inline-start: 0;
 }
 
 .blankvpn .bv-ping-result[data-result="pass"] {
@@ -713,18 +745,15 @@
     overflow-wrap: anywhere;
 }
 
-@media (max-width: 767px) {
+@container server-list (max-width: 48em) {
     .blankvpn .bv-server-table,
     .blankvpn .bv-server-table tbody,
-    .blankvpn .bv-server-table tr,
     .blankvpn .bv-server-table td {
         display: block;
     }
 
-    .blankvpn .bv-server-table {
-        min-width: 0;
-        padding: 0;
-        text-align: start;
+    .blankvpn .bv-server-table colgroup {
+        display: none;
     }
 
     .blankvpn .bv-server-table thead {
@@ -735,30 +764,38 @@
         clip-path: inset(50%);
     }
 
-    .blankvpn .bv-server-table tr + tr {
-        border-top: 1px solid var(--bv-line);
-        margin-top: .65rem;
-        padding-top: .5rem;
+    .blankvpn .bv-server-table tbody tr {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: center;
+        gap: .45em 1em;
+        padding: .8em .25em;
+        border-bottom: 1px solid var(--bv-line);
     }
 
     .blankvpn .bv-server-table td {
-        padding: .23rem .1rem;
+        padding: 0;
         border: 0;
+    }
+
+    .blankvpn .bv-server-table :is(.bv-server-actions-cell, .bv-empty) {
+        grid-column: 1 / -1;
+    }
+
+    .blankvpn .bv-server-controls {
+        justify-content: flex-start;
     }
 
     .blankvpn .bv-server-table td[data-label]::before {
         content: attr(data-label) " ";
-        font-weight: 600;
+        color: var(--bv-muted);
+        font-size: .85em;
+        font-weight: 550;
     }
 
     .blankvpn .bv-server-table td.bv-ping-cell {
         display: flex;
         align-items: center;
-        min-height: 2.21rem;
-        gap: .4rem;
-    }
-
-    .blankvpn .bv-ping-result {
-        margin-inline: 0;
+        gap: .45em;
     }
 }

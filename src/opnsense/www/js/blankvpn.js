@@ -202,6 +202,16 @@
             target.className = 'bv-empty text-muted';
         }
 
+        function serverControls(row) {
+            const target = row.insertCell();
+            target.setAttribute('role', 'cell');
+            target.className = 'bv-server-actions-cell';
+            const controls = document.createElement('div');
+            controls.className = 'bv-server-controls';
+            target.append(controls);
+            return controls;
+        }
+
         function button(label, callback, accessibleLabel) {
             const element = document.createElement('button');
             element.type = 'button';
@@ -821,15 +831,14 @@
                     const services = state.services.filter((service) => service.profile === profile.id).length;
                     cell(row, profile.name || profile.relay, '', used + ' device assignment' + (used === 1 ? '' : 's')
                         + ' · ' + services + ' service' + (services === 1 ? '' : 's'));
-                    cell(row, providerName(profile), 'VPN service', profile.relay || profile.providerServer || profile.gateway || profile.protocol || 'Imported WireGuard');
+                    cell(row, providerName(profile), '', profile.relay || profile.providerServer || profile.gateway || profile.protocol || 'Imported WireGuard');
                     const status = cell(row, vpnStatus(profile), 'Status');
                     status.className = 'bv-vpn-status';
                     status.dataset.vpnStatus = profile.id;
                     status.setAttribute('aria-live', 'polite');
                     const ping = cell(row, '—', 'Ping');
                     ping.className = 'bv-ping-cell';
-                    const actions = row.insertCell();
-                    actions.setAttribute('role', 'cell');
+                    const actions = serverControls(row);
                     const remove = button('Remove', (event) => removeProfile(profile, event.currentTarget),
                         'Remove ' + profileName(profile.id));
                     remove.disabled = network || used > 0 || services > 0;
@@ -1406,14 +1415,14 @@
             }
             for (const node of results) {
                 const row = servers.insertRow();
-                cell(row, node.name, '', endpoint(node.host, node.port));
-                cell(row, proxyProtocol(node).toUpperCase(), 'Protocol', node.legacy ? 'Legacy or unencrypted transport' : '');
+                const address = endpoint(node.host, node.port);
+                cell(row, node.name, '', node.legacy ? address + ' · Legacy or unencrypted transport' : address);
+                cell(row, proxyProtocol(node).toUpperCase(), 'Protocol');
                 const exit = state.profiles.find((profile) => profile.node === node.id);
                 cell(row, node.core, 'Core', node.disabled ? 'Disabled' : exit?.status || 'Ready to assign');
                 const ping = cell(row, '—', 'Ping');
                 ping.className = 'bv-ping-cell';
-                const actions = row.insertCell();
-                actions.setAttribute('role', 'cell');
+                const actions = serverControls(row);
                 appendConnectionTest(actions, exit ? 'testExit' : 'testProxyNode', exit?.id || node.id, node.name,
                     {nodeId: node.id, ping});
                 const edit = nameEditor(row, node.name, node.id, 'renameProxyNode',

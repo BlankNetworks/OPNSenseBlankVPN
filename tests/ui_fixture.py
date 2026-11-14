@@ -32,7 +32,12 @@ def main():
         '<!doctype html><meta charset="utf-8"><meta name="viewport" '
         'content="width=device-width, initial-scale=1">'
         f"<style>{css}</style>"
-        "<style>select.form-control { background-image: linear-gradient(black, black); }"
+        "<style>html { font-size:62.5%; } body { margin:0; padding-inline:8px;"
+        "font:14px/1.42857 sans-serif; }"
+        "@media (min-width:850px) { body { padding-inline-start:208px; } }"
+        ".table { border-collapse:collapse; } .table th, .table td { padding:8px; }"
+        ".table th { text-align:start; } .btn-sm { padding:5px 10px; font:12px/1.5 sans-serif; }"
+        "select.form-control { background-image: linear-gradient(black, black); }"
         ".btn-primary:focus, .btn-primary:hover, .btn-default:focus { color:white; background:#eee; }"
         ".form-control:focus, .bv-interface-list label { color:white; background:#eee; }"
         ".table td { color:white; background:#eee; }"
@@ -47,7 +52,7 @@ def main():
         sandbox_flags = ["--no-sandbox"] if args.no_sandbox else []
         if args.no_sandbox and platform.system() == "Darwin":
             sandbox_flags.append("--single-process")
-        for size in ("390,844", "1280,900"):
+        for size in ("320,800", "390,844", "900,900", "1280,900"):
             result = subprocess.run(
                 [args.chromium, *sandbox_flags, "--headless", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run",
                  "--no-default-browser-check", f"--user-data-dir={root / 'profile'}",

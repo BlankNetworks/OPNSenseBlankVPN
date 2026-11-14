@@ -324,6 +324,47 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     const steady = (row, before) => geometry(row).every((rect, index) =>
         rect.every((value, dimension) => Math.abs(value - before[index][dimension]) < .5));
+    const textFitsOnOneLine = (element) => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        const range = document.createRange();
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            if (node.textContent.trim()) {
+                range.selectNodeContents(node);
+                const lines = [...range.getClientRects()].filter((rect) => rect.width > 0);
+                const cell = element.getBoundingClientRect();
+                return lines.length === 1 && lines[0].left >= cell.left - 1 && lines[0].right <= cell.right + 1;
+            }
+        }
+        return false;
+    };
+    const checkServerLayout = (row, name, status) => {
+        const table = row.closest('table');
+        const tableBounds = table.getBoundingClientRect();
+        const frame = table.parentElement.getBoundingClientRect();
+        const actions = row.querySelector('[data-test-key]').closest('td');
+        const buttons = [...actions.querySelectorAll('button')].map(button => button.getBoundingClientRect());
+        assert(tableBounds.width <= frame.width + 1 &&
+            buttons.every(button => button.width > 0 && button.left >= frame.left - 1 && button.right <= frame.right + 1),
+            name + ' must fit the available space with all actions visible.');
+        if (status) {
+            assert(textFitsOnOneLine(status), 'VPN status must stay on a single line.');
+        }
+        const presentation = getComputedStyle(table).display;
+        if (document.documentElement.clientWidth >= 1200) {
+            const alignment = getComputedStyle(row.cells[0]).textAlign;
+            assert(presentation === 'table' && ['left', 'start'].includes(alignment),
+                name + ' must align server names with their desktop table heading.');
+            assert(buttons.every(button => Math.abs(button.top - buttons[0].top) < 1),
+                name + ' must keep its desktop actions in one row.');
+            assert(row.getBoundingClientRect().height <= 2 * buttons[0].height + 18,
+                name + ' must keep its desktop row compact.');
+        } else {
+            const identity = row.cells[0].getBoundingClientRect();
+            assert(presentation !== 'table' && buttons[0].top >= identity.bottom - 1,
+                name + ' must stack its details and actions when the available space is narrow.');
+        }
+    };
+    checkServerLayout(vpnRow, 'Saved VPN servers', vpnRow.querySelector('[data-vpn-status]'));
     const beforeVpn = geometry(vpnRow);
     vpnTest.click();
     assert(vpnTest.disabled && vpnPing.firstElementChild.textContent === 'Testing…' && steady(vpnRow, beforeVpn),
@@ -362,6 +403,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         bv('register').disabled && bv('register').textContent === 'Already added' &&
         ![...bv('network-profile').options].some(option => option.value === 'vpn1'),
         'A disabled Mullvad server must stay saved and leave the routing picker.');
+    assert(textFitsOnOneLine(bv('profile-list').querySelector('[data-vpn-status="vpn1"]')),
+        'The Disabled status must stay on a single line.');
     [...bv('profile-list').querySelectorAll('button')].find(button => button.textContent === 'Enable').click();
     await wait();
     assert(!reply.dashboard.profiles[0].disabled && vpnStatus('vpn1') === 'Standby',
@@ -474,6 +517,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const proxyRow = bv('proxy-list').rows[0];
     const proxyTest = proxyRow.querySelector('[data-test-key]');
     const proxyPing = proxyRow.querySelector('[data-test-result]');
+    checkServerLayout(proxyRow, 'Proxy servers');
     const beforeProxy = geometry(proxyRow);
     proxyTest.click();
     assert(proxyPing.firstElementChild.textContent === 'Testing…' && steady(proxyRow, beforeProxy),
