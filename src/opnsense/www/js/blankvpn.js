@@ -8,7 +8,24 @@
             return;
         }
 
-        const modes = {full: 'Use one VPN or proxy', multi: 'Multi-Path', disabled: 'Off', blocked: 'Blocked'};
+        const modes = {
+            full: 'Use one VPN or proxy', multi: 'Multi-Path', full_multi: 'Base VPN + Multi-Path',
+            disabled: 'Off', blocked: 'Blocked'
+        };
+
+        function usesBaseServer(mode) {
+            return mode === 'full' || mode === 'full_multi';
+        }
+
+        function requireKillSwitch(control, required) {
+            if (required && control.dataset.previousChecked === undefined) {
+                control.dataset.previousChecked = String(control.checked);
+                control.checked = true;
+            } else if (!required && control.dataset.previousChecked !== undefined) {
+                control.checked = control.dataset.previousChecked === 'true';
+                delete control.dataset.previousChecked;
+            }
+        }
         const insecureWebGui = window.location.protocol === 'http:';
         const bypassDestination = 'bypass';
         const serviceOrder = new Intl.Collator(undefined, {sensitivity: 'base', numeric: true});
@@ -20,6 +37,7 @@
             tailnetDevices: [],
             proxyPage: 0,
             proxyCatalogLoaded: false,
+            proxyCatalogRequest: null,
             services: [],
             proxyNodes: [],
             proxyFeeds: [],
@@ -30,7 +48,7 @@
             canManageBackups: false,
             update: null,
             updateTimer: null,
-            updateBusy: false,
+            updateAction: '',
             backup: null,
             section: 'vpns',
             provider: 'mullvad',
@@ -388,15 +406,16 @@
             state.update = {...data, pollUntil: data.pollUntil || state.update?.pollUntil ||
                 (data.running ? Date.now() + 600000 : 0)};
             const status = byId('update-status');
+            const message = state.updateAction === 'check' ? 'Checking for an update…'
+                : state.updateAction === 'apply' ? 'Starting update…' : data.message;
             const summary = [data.installed ? 'Installed ' + data.installed : '',
-                data.available ? 'Available ' + data.available : '', data.message];
+                data.available ? 'Available ' + data.available : '', message];
             status.textContent = summary.filter(Boolean).join(' · ');
-            byId('update-enable').hidden = !state.canWriteUpdates || data.enabled || !data.supported || data.running;
-            byId('update-enable').disabled = state.updateBusy;
             byId('update-check').hidden = !state.canWriteUpdates;
-            byId('update-check').disabled = !data.enabled || !data.supported || data.running || state.updateBusy;
-            byId('update-apply').hidden = !state.canWriteUpdates || !data.enabled || !data.available || data.running;
-            byId('update-apply').disabled = state.updateBusy;
+            byId('update-apply').hidden = !state.canWriteUpdates;
+            const disabled = !state.canWriteUpdates || !data.supported || data.running || !!state.updateAction;
+            byId('update-check').disabled = disabled;
+            byId('update-apply').disabled = disabled || !data.enabled || !data.available;
             clearTimeout(state.updateTimer);
             if (data.running) {
                 state.updateTimer = window.setTimeout(() => void refreshUpdate(true), 4000);
@@ -406,7 +425,7 @@
         async function refreshUpdate(retry = false) {
             try {
                 const result = await api('status', undefined, '', 'update');
-                if (state.updateBusy) {
+                if (state.updateAction) {
                     return;
                 }
                 const previous = state.update;
@@ -501,13 +520,31 @@
             const managed = list(state.settings?.interfaces);
             const transit = list(state.settings?.tailscaleInterfaces);
             const nativeTailnet = state.settings?.tailscaleSetup?.ready === true;
+            const lanAssignments = new Map();
+            const tailnetByIPv4 = new Map();
+            const tailnetByIPv6 = new Map();
+            for (const assignment of state.assignments) {
+                if (assignment.kind === 'tailnet') {
+                    if (assignment.ip && !tailnetByIPv4.has(assignment.ip)) {
+                        tailnetByIPv4.set(assignment.ip, assignment);
+                    }
+                    if (assignment.ipv6 && !tailnetByIPv6.has(assignment.ipv6)) {
+                        tailnetByIPv6.set(assignment.ipv6, assignment);
+                    }
+                } else {
+                    const key = assignment.interface + '/' + assignment.mac;
+                    if (!lanAssignments.has(key)) {
+                        lanAssignments.set(key, assignment);
+                    }
+                }
+            }
             const seen = new Set();
             const rows = [];
             for (const device of [...state.devices, ...state.tailnetDevices]) {
                 const tailnet = device.kind === 'tailnet';
-                const assignment = state.assignments.find((item) => tailnet
-                    ? item.kind === 'tailnet' && (item.ip === device.ipv4 || list(device.ipv6).includes(item.ipv6))
-                    : item.kind !== 'tailnet' && item.interface === device.interface && item.mac === device.mac);
+                const assignment = tailnet
+                    ? tailnetByIPv4.get(device.ipv4) || list(device.ipv6).map((ip) => tailnetByIPv6.get(ip)).find(Boolean)
+                    : lanAssignments.get(device.interface + '/' + device.mac);
                 if (assignment) {
                     seen.add(assignment.id);
                 }
@@ -557,7 +594,8 @@
                 } else {
                     cell(row, interfaceId ? networkName(interfaceId) : '—', 'Interface');
                 }
-                const onDemand = assignment && ['full', 'multi'].includes(assignment.mode) && assignment.onDemand !== false;
+                const onDemand = assignment && (usesBaseServer(assignment.mode) || assignment.mode === 'multi') &&
+                    assignment.onDemand !== false;
                 const ruleDetail = [assignment?.profile ? profileName(assignment.profile) : '', onDemand ? 'On Demand' : ''];
                 if (bindMac) {
                     ruleDetail.push('Follows MAC address');
@@ -577,7 +615,7 @@
                     } : null;
                     if (assignment) {
                         actions.append(button('Edit', () => openAssignment(assignment, tailnet ? 'tailnet' : 'lan', discovered), 'Edit ' + name));
-                        if (state.settings?.enabled && !paused && assignment.mode === 'full' && assignment.profile) {
+                        if (state.settings?.enabled && !paused && usesBaseServer(assignment.mode) && assignment.profile) {
                             appendConnectionTest(actions, 'testDeviceRoute', assignment.id, name, '', false, 'Ping');
                         }
                         if (tailnet) {
@@ -777,6 +815,7 @@
             if (settings && !state.settingsDirty) {
                 byId('coverage').value = settings.coverage || 'device';
                 byId('network-mode').value = settings.networkMode || 'disabled';
+                requireKillSwitch(byId('network-kill'), false);
                 byId('network-kill').checked = settings.networkKillSwitch ?? settings.networkMode !== 'multi';
                 const ports = availablePorts();
                 renderInterfaceChoices('managed', ports, list(settings.interfaces), 'No assigned home Ethernet or VLAN interfaces.');
@@ -785,11 +824,15 @@
                 byId('local').value = list(settings.localNetworks).join(', ');
             }
             updateCoverage();
+            renderDeviceRules();
         }
 
         function routableExits() {
-            return routingServers().filter((profile) => profile.kind === 'proxy'
-                || list(profile.dns).some((ip) => !ip.includes(':')));
+            return routingServers().filter(hasVpnDns);
+        }
+
+        function hasVpnDns(profile) {
+            return profile.kind === 'proxy' || list(profile.dns).some((ip) => !ip.includes(':'));
         }
 
         function routingServers() {
@@ -801,7 +844,10 @@
         function updateCoverage() {
             const network = byId('coverage').value === 'network';
             const mode = byId('network-mode').value;
+            const combined = mode === 'full_multi';
+            const baseServer = usesBaseServer(mode);
             const exit = byId('network-profile');
+            const kill = byId('network-kill');
             const selected = checkedInterfaces('managed');
             byId('device-options').hidden = network;
             for (const label of byId('interface-rules').children) {
@@ -809,10 +855,12 @@
             }
             byId('network-fields').hidden = !network;
             byId('network-kill-field').hidden = !network;
-            byId('network-kill').disabled = !network || !['full', 'multi'].includes(mode);
-            const killSwitch = byId('network-kill').checked;
-            byId('network-profile-field').hidden = !network || mode !== 'full';
-            exit.required = network && mode === 'full';
+            kill.disabled = !network || combined || (!baseServer && mode !== 'multi');
+            requireKillSwitch(kill, network && combined);
+            const killSwitch = kill.checked;
+            byId('network-profile-label').textContent = combined ? 'Base server' : 'Saved server';
+            byId('network-profile-field').hidden = !network || !baseServer;
+            exit.required = network && baseServer;
             const summary = {
                 full: exit.value
                     ? 'All selected interfaces use ' + profileName(exit.value) + '.'
@@ -821,6 +869,10 @@
                 multi: 'The selected interfaces use your domain lists. '
                     + (killSwitch ? 'All internet is blocked if a list’s server goes offline or no list has a server.'
                         : 'Other traffic uses regular internet.'),
+                full_multi: exit.value
+                    ? 'Default traffic uses ' + profileName(exit.value) + '. Matched domains use their Multi-Path servers. '
+                        + 'The Kill Switch blocks traffic when its assigned server is unavailable. Bypass lists use the base server.'
+                    : 'Choose a base server for default traffic. Set domain overrides in Multi-Path.',
                 blocked: 'Internet is blocked on the selected LANs and VLANs.',
                 disabled: 'Devices use your normal OPNsense routing.'
             };
@@ -832,10 +884,10 @@
                 return networkName(id) + ' · ' + (server?.name || route.gateway ||
                     (route.blocked ? 'Internet blocked' : saved.networkMode === 'multi' ? 'Multi-Path' : 'Regular internet'));
             });
+            const activeCoverage = saved?.networkMode === 'full_multi' ? 'Whole-Network + Multi-Path' : 'Whole-Network coverage';
             byId('current-routing').textContent = !saved?.enabled ? 'Active routing · Off'
-                : saved.coverage === 'network' ? 'Active routing · Whole-Network coverage' + (active.length ? ' · ' + active.join(' / ') : '')
+                : saved.coverage === 'network' ? 'Active routing · ' + activeCoverage + (active.length ? ' · ' + active.join(' / ') : '')
                     : 'Active routing · Only Devices I choose';
-            renderDeviceRules();
         }
 
         function renderTailscale() {
@@ -919,13 +971,17 @@
             const interfaces = state.activeSmartInterfaces;
             const settings = state.settings;
             const bypass = settings?.coverage === 'network' && settings.networkMode === 'full';
+            const combined = settings?.coverage === 'network' ? settings.networkMode === 'full_multi'
+                : state.assignments.some((assignment) => assignment.mode === 'full_multi' && !assignment.paused);
             const active = settings?.enabled && interfaces.length
                 && state.services.some((service) => service.profile && service.profile !== bypassDestination);
             byId('smart-status').textContent = bypass
                 ? 'Bypass lists use regular internet under Whole-Network coverage. The Kill Switch still applies if the server goes offline.'
-                : active ? 'Routing matched DNS traffic on ' + interfaces.map(networkName).join(', ') + '.'
-                    : 'Choose a server and enable Multi-Path to use these lists. Use Bypass with Whole-Network coverage through one VPN or proxy.';
-            byId('use-lan').hidden = bypass || !state.availableInterfaces.some((item) => item.id === 'lan')
+                : combined ? 'Matched domains use their Multi-Path servers. Bypass lists use the base server for VPN + Multi-Path rules.'
+                    : active ? 'Routing matched DNS traffic on ' + interfaces.map(networkName).join(', ') + '.'
+                        : 'Choose a server and enable Multi-Path to use these lists. Use Bypass with Whole-Network coverage through one VPN or proxy.';
+            byId('use-lan').hidden = bypass || (combined && settings?.coverage === 'network') ||
+                !state.availableInterfaces.some((item) => item.id === 'lan')
                 || interfaces.includes('lan') || list(settings?.strictInterfaces).includes('lan');
             const body = byId('service-list');
             if (state.services.length === 0) {
@@ -1025,7 +1081,23 @@
             }
         }
 
-        async function refreshProxyCatalog() {
+        function refreshProxyCatalog() {
+            if (!state.proxyCatalogRequest) {
+                state.proxyCatalogRequest = fetchProxyCatalog().finally(() => {
+                    state.proxyCatalogRequest = null;
+                });
+            }
+            return state.proxyCatalogRequest;
+        }
+
+        async function reloadProxyCatalog() {
+            if (state.proxyCatalogRequest) {
+                await state.proxyCatalogRequest;
+            }
+            return refreshProxyCatalog();
+        }
+
+        async function fetchProxyCatalog() {
             try {
                 const catalog = await api('proxyCatalog');
                 state.proxyNodes = array(catalog.nodes);
@@ -1124,40 +1196,35 @@
                 cell(row, date(feed.updated), '', feed.error || '');
                 const actions = row.insertCell();
                 actions.append(button('Refresh', (event) => void mutate(event.currentTarget,
-                    () => api('refreshSubscription', {id: feed.id}), 'Subscription refreshed.', () => void refreshProxyCatalog())));
+                    () => api('refreshSubscription', {id: feed.id}), 'Subscription refreshed.', () => void reloadProxyCatalog())));
                 actions.append(button(feed.auto ? 'Pause auto-refresh' : 'Enable auto-refresh', (event) => {
                     const auto = !feed.auto;
                     void mutate(event.currentTarget, () => api('setSubscriptionAuto', {id: feed.id, auto}),
-                        auto ? 'Automatic refresh enabled.' : 'Automatic refresh paused.', () => void refreshProxyCatalog());
+                        auto ? 'Automatic refresh enabled.' : 'Automatic refresh paused.', () => void reloadProxyCatalog());
                 }));
                 actions.append(button('Remove', (event) => {
                     if (window.confirm('Remove this proxy subscription? Any enabled server keeps its current settings.')) {
                         void mutate(event.currentTarget, () => api('removeSubscription', {id: feed.id}),
-                            'Subscription removed.', () => void refreshProxyCatalog());
+                            'Subscription removed.', () => void reloadProxyCatalog());
                     }
                 }));
             }
 
-            const query = byId('proxy-search').value.trim().toLowerCase();
-            const filtered = state.proxyNodes.filter((node) => node.provider !== 'nord'
-                && [node.name, node.host, proxyProtocol(node), node.core]
-                    .some((value) => typeof value === 'string' && value.toLowerCase().includes(query)));
-            const protocol = byId('proxy-filter').value;
-            const matches = filtered.filter((node) => !protocol || proxyProtocol(node) === protocol);
-            const pages = Math.max(1, Math.ceil(matches.length / 50));
+            const nodes = state.proxyNodes.filter((node) => node.provider !== 'nord');
+            const pages = Math.max(1, Math.ceil(nodes.length / 50));
             state.proxyPage = Math.min(state.proxyPage, pages - 1);
             const offset = state.proxyPage * 50;
-            const results = matches.slice(offset, offset + 50);
-            byId('proxy-count').textContent = matches.length > results.length
-                ? (offset + 1) + '–' + (offset + results.length) + ' of ' + matches.length + ' servers'
-                : matches.length + (matches.length === 1 ? ' server' : ' servers');
+            const results = nodes.slice(offset, offset + 50);
+            byId('proxy-count').textContent = nodes.length > results.length
+                ? (offset + 1) + '–' + (offset + results.length) + ' of ' + nodes.length + ' servers'
+                : nodes.length + (nodes.length === 1 ? ' server' : ' servers');
             byId('proxy-pages').hidden = pages < 2;
             byId('proxy-prev').disabled = state.proxyPage === 0;
             byId('proxy-next').disabled = state.proxyPage + 1 >= pages;
             const servers = byId('proxy-list');
             servers.replaceChildren();
             if (!results.length) {
-                empty(servers, query || protocol ? 'No matching servers.' : 'Import a server or subscription to get started.', 4);
+                empty(servers, 'Import a server or subscription to get started.', 4);
             }
             for (const node of results) {
                 const row = servers.insertRow();
@@ -1175,7 +1242,7 @@
                 const disabled = node.disabled === true;
                 const enable = button(disabled ? 'Enable' : 'Disable', (event) =>
                     void mutate(event.currentTarget, () => api(disabled ? 'enableProxyExit' : 'disableProxyNode', {id: node.id}),
-                        disabled ? 'Proxy enabled.' : 'Proxy disabled.', () => void refreshProxyCatalog()));
+                        disabled ? 'Proxy enabled.' : 'Proxy disabled.', () => void reloadProxyCatalog()));
                 const assigned = exit && (state.settings?.networkProfile === exit.id
                     || state.assignments.some((item) => [item.profile, item.backup].includes(exit.id))
                     || state.services.some((item) => item.profile === exit.id));
@@ -1187,7 +1254,7 @@
                 const remove = button('Remove', (event) => {
                     if (window.confirm('Remove “' + node.name + '” from the proxy list?')) {
                         void mutate(event.currentTarget, () => api('removeProxyNode', {id: node.id}),
-                            'Server removed.', () => void refreshProxyCatalog());
+                            'Server removed.', () => void reloadProxyCatalog());
                     }
                 }, 'Remove ' + node.name);
                 remove.disabled = Boolean(exit);
@@ -1312,7 +1379,9 @@
         function updateFailure() {
             const mode = byId('mode').value;
             const full = mode === 'full';
-            const primary = full ? byId('profile').value : '';
+            const combined = mode === 'full_multi';
+            const baseServer = usesBaseServer(mode);
+            const primary = baseServer ? byId('profile').value : '';
             const failover = byId('failure');
             const tailnet = byId('device-kind').value === 'tailnet';
             const interfaceField = byId('interface');
@@ -1325,12 +1394,14 @@
             byId('mac').required = !tailnet;
             byId('ipv6-field').hidden = automatic;
             byId('ipv6').required = tailnet && !automatic;
-            byId('profile-field').hidden = !full;
-            byId('profile').required = full;
+            byId('profile-label').textContent = combined ? 'Base server' : 'Saved server';
+            byId('profile-field').hidden = !baseServer;
+            byId('profile').required = baseServer;
             const kill = byId('device-kill');
-            const supportsKillSwitch = full || mode === 'multi';
+            const supportsKillSwitch = baseServer || mode === 'multi';
             byId('device-kill-field').hidden = !supportsKillSwitch;
-            kill.disabled = !supportsKillSwitch;
+            kill.disabled = !supportsKillSwitch || combined;
+            requireKillSwitch(kill, combined);
             byId('device-on-demand-field').hidden = !supportsKillSwitch;
             byId('device-on-demand-note').hidden = !supportsKillSwitch;
             byId('device-on-demand').disabled = !supportsKillSwitch;
@@ -1338,13 +1409,15 @@
                 ? 'Automatically uses this rule when the device connects. Shared tunnels may stay ready.'
                 : 'Keep the tunnel ready while this rule is enabled.';
             const killSwitch = supportsKillSwitch && kill.checked;
-            byId('failure-field').hidden = !primary || killSwitch;
-            const showBackup = primary && !killSwitch && failover.value === 'backup';
+            byId('failure-field').hidden = !full || !primary || killSwitch;
+            const showBackup = full && primary && !killSwitch && failover.value === 'backup';
             byId('backup-field').hidden = !showBackup;
             byId('backup').required = Boolean(showBackup);
-            options(byId('backup'), routingServers().filter((profile) => profile.id !== primary).map(exitChoice), 'Choose a backup server');
-            const profile = routingServers().find((item) => item.id === primary);
-            byId('profile').setCustomValidity(primary && !profile ? 'Choose an available route.' : '');
+            const servers = routingServers();
+            options(byId('backup'), servers.filter((profile) => profile.id !== primary).map(exitChoice), 'Choose a backup server');
+            const profile = servers.find((item) => item.id === primary);
+            byId('profile').setCustomValidity(primary && !profile ? 'Choose an available route.'
+                : combined && profile && !hasVpnDns(profile) ? 'Choose a base server with VPN DNS.' : '');
             const interfaceId = byId('interface').value.trim();
             const notes = [];
             if (tailnet) {
@@ -1353,9 +1426,10 @@
                     : state.settings?.tailscaleSetup?.reason || 'Check Tailscale Settings for exit node setup.')
                     : 'Use the peer addresses seen on the configured gateway link.');
             }
-            if (mode === 'multi') {
-                notes.push('Matched domains use their assigned servers. Other traffic uses regular internet.');
-                if (!state.services.some((service) => service.profile)) {
+            if (mode === 'multi' || combined) {
+                notes.push('Matched domains use their Multi-Path servers.');
+                notes.push(combined ? 'Default traffic and Bypass lists use the base server.' : 'Other traffic uses regular internet.');
+                if (!state.services.some((service) => service.profile && service.profile !== bypassDestination)) {
                     notes.push('Assign a server to a list in Multi-Path Settings.');
                 }
             }
@@ -1363,14 +1437,16 @@
                 notes.push('Internet is blocked for the assigned addresses. Approved local access follows your firewall rules.');
             }
             if (killSwitch) {
-                notes.push(full ? 'Internet is blocked if this server goes offline.'
-                    : 'All internet is blocked if a list’s server goes offline or no list has a server.');
+                notes.push(combined ? 'The Kill Switch blocks traffic when its assigned server is unavailable.'
+                    : full ? 'Internet is blocked if this server goes offline.'
+                        : 'All internet is blocked if a list’s server goes offline or no list has a server.');
             }
-            if (mode === 'full' || mode === 'blocked' || killSwitch) {
-                const strict = list(state.settings?.strictInterfaces).includes(interfaceId);
-                if (!automatic && !strict && !byId('ipv6').value.trim()) {
-                    notes.push('Enter a stable IPv6 address to cover it too.');
-                }
+            const strict = list(state.settings?.strictInterfaces).includes(interfaceId);
+            if (combined && !tailnet && !strict) {
+                notes.push('Add the device’s stable IPv6 address to block it. Use Whole-Network coverage or '
+                    + 'Block devices without a rule to cover temporary IPv6 addresses.');
+            } else if ((full || mode === 'blocked' || killSwitch) && !automatic && !strict && !byId('ipv6').value.trim()) {
+                notes.push('Enter a stable IPv6 address to cover it too.');
             }
             byId('route-note').textContent = notes.join(' ');
         }
@@ -1468,7 +1544,8 @@
             }
             options(byId('profile'), choices, 'Choose a server', selected);
             byId('failure').value = assignment?.failure === 'backup' ? 'backup' : 'wan';
-            byId('device-kill').checked = ['full', 'multi'].includes(assignment?.mode)
+            requireKillSwitch(byId('device-kill'), false);
+            byId('device-kill').checked = (usesBaseServer(assignment?.mode) || assignment?.mode === 'multi')
                 ? (assignment.killSwitch ?? assignment.failure === 'block') : true;
             byId('device-on-demand').checked = assignment?.onDemand !== false;
             byId('device-bind-mac').checked = assignment ? assignment.bindMac === true
@@ -1891,6 +1968,7 @@
             if (reserveIp && !window.confirm('Reserve this IP address and save the rule? OPNsense will reload the DHCP service.')) {
                 return;
             }
+            const mode = byId('mode').value;
             const payload = {
                 reserveIp,
                 ip: byId('ip').value.trim(),
@@ -1898,13 +1976,13 @@
                 mac: byId('mac').value.trim(),
                 ipv6: byId('ipv6').value.trim(),
                 kind: byId('device-kind').value,
-                mode: byId('mode').value,
+                mode,
                 label: byId('device-label').value.trim(),
                 profile: byId('profile').value,
                 backup: byId('backup').required ? byId('backup').value : '',
-                killSwitch: !byId('device-kill').disabled && byId('device-kill').checked,
+                killSwitch: mode === 'full_multi' || (!byId('device-kill').disabled && byId('device-kill').checked),
                 onDemand: !byId('device-on-demand').disabled && byId('device-on-demand').checked,
-                failure: byId('device-kill').checked || byId('mode').value !== 'full' ? 'block' : byId('failure').value
+                failure: byId('device-kill').checked || mode !== 'full' ? 'block' : byId('failure').value
             };
             if (payload.kind === 'lan') {
                 payload.bindMac = deviceMacBinding();
@@ -2252,7 +2330,7 @@
             void mutate(event.submitter, () => api('addProxyNode', payload), 'Proxy server added.', () => {
                 event.target.reset();
                 manualFields();
-                void refreshProxyCatalog();
+                void reloadProxyCatalog();
             });
         });
         manualFields();
@@ -2289,12 +2367,6 @@
                 renderCores(result);
             });
         });
-        for (const id of ['proxy-search', 'proxy-filter']) {
-            byId(id).addEventListener('input', () => {
-                state.proxyPage = 0;
-                renderProxyCatalog();
-            });
-        }
         byId('proxy-prev').addEventListener('click', () => {
             state.proxyPage--;
             renderProxyCatalog();
@@ -2310,7 +2382,7 @@
             void mutate(event.submitter, () => api('importProxies', {body, name}), 'Proxy servers imported.', (result) => {
                 event.target.reset();
                 notice(result.imported + ' servers imported' + (result.skipped ? ' · ' + result.skipped + ' skipped' : ''), 'success');
-                void refreshProxyCatalog();
+                void reloadProxyCatalog();
             });
         });
         byId('subscription-form').addEventListener('submit', (event) => {
@@ -2321,7 +2393,7 @@
             };
             void mutate(event.submitter, () => api('addSubscription', payload), 'Proxy subscription added.', () => {
                 event.target.reset();
-                void refreshProxyCatalog();
+                void reloadProxyCatalog();
             });
         });
         byId('use-local-name').addEventListener('click', () => {
@@ -2357,9 +2429,14 @@
                 });
             }
         });
-        byId('settings-form').addEventListener('input', () => {
+        byId('settings-form').addEventListener('input', (event) => {
             state.settingsDirty = true;
-            updateCoverage();
+            if (event.target !== byId('local')) {
+                updateCoverage();
+            }
+            if (event.target === byId('coverage')) {
+                renderDeviceRules();
+            }
         });
         byId('settings-form').addEventListener('submit', (event) => {
             event.preventDefault();
@@ -2367,11 +2444,12 @@
             const rules = [...byId('interface-rules').children].filter((label) => interfaces.includes(label.dataset.interface));
             const selected = (type) => rules.filter((label) => label.querySelector('select').value === type)
                 .map((label) => label.dataset.interface);
+            const networkMode = byId('network-mode').value;
             const payload = {
                 enabled: true,
-                networkKillSwitch: byId('network-kill').checked,
+                networkKillSwitch: networkMode === 'full_multi' || byId('network-kill').checked,
                 coverage: byId('coverage').value,
-                networkMode: byId('network-mode').value,
+                networkMode,
                 networkProfile: byId('network-profile').required ? byId('network-profile').value : '',
                 interfaces,
                 strictInterfaces: selected('strict'),
@@ -2391,7 +2469,8 @@
                     || current.networkProfile !== payload.networkProfile
                     || current.networkKillSwitch !== payload.networkKillSwitch
                     || list(current.interfaces).join(',') !== payload.interfaces.join(','));
-            if (wideChange && !window.confirm('Apply ' + modes[payload.networkMode] + ' to all devices on the selected networks? Existing internet connections may reconnect.')) {
+            const networkLabel = networkMode === 'full_multi' ? 'Whole-Network + Multi-Path' : modes[networkMode];
+            if (wideChange && !window.confirm('Apply ' + networkLabel + ' to all devices on the selected networks? Existing internet connections may reconnect.')) {
                 return;
             }
             void mutate(event.submitter, () => api('settings', payload), 'VPN routing enabled. Settings saved.', () => {
@@ -2407,10 +2486,10 @@
         });
 
         async function runUpdate(action, payload = {}) {
-            if (state.updateBusy || !state.update || state.update.running) {
+            if (state.updateAction || !state.canWriteUpdates || !state.update?.supported || state.update.running) {
                 return;
             }
-            state.updateBusy = true;
+            state.updateAction = action;
             renderUpdate(state.update);
             try {
                 const result = await api(action, payload, '', 'update');
@@ -2418,20 +2497,15 @@
             } catch (error) {
                 notice(errorMessage(error, 'The package update operation failed.'), 'danger');
             } finally {
-                state.updateBusy = false;
+                state.updateAction = '';
                 renderUpdate(state.update);
             }
         }
 
-        byId('update-enable').addEventListener('click', () => {
-            if (window.confirm('Enable the signed Blank Networks package repository on this router?')) {
-                void runUpdate('enable');
-            }
-        });
         byId('update-check').addEventListener('click', () => void runUpdate('check'));
         byId('update-apply').addEventListener('click', () => {
             const version = state.update?.available;
-            if (version && window.confirm('Apply Blank VPN ' + version + '? The WebGUI and tunnels may reconnect.')) {
+            if (version && state.update.enabled) {
                 void runUpdate('apply', {version});
             }
         });

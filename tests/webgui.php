@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace OPNsense\Base {
     final class RequestFixture
     {
-        public function __construct(private string $scheme, private array $fields)
+        public function __construct(private string $scheme, private array $fields, private bool $post)
         {
         }
 
@@ -16,7 +16,12 @@ namespace OPNsense\Base {
 
         public function isPost(): bool
         {
-            return true;
+            return $this->post;
+        }
+
+        public function isGet(): bool
+        {
+            return !$this->post;
         }
 
         public function getPost(string $key, ?string $filter = null, mixed $default = null): mixed
@@ -45,15 +50,23 @@ namespace OPNsense\Base {
         }
     }
 
+    class UserException extends \RuntimeException
+    {
+    }
+
     class ApiControllerBase
     {
         protected RequestFixture $request;
         protected SessionFixture $session;
         protected object $response;
 
-        public function __construct(string $scheme, array $fields = [], private string $user = 'test-operator')
-        {
-            $this->request = new RequestFixture($scheme, $fields);
+        public function __construct(
+            string $scheme,
+            array $fields = [],
+            private string $user = 'test-operator',
+            bool $post = true
+        ) {
+            $this->request = new RequestFixture($scheme, $fields, $post);
             $this->session = new SessionFixture();
             $this->response = new class {
                 public function setHeader(string $key, string $value): void
@@ -71,10 +84,35 @@ namespace OPNsense\Base {
         {
             return $this->user;
         }
+
+        protected function throwReadOnly(): void
+        {
+            if ($this->user === 'readonly') {
+                throw new UserException('Read-only WebGUI session.');
+            }
+        }
+
+        protected function throwNotFullAdmin(): void
+        {
+            if ($this->user !== 'admin') {
+                throw new UserException('Full administrator required.');
+            }
+        }
     }
 }
 
 namespace OPNsense\Core {
+    final class Backend
+    {
+        public static array $calls = [];
+
+        public function configdpRun(string $action, array $arguments, bool $async, int $timeout): string
+        {
+            self::$calls[] = [$action, $arguments, $async, $timeout];
+            return '{"ok":true,"enabled":true,"available":"0.8.16"}';
+        }
+    }
+
     final class Config
     {
         public static function getInstance(): self
@@ -90,6 +128,14 @@ namespace OPNsense\Core {
 }
 
 namespace OPNsense\BlankVpn {
+    final class PackageUpdate
+    {
+        public static function status(): array
+        {
+            return ['installed' => '0.8.15', 'enabled' => false];
+        }
+    }
+
     final class Operations
     {
         public static function exclusive(callable $operation): mixed
@@ -157,9 +203,12 @@ namespace OPNsense\BlankVpn {
 
 namespace {
     use OPNsense\BlankVpn\Api\ServiceController;
+    use OPNsense\BlankVpn\Api\UpdateController;
     use OPNsense\BlankVpn\Mullvad;
+    use OPNsense\Core\Backend;
 
     require __DIR__ . '/../src/opnsense/mvc/app/controllers/OPNsense/BlankVpn/Api/ServiceController.php';
+    require __DIR__ . '/../src/opnsense/mvc/app/controllers/OPNsense/BlankVpn/Api/UpdateController.php';
 
     function checkWebGui(bool $value, string $message): void
     {
@@ -202,5 +251,22 @@ namespace {
     $unexpected = (new ServiceController('https', ['id' => 'unexpected']))->testProxyNodeAction();
     checkWebGui($unexpected['ok'] === false && str_contains($unexpected['error'], 'Log reference') &&
         !str_contains($unexpected['error'], 'Fixture detail'), 'Unexpected proxy errors must return a reference without crashing.');
-    echo "OPNsense WebGUI request and Mullvad session fixtures passed.\n";
+
+    $updateStatus = (new UpdateController('https', [], 'admin', false))->statusAction();
+    checkWebGui($updateStatus === ['installed' => '0.8.15', 'enabled' => false, 'ok' => true] && Backend::$calls === [],
+        'Reading update status must not invoke configd or enable the repository.');
+    foreach ([
+        new UpdateController('https', [], 'admin', false),
+        new UpdateController('http', [], 'admin'),
+        new UpdateController('https', [], 'readonly'),
+        new UpdateController('https'),
+    ] as $session) {
+        checkWebGui(!$session->checkAction()['ok'] && Backend::$calls === [],
+            'Only a full administrator making an HTTPS POST can ask configd to check for an update.');
+    }
+    $checked = (new UpdateController('https', [], 'admin'))->checkAction();
+    checkWebGui($checked === ['ok' => true, 'enabled' => true, 'available' => '0.8.16'] &&
+        Backend::$calls === [['blankvpnupdate check', [], false, 40]],
+        'An explicit check must use one configd action and report the available release.');
+    echo "OPNsense WebGUI request, Mullvad session and package update fixtures passed.\n";
 }

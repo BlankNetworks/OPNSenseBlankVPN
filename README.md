@@ -17,7 +17,7 @@ OPNsense officially distributes x86-64 images. For NanoPi R4S/R4SE and R5S, star
 
 ## Install or upgrade
 
-If Blank VPN already has **System Settings → Package updates**, follow [Update from the WebGUI](#update-from-the-webgui). For a first install or an upgrade from 0.8.14 or earlier, install one release package. You can upgrade over your existing Blank VPN installation.
+If Blank VPN already has **System Settings → Package updates**, follow [Update from the WebGUI](#update-from-the-webgui). For a first install or to bootstrap WebGUI updates from 0.8.14 or earlier, install one release package. You can upgrade over your existing Blank VPN installation.
 
 Use an existing SSH connection or choose **8) Shell** on the local console. For SSH, run `ssh USER@ROUTER` from your computer using your configured SSH account and the router’s LAN address or hostname. Run the install commands from a root shell on the router. Check the edition, version series, and package ABI first. [OPNsense console and SSH](https://docs.opnsense.org/manual/install.html)
 
@@ -46,9 +46,10 @@ For delegated access, assign **VPN: Blank VPN: View devices and connections** or
 
 ### Update from the WebGUI
 
-1. Open **VPN → Blank VPN → Dashboard → System Settings** over HTTPS. Under **Package updates**, click **Enable signed updates** once. This adds the Blank Networks repository for your package ABI using its bundled public key.
-2. Click **Check for updates**, then **Apply update** when a version is available. Wait for the installed version to appear. The WebGUI and VPN connections may briefly reconnect.
-3. You can also update from **System → Firmware → Updates** after enabling the repository. Use **Check for updates** to refresh the package list. On compatible systems with the repository already enabled, **System → Firmware → Plugins** can install Blank VPN with community plug-ins visible.
+1. Sign in as a WebGUI administrator over HTTPS. Open **VPN → Blank VPN → Dashboard → System Settings** and click **Check for update**. The first successful check sets up the signed package source automatically.
+2. Click **Update** when a newer version is shown. The WebGUI and VPN connections may briefly reconnect. Reload the dashboard after the update finishes.
+
+Once the first check succeeds, **System → Firmware → Updates** can also find Blank VPN releases. Version 0.8.15 has a separate **Enable signed updates** button. Click it once if you start from that release's WebGUI.
 
 The in-plugin update installs the signed Blank VPN package for OPNsense Community Edition 26.7.x. The OPNsense Firmware page manages system updates. [OPNsense firmware management](https://docs.opnsense.org/manual/firmware.html)
 
@@ -146,6 +147,7 @@ Open **Network Settings**, check the Ethernet ports or VLANs under **Interface**
 | --- | --- |
 | All traffic through one exit | Use one VPN or proxy exit, with a Kill Switch, backup exit, or regular internet fallback. |
 | Multi-Path | Use the assigned exits for matching services and regular internet for other destinations. With Kill Switch checked, an unavailable exit blocks all internet in the selected scope. |
+| Whole-Network + Multi-Path | Use a base VPN or proxy for ordinary internet traffic and the assigned exits for matching services. The Kill Switch is always on. |
 | Off | Follow the native network policy and bypass Blank VPN service routing for the assigned addresses. |
 | Blocked | Block internet traffic from the assigned addresses and keep approved local access subject to native firewall rules. |
 
@@ -157,7 +159,15 @@ Check **Follow DHCP reservation by MAC** on a LAN rule to use the device’s uni
 
 You can run multiple provider exits together, with up to 32 VPN profiles and eight active proxy exits. A phone can use Mullvad, a TV ExpressVPN, a tablet a proxy, and a Mac NordVPN. With Multi-Path, select a different exit for each service, such as a Japan exit for Netflix, a USA exit for Hulu, and a China exit for WeChat. Each service uses the domains you enter. Presets are starting lists that you can edit.
 
-Use **Ping** beside an active one-server rule for a LAN or Tailscale device. It runs an HTTPS probe from OPNsense through the assigned server and looks for packets in both directions on a firewall state belonging to the device's route. Open a fresh page on the device before running the check.
+Use **Ping** beside an active device rule with a base server for a LAN or Tailscale device. It runs an HTTPS probe from OPNsense through the assigned server and looks for packets in both directions on a firewall state belonging to the device's route. Open a fresh page on the device before running the check.
+
+### Use a base VPN with Multi-Path
+
+For an entire LAN or VLAN, choose **Whole-Network + Multi-Path** and select a **Base VPN or proxy**. For one device or Tailscale peer, choose **Base VPN + Multi-Path** in its device rule. Set each service's exit under **Multi-Path Settings**. For example, set Chicago as the base, Korea for Netflix and Hong Kong for Disney+. Unmatched IPv4 traffic and ordinary DNS use Chicago. Existing Bypass lists have no special routing in the combined mode. Connected local networks and router access are still governed by your OPNsense rules.
+
+The base VPN is required for unmatched internet traffic. The Kill Switch blocks WAN fallback. A learned service whose exit is down is blocked, while other paths can stay up. Domain classification still requires DNS visible to Blank VPN. Unlearned requests use the base. Start a fresh connection after changing a service or clearing the client DNS cache.
+
+Whole-Network + Multi-Path covers all IPv6 on the selected interfaces and blocks public IPv6. Individual rules cover the IPv4 identity and any saved stable IPv6 address, including the peer's Tailscale IPv6 address. For LAN clients with temporary IPv6 addresses, use Whole-Network coverage for that LAN or enable **Block devices without a rule** on a dedicated managed interface.
 
 ### Assign a Tailscale peer
 

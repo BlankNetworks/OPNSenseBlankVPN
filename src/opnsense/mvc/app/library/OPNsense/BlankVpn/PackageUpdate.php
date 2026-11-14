@@ -48,19 +48,16 @@ final class PackageUpdate
         $running = in_array($phase, ['queued', 'running'], true);
         $enabled = $supported && self::repoEnabled();
         $installed = $running ? ($state['installed'] ?? null) : self::installed($abi);
-        $available = $enabled ? ($state['available'] ?? null) : null;
+        $checkedVersion = $enabled ? ($state['available'] ?? null) : null;
         if (!self::validVersion($installed)) {
             $installed = null;
         }
-        if (!self::validVersion($available) || $installed === null || !self::newer($available, $installed)) {
-            $available = null;
-        }
+        $available = self::validVersion($checkedVersion) && $installed !== null && self::newer($checkedVersion, $installed)
+            ? $checkedVersion : null;
 
-        $message = $state['message'] ?? 'Check for a signed Blank VPN package update.';
+        $message = $state['message'] ?? 'Check for a Blank VPN update.';
         if (!$supported) {
             $message = 'Updates require OPNsense Community Edition 26.7 on FreeBSD 15 amd64 or aarch64.';
-        } elseif (!$enabled) {
-            $message = 'Enable the signed Blank Networks repository to check for updates.';
         } elseif ($running && self::interrupted($state)) {
             $phase = 'failed';
             $running = false;
@@ -69,6 +66,9 @@ final class PackageUpdate
                 $available = null;
             }
             $message = 'The update worker stopped. Check the installed package before trying again.';
+        } elseif (!$running && $available === null && self::validVersion($checkedVersion) && $installed !== null) {
+            $phase = 'idle';
+            $message = 'Blank VPN is up to date.';
         }
 
         return [
@@ -88,31 +88,35 @@ final class PackageUpdate
         self::requireSupported();
         self::assertKey();
         self::assertIdle();
-        if (!self::repoEnabled()) {
-            if (!is_dir(self::REPO_DIR) || is_link(self::REPO_DIR)) {
-                throw new DomainException('The native package repository directory is unavailable.');
-            }
-            $target = self::repoPath();
-            if (file_exists($target) || is_link($target)) {
-                throw new DomainException('An existing Blank Networks repository definition conflicts with the signed settings.');
-            }
-            $temporary = tempnam(self::REPO_DIR, '.blankvpn-repo-');
-            if ($temporary === false) {
-                throw new RuntimeException('The signed repository configuration could not be staged.');
-            }
-            try {
-                $configuration = self::repoConfiguration();
-                if (file_put_contents($temporary, $configuration) !== strlen($configuration) ||
-                    !chmod($temporary, 0644) || !@link($temporary, $target)) {
-                    throw new RuntimeException('The signed repository configuration could not be enabled.');
-                }
-            } finally {
-                unlink($temporary);
-            }
-        }
-
-        self::writeState(['phase' => 'idle', 'message' => 'Signed repository enabled. Check for an update.']);
+        self::enableRepository();
         return self::status();
+    }
+
+    private static function enableRepository(): void
+    {
+        if (self::repoEnabled()) {
+            return;
+        }
+        if (!is_dir(self::REPO_DIR) || is_link(self::REPO_DIR)) {
+            throw new DomainException('The native package repository directory is unavailable.');
+        }
+        $target = self::repoPath();
+        if (file_exists($target) || is_link($target)) {
+            throw new DomainException('An existing Blank Networks repository definition conflicts with the signed settings.');
+        }
+        $temporary = tempnam(self::REPO_DIR, '.blankvpn-repo-');
+        if ($temporary === false) {
+            throw new RuntimeException('The signed repository configuration could not be staged.');
+        }
+        try {
+            $configuration = self::repoConfiguration();
+            if (file_put_contents($temporary, $configuration) !== strlen($configuration) ||
+                !chmod($temporary, 0644) || !@link($temporary, $target)) {
+                throw new RuntimeException('The signed repository configuration could not be enabled.');
+            }
+        } finally {
+            unlink($temporary);
+        }
     }
 
     public static function check(): array
@@ -122,16 +126,19 @@ final class PackageUpdate
 
     private static function checkLocked(): array
     {
-        $abi = self::requireEnabled();
+        $abi = self::requireSupported();
+        self::assertKey();
         self::assertIdle();
         $work = self::workDirectory();
         try {
             $installed = self::requireInstalled($abi);
             $available = self::refreshCatalog($work, $abi);
+            // Make the same signed source available to OPNsense Firmware after a successful check.
+            self::enableRepository();
             $update = self::newer($available, $installed);
             self::writeState([
                 'phase' => 'idle', 'checkedAt' => time(), 'available' => $update ? $available : null,
-                'message' => $update ? 'A signed Blank VPN update is available.' : 'Blank VPN is up to date.',
+                'message' => $update ? 'An update is ready to install.' : 'Blank VPN is up to date.',
             ]);
         } catch (DomainException | RuntimeException $error) {
             self::writeState(['phase' => 'failed', 'message' => $error->getMessage()]);
@@ -152,13 +159,13 @@ final class PackageUpdate
             $state = self::readState();
             $installed = self::requireInstalled($abi);
             if (($state['available'] ?? null) !== $version || !self::newer($version, $installed)) {
-                throw new DomainException('Check for updates and select the current signed Blank VPN version.');
+                throw new DomainException('Check for an update before installing this version.');
             }
 
             $job = bin2hex(random_bytes(16));
             $state = array_replace($state, [
                 'phase' => 'queued', 'job' => $job, 'installed' => $installed, 'started' => time(),
-                'pid' => null, 'message' => 'Blank VPN update queued.',
+                'pid' => null, 'message' => 'Starting update. The WebGUI and VPN connections may briefly reconnect.',
             ]);
             self::writeState($state);
             try {
@@ -217,7 +224,7 @@ final class PackageUpdate
             }
             $work = self::workDirectory();
             if (self::refreshCatalog($work, $abi) !== $version) {
-                throw new DomainException('The signed repository changed. Check for updates again.');
+                throw new DomainException('A different version is available. Check for an update again.');
             }
 
             $package = self::fetchPackage($work, $abi, $version);
@@ -305,7 +312,7 @@ final class PackageUpdate
     {
         $abi = self::requireSupported();
         if (!self::repoEnabled()) {
-            throw new DomainException('Enable the signed Blank Networks package repository first.');
+            throw new DomainException('Check for an update before installing.');
         }
         return $abi;
     }

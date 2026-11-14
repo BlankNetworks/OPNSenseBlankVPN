@@ -33,6 +33,30 @@ namespace OPNsense\Core {
 }
 
 namespace OPNsense\BlankVpn {
+    function is_dir(string $path): bool
+    {
+        return $path === Policy::STATE_DIR || \is_dir($path);
+    }
+
+    function fileperms(string $path): int|false
+    {
+        return $path === Policy::STATE_DIR ? 0700 : \fileperms($path);
+    }
+
+    function tempnam(string $path, string $prefix): string|false
+    {
+        return \tempnam($path === Policy::STATE_DIR ? sys_get_temp_dir() : $path, $prefix);
+    }
+
+    function rename(string $from, string $to): bool
+    {
+        if (dirname($to) === Policy::STATE_DIR) {
+            $GLOBALS['policyFiles'][basename($to)] = file_get_contents($from);
+            return unlink($from);
+        }
+        return \rename($from, $to);
+    }
+
     final class Diagnostics
     {
         public bool $reserved = true;
@@ -88,6 +112,7 @@ namespace {
     use OPNsense\BlankVpn\Firewall;
     use OPNsense\BlankVpn\NativeVpn;
     use OPNsense\BlankVpn\Policy;
+    use OPNsense\BlankVpn\Resolver;
     use OPNsense\BlankVpn\SmartRouting;
     use OPNsense\Firewall\Plugin;
 
@@ -217,7 +242,9 @@ namespace {
     $block = $good->rules[Policy::marker('service_guard', 'streaming:lan')];
     checkRouting($pass['gateway'] === 'VPN' && $pass['skip_rules_gw_down'], 'Matched IPv4 must use a usable WireGuard gateway.');
     checkRouting($block['priority'] > $pass['priority'] && $block['ipprotocol'] === 'inet46', 'Install a destination block after the VPN-only pass.');
-    checkRouting($good->rules['match']['quick'] === false && $good->rules['match']['to_not'], 'Local exceptions must not short-circuit the service rules.');
+    $smartScope = Policy::marker('smart_scope', 'lan');
+    $combinedScope = Policy::marker('combined_scope', 'lan');
+    checkRouting($good->rules[$smartScope]['quick'] === false && $good->rules[$smartScope]['to_not'], 'Local exceptions must not short-circuit the service rules.');
     checkRouting($good->nat[0]['to'] === '<' . $table . '>' && $good->nat[0]['from'] === 'lan', 'Scope Multi-Path NAT by destination and source network.');
     checkRouting(count($good->dns) === 2, 'Capture regular DNS over IPv4 and IPv6 on the selected interface.');
     $down = new Plugin();
@@ -303,10 +330,83 @@ namespace {
     checkRouting($multiNetwork['smartInterfaces'] === ['lan'] && $multiNetwork['strictInterfaces'] === [] &&
         !$multiNetwork['smartAssignedOnly'], 'Multi-Path under Whole-Network coverage uses selected LANs without per-IP assignment.');
 
+    $chicago = array_replace($profiles['jp'], [
+        'id' => 'us', 'kind' => 'native', 'interface' => 'ovpnc1', 'logicalInterface' => 'opt2',
+        'gateway' => 'NORD', 'address' => '198.51.100.20', 'dnsPort' => 46652
+    ]);
+    $combinedProfiles = $profiles + ['us' => $chicago];
+    $combinedNetwork = Policy::routingSettings(array_replace($networkSettings, [
+        'networkMode' => 'full_multi', 'networkProfile' => 'us', 'networkKillSwitch' => false
+    ]));
+    $basePass = Policy::marker('device', 'network:lan');
+    $baseKill = Policy::marker('kill', 'network:lan');
+    $baseKillV6 = Policy::marker('kill_v6', 'network:lan');
+    $baseDnsKill = Policy::marker('kill_dns', 'network:lan');
+    $netflixPass = Policy::marker('service', 'streaming:lan');
+    $netflixKill = Policy::marker('service_guard', 'streaming:lan');
+    $compileCombined = function (array $health = []) use (
+        $network, $compileSmart, $combinedNetwork, $interfaces, $combinedProfiles, $services
+    ): Plugin {
+        $plan = new Plugin();
+        $network->invoke(null, $plan, $combinedNetwork, $interfaces, $combinedProfiles, $health);
+        $compileSmart->invoke(null, $plan, $combinedNetwork, $interfaces, $services, $combinedProfiles, $health);
+        return $plan;
+    };
+    $combined = $compileCombined();
+    checkRouting(SmartRouting::activeServices($combinedNetwork, $bypassList + $services) === $services &&
+        $combined->rules[$netflixPass]['gateway'] === 'VPN' && $combined->rules[$basePass]['gateway'] === 'NORD' &&
+        $combined->rules[$netflixPass]['priority'] < $combined->rules[$netflixKill]['priority'] &&
+        $combined->rules[$netflixKill]['priority'] < $combined->rules[$basePass]['priority'] &&
+        $combined->rules[$basePass]['priority'] < $combined->rules[$baseKill]['priority'] &&
+        $combined->rules[$baseKill]['quick'] && $combined->rules[$baseKillV6]['quick'] &&
+        $combined->rules[$basePass]['to'] === '<' . Policy::COMBINED_LOCAL_TABLE . '>' &&
+        $combined->rules[$combinedScope]['to'] === $combined->rules[$basePass]['to'] &&
+        !isset($combined->rules[$smartScope]) && count($combined->dns) === 2 &&
+        array_column($combined->dns, 'local-port') === array_fill(0, 2, (string)Resolver::combinedPort($chicago)),
+        'Combined coverage uses service routes first, ignores native bypass and sends both DNS families to its own resolver.');
+    $overrideDown = $compileCombined(['jp' => ['reachable' => false]]);
+    checkRouting(!isset($overrideDown->rules[$netflixPass]) &&
+        $overrideDown->rules[$netflixKill]['priority'] < $overrideDown->rules[$basePass]['priority'],
+        'A failed service guard takes precedence over a healthy default VPN.');
+    $baseDown = $compileCombined(['us' => ['reachable' => false]]);
+    checkRouting(!isset($baseDown->rules[$basePass]) && isset($baseDown->rules[$netflixPass], $baseDown->rules[$baseKill]) &&
+        count($baseDown->dns) === 2, 'A base outage still permits working overrides while ordinary traffic remains blocked.');
+    \OPNsense\Core\Config::$fixture = new SimpleXMLElement('<opnsense><system><enablenatreflectionhelper>1</enablenatreflectionhelper></system></opnsense>');
+    $disabledDns = $compileCombined();
+    checkRouting($disabledDns->dns === [] &&
+        $disabledDns->rules[$baseDnsKill]['to_port'] === '53' &&
+        $disabledDns->rules[$baseDnsKill]['priority'] < $disabledDns->rules[$basePass]['priority'],
+        'If native reflection prevents DNS redirection, reject raw DNS before the base route.');
+    \OPNsense\Core\Config::$fixture = null;
+
     $assignment = ['interface' => 'lan', 'ip' => '192.0.2.23', 'mac' => '02:00:00:00:00:23',
         'profile' => 'jp', 'backup' => '', 'failure' => 'block'];
     $compileDevice = new ReflectionMethod(Firewall::class, 'registerAssignments');
     $diag = new Diagnostics();
+    $combinedDeviceSettings = $settings + ['smartAssignedOnly' => true];
+    $combinedDevice = new Plugin();
+    $combinedAssignments = [
+        'device-a' => array_replace($assignment, [
+            'mode' => 'full_multi', 'ipv6' => '2001:db8::23', 'profile' => 'us', 'failure' => 'wan'
+        ]),
+        'device-b' => array_replace($assignment, [
+            'mode' => 'multi', 'ip' => '192.0.2.24', 'profile' => ''
+        ]),
+    ];
+    $compileDevice->invoke(null, $combinedDevice, $combinedDeviceSettings, $interfaces, $combinedAssignments,
+        $combinedProfiles, [], $diag);
+    $compileSmart->invoke(null, $combinedDevice, $combinedDeviceSettings, $interfaces, $services,
+        $combinedProfiles, [], $combinedAssignments, $diag);
+    $scope = $combinedDevice->rules[$combinedScope];
+    $ordinary = $combinedDevice->rules[$smartScope];
+    checkRouting($GLOBALS['policyFiles'][trim($scope['from'], '<>')] === "192.0.2.23\n2001:db8::23\n" &&
+        $GLOBALS['policyFiles'][trim($ordinary['from'], '<>')] === "192.0.2.24\n" &&
+        $scope['tag'] === $ordinary['tag'] && $scope['to'] !== $ordinary['to'] &&
+        $combinedDevice->rules[Policy::marker('device', 'device-a')]['from'] === '192.0.2.23' &&
+        $combinedDevice->rules[Policy::marker('kill_v6', 'device-a')]['from'] === '2001:db8::23' &&
+        array_column($combinedDevice->dns, 'local-port') === [
+            (string)Resolver::combinedPort($chicago), (string)Resolver::combinedPort($chicago), (string)SmartRouting::PORT
+        ], 'Device overrides carry their own local scope and DNS default while ordinary Multi-Path devices keep theirs.');
     $good = new Plugin();
     $compileDevice->invoke(null, $good, $settings, $interfaces, ['device-a' => $assignment], $profiles, [], $diag);
     $device = $good->rules[Policy::marker('device', 'device-a')];
@@ -410,7 +510,7 @@ namespace {
         'Blocked mode protects both assigned addresses without an exit.');
     $scoped = new Plugin();
     $compileSmart->invoke(null, $scoped, $settings + ['smartAssignedOnly' => true], $interfaces, $services, $profiles, []);
-    checkRouting(!isset($scoped->rules['match']) && $scoped->dns === [],
+    checkRouting(!isset($scoped->rules[$smartScope]) && $scoped->dns === [],
         'Per-device Multi-Path does not classify or redirect unassigned devices.');
     checkRouting(Policy::tailnetAddress('100.101.102.103') && Policy::tailnetAddress('fd7a:115c:a1e0::23', true) &&
         !Policy::tailnetAddress('192.0.2.23'), 'Validate both Tailscale peer address families.');

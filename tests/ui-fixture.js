@@ -2,7 +2,7 @@ const requests = [];
 let settingsError = null;
 let exitTestError = null;
 const updateStatus = {ok:true, supported:true, enabled:false, running:false, installed:'0.1.39',
-    available:'', message:'Signed updates are disabled.'};
+    available:'', message:'Check for a Blank VPN update.'};
 const routingBackup = {schema:1, version:1, routing:{enabled:false}, assignments:[], services:[]};
 let updatePolls = 0;
 const reply = {
@@ -51,11 +51,9 @@ window.jQuery.ajax = async (request) => {
     const data = request.data ? JSON.parse(request.data) : null;
     requests.push({controller, action, method:request.method, data});
     if (controller === 'update') {
-        if (action === 'enable') {
-            Object.assign(updateStatus, {enabled:true, message:'Signed updates enabled.'});
-        }
         if (action === 'check') {
-            Object.assign(updateStatus, {available:'0.1.40', message:'An update is available.'});
+            await new Promise(resolve => setTimeout(resolve, 5));
+            Object.assign(updateStatus, {enabled:true, available:'0.1.40', message:'An update is ready to install.'});
         }
         if (action === 'apply') {
             Object.assign(updateStatus, {running:true, phase:'installing', message:'Installing package.'});
@@ -469,16 +467,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     })));
     buttonByText('subscription-list', 'Refresh').click();
     await wait();
+    assert(!bv('proxy-search') && !bv('proxy-filter'), 'Proxy search and protocol filtering controls should be absent.');
     assert(bv('proxy-count').textContent.includes('1–50 of 56'), 'large catalog page count is incorrect');
     bv('proxy-next').click();
-    assert(bv('proxy-list').textContent.includes('SOCKS5 office'), 'later pages must include all servers');
-    bv('proxy-filter').value = 'socks5';
-    bv('proxy-filter').dispatchEvent(new Event('input'));
-    assert(bv('proxy-count').textContent === '1 server' && bv('proxy-list').textContent.includes('SOCKS5 office'),
-        'SOCKS5 filter must find a server outside the first page');
+    assert(bv('proxy-count').textContent.includes('51–56 of 56') && bv('proxy-next').disabled &&
+        bv('proxy-list').textContent.includes('SOCKS5 office'), 'later pages must include all servers');
+    bv('proxy-prev').click();
+    assert(bv('proxy-prev').disabled && bv('proxy-count').textContent.includes('1–50 of 56'), 'back navigation must restore the first page');
     reply.proxyCatalog.nodes.splice(0, 55);
-    bv('proxy-filter').value = '';
-    bv('proxy-filter').dispatchEvent(new Event('input'));
     bv('proxy-body').value = 'socks5://192.0.2.9:1080';
     bv('proxy-import-name').value = 'Private SOCKS';
     bv('proxy-import').requestSubmit(bv('proxy-import').querySelector('button'));
@@ -659,6 +655,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(tailnetTable.querySelector('[aria-label="Ping Remote iPad"]') &&
         requests.some(x => x.action === 'setTailnetRuleEnabled' && x.data.id === 'tailnet1' && x.data.enabled),
         'Re-enabling a Tailscale rule restores the saved route and Ping.');
+    tailnetTable.querySelector('[aria-label="Edit Remote iPad"]').click();
+    bv('mode').value = 'full_multi';
+    bv('mode').dispatchEvent(new Event('change'));
+    assert(bv('profile').required && bv('profile-label').textContent === 'Base server' &&
+        bv('device-kill').checked && bv('device-kill').disabled && bv('failure-field').hidden &&
+        bv('route-note').textContent.includes('Bypass lists use the base server'),
+        'Combined Tailscale rules must require a base server and prevent WAN fallback.');
+    bv('assign-form').requestSubmit(bv('save-device'));
+    await wait();
+    assert(requests.some(x => x.action === 'assign' && x.data.kind === 'tailnet' && x.data.mode === 'full_multi' &&
+        x.data.profile === 'vpn1' && x.data.failure === 'block' && x.data.killSwitch === true && x.data.onDemand === true) &&
+        tailnetTable.querySelector('[aria-label="Ping Remote iPad"]') && tailnetTable.textContent.includes('Base VPN + Multi-Path'),
+        'A combined Tailscale rule must keep On Demand and base server Ping.');
     Object.assign(reply.dashboard.assignments[0], {mode:'full',profile:'vpn1'});
     bv('refresh').click();
     await wait();
@@ -666,6 +675,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(bv('device-list').querySelector('[data-test-result="device:device1"]').textContent.includes('22.4 ms') &&
         requests.some(x => x.action === 'testDeviceRoute' && x.data.id === 'device1'), 'LAN rules use the same Ping check.');
+    const deviceRuleRow = bv('device-list').querySelector('[aria-label="Edit <b>Device rule</b>"]').closest('tr');
+    bv('local').dispatchEvent(new Event('input', {bubbles:true}));
+    assert(bv('device-list').contains(deviceRuleRow), 'Typing a draft local network must not rebuild device rows.');
+    bv('device-list').querySelector('[aria-label="Edit <b>Device rule</b>"]').click();
+    bv('device-kill').checked = false;
+    bv('mode').value = 'full_multi';
+    bv('mode').dispatchEvent(new Event('change'));
+    assert(bv('device-kill').checked && bv('device-kill').disabled &&
+        bv('route-note').textContent.includes('temporary IPv6 addresses'),
+        'Combined LAN rule must enforce the Kill Switch and explain temporary IPv6 coverage.');
+    bv('mode').value = 'full';
+    bv('mode').dispatchEvent(new Event('change'));
+    assert(!bv('device-kill').checked && !bv('device-kill').disabled, 'Switching away from combined mode should restore the draft preference.');
+    bv('mode').value = 'full_multi';
+    bv('mode').dispatchEvent(new Event('change'));
+    bv('assign-form').requestSubmit(bv('save-device'));
+    await wait();
+    assert(requests.some(x => x.action === 'assign' && x.data.kind === 'lan' && x.data.mode === 'full_multi' &&
+        x.data.profile === 'vpn1' && x.data.failure === 'block' && x.data.killSwitch === true),
+        'LAN rules need to submit the combined mode and enforced Kill Switch.');
     bv('coverage').value = 'network';
     bv('network-mode').value = 'full';
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
@@ -714,6 +743,27 @@ document.addEventListener('DOMContentLoaded', async () => {
         bv('add-device').hidden && reply.dashboard.settings.networkProfile === 'proxy1',
         'Whole-Network proxy coverage settings did not apply.');
     assert(dismiss.hidden, 'Success messages must hide the error dismiss control.');
+    bv('network-mode').value = 'full_multi';
+    bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
+    bv('network-profile').value = '';
+    assert(bv('network-profile').required && !bv('network-profile').checkValidity() &&
+        bv('network-profile-label').textContent === 'Base server' && bv('network-kill').checked && bv('network-kill').disabled,
+        'Combined network mode must require a base server and enforce the Kill Switch.');
+    bv('network-profile').value = 'proxy1';
+    bv('network-profile').dispatchEvent(new Event('input', {bubbles:true}));
+    assert(bv('coverage-note').textContent.includes('Default traffic uses Chicago proxy') &&
+        bv('coverage-note').textContent.includes('Matched domains use their Multi-Path servers.'),
+        'Combined network mode must describe both the base server and the domain overrides.');
+    bv('settings-form').requestSubmit(bv('save-routing'));
+    await wait();
+    assert(requests.some(x => x.action === 'settings' && x.data.coverage === 'network' &&
+        x.data.networkMode === 'full_multi' && x.data.networkProfile === 'proxy1' && x.data.networkKillSwitch === true) &&
+        bv('current-routing').textContent.includes('Whole-Network + Multi-Path'),
+        'Whole-Network + Multi-Path settings did not apply.');
+    document.querySelector('[data-bv-section="smart"]').click();
+    assert(bv('smart-status').textContent.includes('Bypass lists use the base server'),
+        'Multi-Path must disclose that Bypass keeps using the VPN base in combined mode.');
+    document.querySelector('[data-bv-section="network"]').click();
     assert(bv('disable-routing').parentElement.contains(bv('settings-title')) &&
         getComputedStyle(bv('disable-routing')).backgroundColor === 'rgb(177, 40, 60)',
         'Disable VPN must be red at the top of routing settings.');
@@ -841,30 +891,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     system.click();
     await wait();
     assert(requests.some(x => x.controller === 'update' && x.action === 'status' && x.method === 'GET') &&
-        !bv('update-enable').hidden && bv('update-check').disabled && bv('update-apply').hidden &&
+        !requests.some(x => x.controller === 'update' && x.method === 'POST') &&
+        bv('update-check').textContent === 'Check for update' && !bv('update-check').hidden &&
+        !bv('update-check').disabled && bv('update-apply').textContent === 'Update' &&
+        !bv('update-apply').hidden && bv('update-apply').disabled &&
         bv('update-status').textContent.includes('Installed 0.1.39'),
-        'Signed updates must start disabled and report the installed release.');
+        'The update page must report its installed release and offer check and update without a separate enable step.');
     const nativeTimeout = window.setTimeout;
     window.setTimeout = (callback, milliseconds, ...args) => nativeTimeout(callback,
         milliseconds === 4000 ? 50 : milliseconds, ...args);
     try {
-        bv('update-enable').click();
-        await wait();
-        assert(requests.some(x => x.controller === 'update' && x.action === 'enable' && x.method === 'POST') &&
-            bv('update-enable').hidden && !bv('update-check').disabled, 'Enabling the signed repo must unlock update checks.');
         bv('update-check').click();
+        assert(bv('update-check').disabled && bv('update-apply').disabled &&
+            bv('update-status').textContent.includes('Checking for an update'), 'Check must show when it is in progress.');
         await wait();
         assert(requests.some(x => x.controller === 'update' && x.action === 'check' && x.method === 'POST') &&
-            bv('update-status').textContent.includes('Available 0.1.40') && !bv('update-apply').hidden,
-            'Checking for an update must reveal the available version and apply control.');
+            bv('update-status').textContent.includes('Available 0.1.40') && !bv('update-apply').disabled,
+            'Checking for an update must reveal the available version and enable the Update button.');
         bv('update-apply').click();
         await wait();
         assert(requests.some(x => x.controller === 'update' && x.action === 'apply' && x.method === 'POST' &&
-                x.data.version === '0.1.40') && bv('update-apply').hidden && bv('update-check').disabled &&
+                x.data.version === '0.1.40') && bv('update-apply').disabled && bv('update-check').disabled &&
             bv('update-status').textContent.includes('Installing package'), 'Apply must request only the displayed version.');
         await new Promise(resolve => nativeTimeout(resolve, 150));
         assert(updatePolls === 2 && bv('update-status').textContent.includes('Installed 0.1.40') &&
-            bv('message-detail').textContent === 'Update installed.' && !bv('update-check').disabled,
+            bv('message-detail').textContent === 'Update installed.' && !bv('update-check').disabled &&
+            bv('update-apply').disabled,
             'Update completion must refresh the installed version and restore check availability.');
     } finally {
         window.setTimeout = nativeTimeout;

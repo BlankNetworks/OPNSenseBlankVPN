@@ -16,6 +16,7 @@ final class Diagnostics
     private const SOURCE_LIMIT = 4096;
     private const STATE_LIMIT = 100;
     private const MAX_BACKEND_RESPONSE = 8 * 1024 * 1024;
+    private const DISCOVERY_TIMEOUT = 4;
     private const FRESH_NEIGHBOR_SECONDS = 300;
     private const RECENT_HANDSHAKE_SECONDS = 180;
 
@@ -32,7 +33,19 @@ final class Diagnostics
     {
         $warnings = [];
         $truncated = false;
-        $interfaces = $this->localInterfaces($warnings);
+        $leaseSources = $this->leaseSources();
+        $streams = $this->discoveryStreams([
+            'interface list ifconfig' => [],
+            'interface list arp' => ['json'],
+            'interface list ndp' => ['json'],
+            'hostwatch dump_full' => [],
+        ] + array_fill_keys(array_keys($leaseSources), []));
+        $deadline = microtime(true) + self::DISCOVERY_TIMEOUT;
+        $runtime = $this->readResponse($streams['interface list ifconfig'], $deadline);
+        if ($runtime === null) {
+            $warnings[] = 'Runtime interface addresses are unavailable. Static interface configuration was used.';
+        }
+        $interfaces = $this->localInterfaces($runtime ?? []);
         $observations = [];
         $now = time();
         $leases = [];
@@ -54,7 +67,7 @@ final class Diagnostics
         };
 
         foreach (['arp' => 'ARP', 'ndp' => 'NDP'] as $action => $label) {
-            $rows = $this->read('interface list ' . $action, ['json']);
+            $rows = $this->readResponse($streams['interface list ' . $action], $deadline);
             if ($rows === null || !array_is_list($rows)) {
                 $warnings[] = $label . ' table is unavailable.';
                 continue;
@@ -72,7 +85,7 @@ final class Diagnostics
             }
         }
 
-        $hostwatch = $this->read('hostwatch dump_full');
+        $hostwatch = $this->readResponse($streams['hostwatch dump_full'], $deadline);
         if (($hostwatch['source'] ?? null) === 'discovery' && is_array($hostwatch['rows'] ?? null)) {
             foreach ($this->bounded($hostwatch['rows'], $truncated) as $row) {
                 if (!is_array($row)) {
@@ -89,21 +102,8 @@ final class Diagnostics
             $warnings[] = 'Hostwatch history is unavailable.';
         }
 
-        $kea4 = $this->config->OPNsense->Kea->dhcp4 ?? null;
-        $kea6 = $this->config->OPNsense->Kea->dhcp6 ?? null;
-        $dnsmasq = $this->config->dnsmasq ?? null;
-        $leaseSources = [];
-        if ((string)($kea4->general->enabled ?? '') === '1') {
-            $leaseSources['kea list leases4'] = 'Kea DHCPv4';
-        }
-        if ((string)($kea6->general->enabled ?? '') === '1') {
-            $leaseSources['kea list leases6'] = 'Kea DHCPv6';
-        }
-        if ((string)($dnsmasq->enable ?? '') === '1') {
-            $leaseSources['dnsmasq list leases'] = 'Dnsmasq DHCP';
-        }
         foreach ($leaseSources as $action => $source) {
-            $leaseData = $this->read($action);
+            $leaseData = $this->readResponse($streams[$action], $deadline);
             if (!is_array($leaseData['records'] ?? null)) {
                 // The native Kea action has no output when it has no leases.
                 if ($source === 'Dnsmasq DHCP') {
@@ -162,8 +162,7 @@ final class Diagnostics
             $targets[$row['interface'] . '/' . $row['ip']] = true;
         }
         $claims = [];
-        $warnings = [];
-        $interfaces = $this->localInterfaces($warnings, false);
+        $interfaces = $this->localInterfaces();
         $record = static function (array $row, string $deviceKey, string $ipKey, string $macKey) use (
             $interfaces, $targets, &$claims
         ): void {
@@ -339,11 +338,10 @@ final class Diagnostics
 
     public function probeLanNeighbors(array $selected): array
     {
-        $warnings = [];
         $commands = [];
         $ports = array_intersect_key(Policy::availableInterfaces(), array_fill_keys($selected, true));
         $targetsByInterface = [];
-        foreach ($this->localInterfaces($warnings, false) as $interface) {
+        foreach ($this->localInterfaces() as $interface) {
             if (!isset($ports[$interface['id']])) {
                 continue;
             }
@@ -393,8 +391,7 @@ final class Diagnostics
     public function reservations(): array
     {
         // The firewall renderer may call this while configd is applying a reload.
-        $warnings = [];
-        $interfaces = $this->localInterfaces($warnings, false);
+        $interfaces = $this->localInterfaces();
         $claims = [];
         $addresses = [];
         foreach ($this->readReservations($interfaces) as $record) {
@@ -434,8 +431,7 @@ final class Diagnostics
 
     public function reserveDevice(string $provider, string $interface, string $ip, string $mac): void
     {
-        $warnings = [];
-        $interfaces = $this->localInterfaces($warnings, false);
+        $interfaces = $this->localInterfaces();
         $device = self::interfaceForIp($ip, $interfaces, [$interface]);
         if ($device === null || in_array($ip, $interfaces[$device]['ownAddresses'], true)) {
             throw new \DomainException('This address is outside the selected LAN.');
@@ -612,13 +608,24 @@ final class Diagnostics
         return $tunnels;
     }
 
-    private function localInterfaces(array &$warnings, bool $useRuntime = true): array
+    private function leaseSources(): array
     {
-        $runtime = $useRuntime ? $this->read('interface list ifconfig') : [];
-        if ($runtime === null) {
-            $warnings[] = 'Runtime interface addresses are unavailable. Static interface configuration was used.';
-            $runtime = [];
+        $sources = [];
+        $kea = $this->config->OPNsense->Kea ?? null;
+        if ((string)($kea->dhcp4->general->enabled ?? '') === '1') {
+            $sources['kea list leases4'] = 'Kea DHCPv4';
         }
+        if ((string)($kea->dhcp6->general->enabled ?? '') === '1') {
+            $sources['kea list leases6'] = 'Kea DHCPv6';
+        }
+        if ((string)($this->config->dnsmasq->enable ?? '') === '1') {
+            $sources['dnsmasq list leases'] = 'Dnsmasq DHCP';
+        }
+        return $sources;
+    }
+
+    private function localInterfaces(array $runtime = []): array
+    {
         $uplinks = ['wan' => true];
         foreach ([$this->config->OPNsense->Gateways ?? null, $this->config->gateways ?? null] as $gateways) {
             foreach (($gateways->gateway_item ?? []) as $gateway) {
@@ -841,20 +848,43 @@ final class Diagnostics
         ];
     }
 
+    private function discoveryStreams(array $sources): array
+    {
+        // Configd runs these independent read-only actions on separate connections.
+        // If configd is unavailable, leave the remaining sources unavailable too.
+        $streams = array_fill_keys(array_keys($sources), null);
+        foreach ($sources as $action => $arguments) {
+            $stream = $this->backend->configdpStream($action, $arguments, 1, false, self::DISCOVERY_TIMEOUT, 1);
+            if (!is_resource($stream)) {
+                break;
+            }
+            $streams[$action] = $stream;
+        }
+        return $streams;
+    }
+
     private function read(string $action, array $arguments = []): ?array
     {
-        $stream = $this->backend->configdpStream($action, $arguments, 1, false, 4, 1);
+        $stream = $this->backend->configdpStream($action, $arguments, 1, false, self::DISCOVERY_TIMEOUT, 1);
+        return $this->readResponse($stream, microtime(true) + self::DISCOVERY_TIMEOUT);
+    }
+
+    private function readResponse($stream, float $deadline): ?array
+    {
         if (!is_resource($stream)) {
             return null;
         }
         $response = '';
-        $deadline = microtime(true) + 4;
         $terminator = "\0\0\0";
         try {
-            while (microtime(true) < $deadline && strlen($response) <= self::MAX_BACKEND_RESPONSE) {
+            while (strlen($response) <= self::MAX_BACKEND_RESPONSE) {
+                $expired = microtime(true) >= $deadline;
+                if ($expired) {
+                    @stream_set_blocking($stream, false);
+                }
                 $previousLength = strlen($response);
-                $chunk = fread($stream, 65536);
-                if ($chunk === false || ($chunk === '' && feof($stream))) {
+                $chunk = @fread($stream, 65536);
+                if ($chunk === false || ($chunk === '' && ($expired || feof($stream)))) {
                     return null;
                 }
                 $response .= $chunk;

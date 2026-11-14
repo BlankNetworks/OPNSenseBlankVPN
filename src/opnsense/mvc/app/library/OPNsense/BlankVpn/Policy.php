@@ -12,6 +12,7 @@ final class Policy
     public const TAILSCALE_V4 = '100.64.0.0/10';
     public const TAILSCALE_V6 = 'fd7a:115c:a1e0::/48';
     public const LOCAL_TABLE = 'blankvpn_local';
+    public const COMBINED_LOCAL_TABLE = 'blankvpn_combined_local';
     public const STATE_DIR = '/var/db/blank-vpn';
     public const PROBE_IP = '1.1.1.1';
     private const FAILURE = ['block', 'backup', 'wan'];
@@ -31,11 +32,11 @@ final class Policy
         }
         $result['smartAssignedOnly'] = ($stored['smartAssignedOnly'] ?? '0') === '1';
         $result['coverage'] = ($stored['coverage'] ?? '') === 'network' ? 'network' : 'device';
-        $result['networkMode'] = in_array($stored['networkMode'] ?? '', ['full', 'multi', 'blocked', 'disabled'], true)
+        $result['networkMode'] = in_array($stored['networkMode'] ?? '', ['full', 'multi', 'full_multi', 'blocked', 'disabled'], true)
             ? $stored['networkMode'] : 'disabled';
         $result['networkProfile'] = $stored['networkProfile'] ?? '';
         $killSwitch = $stored['networkKillSwitch'] ?? '';
-        $result['networkKillSwitch'] = $killSwitch === '1' || ($killSwitch === '' && $result['networkMode'] !== 'multi');
+        $result['networkKillSwitch'] = $result['networkMode'] === 'full_multi' || $killSwitch === '1' || ($killSwitch === '' && $result['networkMode'] !== 'multi');
         $result['dashboardBind'] = ($stored['dashboardBind'] ?? '') === 'tailnet' ? 'tailnet' : 'lan';
         $result['hostname'] = $stored['hostname'] ?? 'blankvpn.home.arpa';
         return $result;
@@ -54,8 +55,9 @@ final class Policy
         $deviceOnly = [];
         foreach ($assignments as $row) {
             $interface = $row['interface'];
-            if (self::mode($row) === 'multi' && in_array($interface, $settings['interfaces'], true) &&
-                !in_array($interface, $settings['strictInterfaces'], true) &&
+            $mode = self::mode($row);
+            if (self::usesMultiPath($mode) && in_array($interface, $settings['interfaces'], true) &&
+                ($mode === 'full_multi' || !in_array($interface, $settings['strictInterfaces'], true)) &&
                 !in_array($interface, $settings['smartInterfaces'], true)) {
                 $deviceOnly[$interface] = true;
             }
@@ -69,7 +71,7 @@ final class Policy
     {
         if (($settings['coverage'] ?? '') === 'network') {
             $settings['interfaces'] = array_values(array_diff($settings['interfaces'], $settings['tailscaleInterfaces']));
-            $settings['smartInterfaces'] = $settings['networkMode'] === 'multi' ? $settings['interfaces'] : [];
+            $settings['smartInterfaces'] = self::usesMultiPath($settings['networkMode']) ? $settings['interfaces'] : [];
             $settings['strictInterfaces'] = [];
             $settings['smartAssignedOnly'] = false;
         }
@@ -116,9 +118,35 @@ final class Policy
         return ($assignment['mode'] ?? '') ?: (($assignment['profile'] ?? '') !== '' ? 'full' : 'default');
     }
 
+    public static function usesBase(string $mode): bool
+    {
+        return in_array($mode, ['full', 'full_multi'], true);
+    }
+
+    public static function usesMultiPath(string $mode): bool
+    {
+        return in_array($mode, ['multi', 'full_multi'], true);
+    }
+
+    public static function combinedProfiles(array $settings, array $assignments): array
+    {
+        if ($settings['coverage'] === 'network') {
+            return $settings['networkMode'] === 'full_multi' && $settings['networkProfile'] !== ''
+                ? [$settings['networkProfile'] => true] : [];
+        }
+        $profiles = [];
+        foreach ($assignments as $row) {
+            if (!self::assignmentPaused($row) && self::mode($row) === 'full_multi' && $row['profile'] !== '' &&
+                in_array($row['interface'], $settings['interfaces'], true)) {
+                $profiles[$row['profile']] = true;
+            }
+        }
+        return $profiles;
+    }
+
     public static function onDemand(array $assignment): bool
     {
-        return in_array(self::mode($assignment), ['full', 'multi'], true) &&
+        return in_array(self::mode($assignment), ['full', 'multi', 'full_multi'], true) &&
             !in_array($assignment['onDemand'] ?? '1', ['0', 0, false], true);
     }
 
@@ -173,6 +201,9 @@ final class Policy
     public static function killSwitch(array $assignment): bool
     {
         $mode = self::mode($assignment);
+        if ($mode === 'full_multi') {
+            return true;
+        }
         if (!in_array($mode, ['full', 'multi'], true)) {
             return false;
         }

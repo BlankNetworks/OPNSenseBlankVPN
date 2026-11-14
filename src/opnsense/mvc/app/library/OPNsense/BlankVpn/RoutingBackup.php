@@ -166,7 +166,9 @@ final class RoutingBackup
                 throw new DomainException('A VPN or proxy exit used in this backup is unavailable. Review the tunnel or proxy setup.');
             }
         }
-        foreach ([$incoming['settings']['networkProfile'], ...array_column($incoming['services'], 'profile')] as $id) {
+        $combined = array_filter($incoming['assignments'], static fn (array $row): bool => $row['mode'] === 'full_multi');
+        foreach ([$incoming['settings']['networkProfile'], ...array_column($incoming['services'], 'profile'),
+            ...array_column($combined, 'profile')] as $id) {
             if ($id !== '' && $id !== SmartRouting::BYPASS && !SmartRouting::canResolve($live[$id])) {
                 throw new DomainException('A saved network or Multi-Path exit needs working IPv4 DNS.');
             }
@@ -330,15 +332,15 @@ final class RoutingBackup
         }
         self::oneOf($settings['enabled'], ['0', '1']);
         self::oneOf($settings['coverage'], ['device', 'network']);
-        self::oneOf($settings['networkMode'], ['disabled', 'full', 'multi', 'blocked']);
+        self::oneOf($settings['networkMode'], ['disabled', 'full', 'multi', 'full_multi', 'blocked']);
         self::oneOf($settings['networkKillSwitch'], ['', '0', '1']);
         self::oneOf($settings['smartAssignedOnly'], ['0', '1']);
         if (
             ($settings['networkProfile'] !== '' && !self::uuid($settings['networkProfile'])) ||
             ($settings['networkProfile'] !== '' &&
-                ($settings['coverage'] !== 'network' || $settings['networkMode'] !== 'full')) ||
+                ($settings['coverage'] !== 'network' || !Policy::usesBase($settings['networkMode']))) ||
             ($settings['enabled'] === '1' && $settings['coverage'] === 'network' &&
-                $settings['networkMode'] === 'full' && $settings['networkProfile'] === '')
+                Policy::usesBase($settings['networkMode']) && $settings['networkProfile'] === '')
         ) {
             throw new DomainException('The backup has an invalid Whole-Network exit.');
         }
@@ -373,7 +375,7 @@ final class RoutingBackup
                 self::text($row[$name] ?? null, 400);
             }
             self::oneOf($row['kind'], ['lan', 'tailnet']);
-            self::oneOf($row['mode'], ['full', 'multi', 'disabled', 'blocked', 'default']);
+            self::oneOf($row['mode'], ['full', 'multi', 'full_multi', 'disabled', 'blocked', 'default']);
             self::oneOf($row['failure'], ['block', 'backup', 'wan']);
             self::oneOf($row['killSwitch'], ['', '0', '1']);
             foreach (['paused', 'onDemand', 'bindMac'] as $flag) {
@@ -388,7 +390,8 @@ final class RoutingBackup
                 ($row['kind'] === 'tailnet' && ($row['mac'] !== '' || $row['bindMac'] === '1' ||
                     !Policy::tailnetAddress($row['ip']) || !Policy::tailnetAddress($row['ipv6'], true))) ||
                 ($row['ipv6'] !== '' && Policy::ipv6Address($row['ipv6']) !== $row['ipv6']) ||
-                ($row['mode'] === 'full' ? !self::uuid($row['profile']) : $row['profile'] !== '') ||
+                (Policy::usesBase($row['mode']) ? !self::uuid($row['profile']) : $row['profile'] !== '') ||
+                ($row['mode'] === 'full_multi' && ($row['failure'] !== 'block' || $row['killSwitch'] !== '1')) ||
                 ($row['failure'] === 'backup'
                     ? ($row['mode'] !== 'full' || $row['backup'] === $row['profile'] || !self::uuid($row['backup']))
                     : $row['backup'] !== '')

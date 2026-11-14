@@ -89,4 +89,16 @@ check($result['onDemand'] === '1' && $result['bindMac'] === '0', 'Legacy policie
 check(Policy::mode($result) === 'full' && SmartRouting::domains(implode(',', ['.cn'])) === ['.cn'],
     'Backup validation must match native route and domain normalization.');
 
+$combined = $policy;
+$combined['assignments'][0] = array_replace($combined['assignments'][0], ['mode' => 'full_multi', 'killSwitch' => '1']);
+check(RoutingBackup::decode(json_encode(RoutingBackup::envelope($combined, $key)), $key) === $combined,
+    'A combined per-device policy round-trips.');
+$combined['settings'] = array_replace($combined['settings'], [
+    'coverage' => 'network', 'networkMode' => 'full_multi', 'networkProfile' => $exit, 'networkKillSwitch' => '1',
+]);
+check(RoutingBackup::decode(json_encode(RoutingBackup::envelope($combined, $key)), $key) === $combined,
+    'A combined Whole-Network policy retains its base server.');
+$combined['assignments'][0]['failure'] = 'wan';
+expectFail(fn () => RoutingBackup::envelope($combined, $key), 'invalid device rule');
+
 echo "Routing backup fixtures passed.\n";

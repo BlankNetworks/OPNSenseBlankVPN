@@ -23,7 +23,7 @@ final class OnDemand
         $onDemand = [];
         foreach ($assignments as $row) {
             $profile = $row['profile'] ?? '';
-            if ($profile === '' || Policy::mode($row) !== 'full' ||
+            if ($profile === '' || !Policy::usesBase(Policy::mode($row)) ||
                 !in_array($row['interface'], $settings['interfaces'], true)) {
                 continue;
             }

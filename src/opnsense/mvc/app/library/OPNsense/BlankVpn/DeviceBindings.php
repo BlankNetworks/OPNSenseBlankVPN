@@ -18,7 +18,7 @@ final class DeviceBindings
         $scopes = [];
         foreach ($assignments as $id => $row) {
             if (Policy::bindsMac($row) && in_array($row['interface'], $settings['interfaces'], true) &&
-                in_array(Policy::mode($row), ['full', 'multi', 'blocked'], true)) {
+                in_array(Policy::mode($row), ['full', 'multi', 'full_multi', 'blocked'], true)) {
                 $ip = self::address($row['ip'] ?? null);
                 if ($ip !== null) {
                     $scopes[$id] = $ip;

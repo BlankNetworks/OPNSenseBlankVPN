@@ -17,6 +17,12 @@ namespace OPNsense\Core {
             if (!array_key_exists($action, $this->fixtures)) {
                 throw new \RuntimeException('Unexpected action ' . $action);
             }
+            if ($this->fixtures[$action] === null) {
+                return null;
+            }
+            if ($this->fixtures[$action] instanceof \Closure) {
+                return ($this->fixtures[$action])();
+            }
             $stream = fopen('php://temp', 'w+');
             fwrite($stream, json_encode($this->fixtures[$action], JSON_THROW_ON_ERROR) . "\0\0\0");
             rewind($stream);
@@ -163,6 +169,38 @@ namespace {
     check($diagnostics->reservationProvider('lan', '192.168.10.8', '02:00:00:00:00:04') === '' &&
         $diagnostics->reservationProvider('lan', '192.168.10.18', '02:00:00:00:00:99') === '',
         'Reject lease-only clients and MAC mismatches.');
+
+    $offlineBackend = new Backend(['interface list ifconfig' => null]);
+    $offline = (new Diagnostics($offlineBackend, $config))->devices();
+    check(count($offlineBackend->calls) === 1 && $offline['devices'] === [] &&
+        in_array('ARP table is unavailable.', $offline['warnings'], true) &&
+        in_array('Dnsmasq DHCP lease data is unavailable.', $offline['warnings'], true),
+        'When configd is unavailable, avoid reconnecting for each source and retain discovery warnings.');
+
+    [$slowRead, $slowWrite] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+    stream_set_timeout($slowRead, 0, 1000);
+    $concurrentBackend = new Backend([
+        'interface list ifconfig' => static fn () => $slowRead,
+        'interface list arp' => [
+            ['intf' => 'igc0', 'mac' => '02:00:00:00:00:01', 'ip' => '192.168.10.5'],
+        ],
+        // Configd can return valid JSON with the wrong shape for a single source.
+        'interface list ndp' => ['error' => 'unavailable'],
+        'hostwatch dump_full' => static function () use ($slowWrite) {
+            fwrite($slowWrite, "[]\0\0\0");
+            fclose($slowWrite);
+            $response = fopen('php://temp', 'w+');
+            fwrite($response, "[]\0\0\0");
+            rewind($response);
+            return $response;
+        },
+        'kea list leases4' => ['records' => []],
+        'dnsmasq list leases' => ['records' => []],
+    ]);
+    $concurrent = (new Diagnostics($concurrentBackend, $config))->devices();
+    check($concurrent['warnings'] === ['NDP table is unavailable.'] &&
+        $concurrent['devices'][0]['ipv4'] === '192.168.10.5' && !is_resource($slowRead),
+        'Launch independent reads before waiting on the first source, and preserve partial data and warnings.');
 
     $sessions = $diagnostics->connections('192.168.10.5');
     check($sessions['truncated'] && $sessions['total'] === 1, 'Bounded, exact endpoint matching');

@@ -21,6 +21,7 @@ A passing lab should confirm all of the following on the exact CE 26.7 build. Us
 | --- | --- |
 | pkg registration, dashboard, login and ACLs | Native pkg accepts the archive. Fresh install leaves routing disabled. View-only and unauthorized users cannot change policy. |
 | HTTPS and local dashboard DNS | The hostname resolves in each permitted group, the HTTPS certificate is trusted and the existing admin entry still works. |
+| Whole-Network + Multi-Path | Confirm unmatched IPv4 and uncategorized DNS take the base tunnel and nominated IPv4 destinations take their assigned exits. Stop the base and each override independently. Confirm direct WAN and public IPv6 stay blocked. Repeat for a LAN and Tailscale device rule with an unaffected neighboring client. |
 | Multi-Path and wildcard learning | A fresh apex and subdomain lookup populate the PF table and route matched IPv4 through the chosen exit. Test normal DNS over IPv4 and IPv6, shared destination IPs, and unrelated native WAN traffic. |
 | Proxy runtime and subscription | Verify the pinned core binaries on FreeBSD and the loopback-only listeners, enable two distinct servers, confirm correct route selection and DNS, and exercise refresh, removal, reboot, and transport loss. |
 | Shared-LAN per-IP kill switch | A reserved IPv4 address loses internet when its tunnel goes down. Other clients and approved local services remain available. Start with an existing direct session and confirm activation resets it. |

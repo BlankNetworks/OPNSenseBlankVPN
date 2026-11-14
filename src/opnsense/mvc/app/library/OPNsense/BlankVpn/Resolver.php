@@ -7,16 +7,30 @@ use OPNsense\Core\Config;
 final class Resolver
 {
     public const LOCAL_PORT = 46650;
+    private const COMBINED_PORT_OFFSET = 200;
 
     private static function vpnPorts(): array
     {
         return [...range(self::LOCAL_PORT + 1, self::LOCAL_PORT + 5), ...range(46680, 46706)];
     }
 
+    private static function profilePorts(): array
+    {
+        return [...self::vpnPorts(),
+            ...range(ProxyRuntime::FIRST_DNS_PORT, ProxyRuntime::FIRST_DNS_PORT + ProxyRuntime::SLOTS - 1)];
+    }
+
+    public static function combinedPort(array $profile): int
+    {
+        $base = (int)($profile['dnsPort'] ?? 0);
+        return in_array($base, self::profilePorts(), true) ? $base + self::COMBINED_PORT_OFFSET : 0;
+    }
+
     public static function allowedPort(int $port): bool
     {
-        return $port === self::LOCAL_PORT || $port === SmartRouting::PORT || in_array($port, self::vpnPorts(), true) ||
-            ($port >= ProxyRuntime::FIRST_DNS_PORT && $port < ProxyRuntime::FIRST_DNS_PORT + ProxyRuntime::SLOTS);
+        $profilePorts = self::profilePorts();
+        return $port === self::LOCAL_PORT || $port === SmartRouting::PORT || in_array($port, $profilePorts, true) ||
+            in_array($port - self::COMBINED_PORT_OFFSET, $profilePorts, true);
     }
 
     public static function freePort(array $profiles): int
@@ -35,6 +49,7 @@ final class Resolver
         $settings = Policy::effectiveRouting($model);
         $services = SmartRouting::activeServices($settings, SmartRouting::services($model));
         $wanted = [];
+        $combined = [];
         if ($settings['enabled']) {
             $hostname = $settings['hostname'];
             $bind = $hostname === 'blankvpn.local' ? 'lan' : $settings['dashboardBind'];
@@ -44,7 +59,8 @@ final class Resolver
             }
             $profiles = Policy::routes($model);
             $wanted[self::LOCAL_PORT] = self::configuration(self::LOCAL_PORT, $hostname, $host, []);
-            foreach ($profiles as $profile) {
+            $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model, true) : [];
+            foreach (array_intersect_key($profiles, self::defaultDnsProfiles($settings, $assignments)) as $profile) {
                 $port = (int)($profile['dnsPort'] ?? 0);
                 if (($profile['kind'] ?? '') === 'proxy') {
                     $upstreams = ['server=127.0.0.1#' . $profile['proxyDns']];
@@ -59,7 +75,8 @@ final class Resolver
                 $upstreams = array_map(static fn ($ip) => "server={$ip}@{$source}", SmartRouting::profileDns($profile));
                 $wanted[$port] = self::configuration($port, $hostname, $host, $upstreams);
             }
-            if ($services !== []) {
+            $directives = SmartRouting::dnsDirectives($services, $profiles);
+            if ($services !== [] && self::usesSharedDns($settings, $assignments)) {
                 $default = 'server=127.0.0.1#53';
                 if (SmartRouting::usesBypass($settings)) {
                     $profile = $profiles[$settings['networkProfile']] ?? [];
@@ -67,13 +84,24 @@ final class Resolver
                     $dnsPort = (int)($profile['dnsPort'] ?? 0);
                     $default = isset($wanted[$dnsPort]) ? 'server=127.0.0.1#' . $dnsPort : '';
                 }
-                $upstreams = [...($default === '' ? [] : [$default]), ...SmartRouting::dnsDirectives($services, $profiles)];
+                $upstreams = [...($default === '' ? [] : [$default]), ...$directives];
                 $wanted[SmartRouting::PORT] = self::configuration(SmartRouting::PORT, $hostname, $host, $upstreams, true);
+            }
+            foreach (array_keys(Policy::combinedProfiles($settings, $assignments)) as $id) {
+                $profile = $profiles[$id] ?? [];
+                $port = self::combinedPort($profile);
+                if ($port !== 0) {
+                    $basePort = (int)$profile['dnsPort'];
+                    $fallback = isset($wanted[$basePort]) ? ['server=127.0.0.1#' . $basePort] : [];
+                    $upstreams = [...$fallback, ...$directives];
+                    $wanted[$port] = self::configuration($port, $hostname, $host, $upstreams, true, true);
+                    $combined[$port] = $directives !== [];
+                }
             }
         }
 
-        foreach ([self::LOCAL_PORT, SmartRouting::PORT, ...self::vpnPorts(),
-            ...range(ProxyRuntime::FIRST_DNS_PORT, ProxyRuntime::FIRST_DNS_PORT + ProxyRuntime::SLOTS - 1)] as $port) {
+        $ipsetChecked = false;
+        foreach (self::listenerPorts($wanted) as $port) {
             $name = "dns-{$port}.conf";
             $config = Policy::STATE_DIR . '/' . $name;
             $pid = self::running($port);
@@ -88,13 +116,20 @@ final class Resolver
                 if (is_file($config)) {
                     unlink($config);
                 }
+                $pidFile = Policy::STATE_DIR . "/dns-{$port}.pid";
+                if (is_file($pidFile)) {
+                    unlink($pidFile);
+                }
                 continue;
             }
-            if ($port === SmartRouting::PORT) {
+            if (!$ipsetChecked && ($port === SmartRouting::PORT || ($combined[$port] ?? false))) {
                 $version = self::command(['/usr/local/sbin/dnsmasq', '--version']);
                 if (!preg_match('/(?:^|\s)ipset(?:\s|$)/i', $version)) {
                     throw new \RuntimeException('Multi-Path requires the OPNsense Dnsmasq build with PF ipset support.');
                 }
+                $ipsetChecked = true;
+            }
+            if ($port === SmartRouting::PORT) {
                 self::checkNativeDns($hostname);
             }
             Policy::writeState($name, $next);
@@ -104,6 +139,53 @@ final class Resolver
                 throw new \RuntimeException('The Blank VPN DNS listener did not start.');
             }
         }
+    }
+
+    private static function defaultDnsProfiles(array $settings, array $assignments): array
+    {
+        if ($settings['coverage'] === 'network') {
+            return Policy::usesBase($settings['networkMode']) ? [$settings['networkProfile'] => true] : [];
+        }
+        $profiles = [];
+        foreach ($assignments as $row) {
+            if (Policy::usesBase(Policy::mode($row)) && in_array($row['interface'], $settings['interfaces'], true)) {
+                $profiles[$row['profile']] = true;
+                if ($row['failure'] === 'backup') {
+                    $profiles[$row['backup']] = true;
+                }
+            }
+        }
+        return $profiles;
+    }
+
+    private static function usesSharedDns(array $settings, array $assignments): bool
+    {
+        if ($settings['coverage'] === 'network') {
+            return $settings['networkMode'] !== 'full_multi';
+        }
+        if (empty($settings['smartAssignedOnly']) &&
+            array_diff($settings['smartInterfaces'], $settings['deviceMultiInterfaces'], $settings['strictInterfaces']) !== []) {
+            return true;
+        }
+        foreach ($assignments as $row) {
+            if (Policy::mode($row) === 'multi' && in_array($row['interface'], $settings['smartInterfaces'], true) &&
+                !in_array($row['interface'], $settings['strictInterfaces'], true)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function listenerPorts(array $wanted): array
+    {
+        $ports = $wanted;
+        foreach (glob(Policy::STATE_DIR . '/dns-*.{conf,pid}', GLOB_BRACE | GLOB_NOSORT) ?: [] as $file) {
+            if (preg_match('/^dns-([0-9]{1,5})\.(?:conf|pid)$/D', basename($file), $match) &&
+                self::allowedPort((int)$match[1])) {
+                $ports[(int)$match[1]] ??= '';
+            }
+        }
+        return array_keys($ports);
     }
 
     public static function dashboardAddresses(): array
@@ -195,7 +277,8 @@ final class Resolver
         string $hostname,
         string $host,
         array $upstreams,
-        bool $smart = false
+        bool $smart = false,
+        bool $vpnOnly = false
     ): string {
         $rows = [
             'port=' . $port, $smart ? 'listen-address=127.0.0.1,::1' : 'listen-address=127.0.0.1', 'bind-interfaces',
@@ -210,7 +293,8 @@ final class Resolver
         if ($smart) {
             // Relearn destinations on every upstream answer and bound ordinary client DNS caching.
             $rows[] = 'max-ttl=60';
-        } else {
+        }
+        if (!$smart || $vpnOnly) {
             $rows[] = 'local=/home.arpa/';
         }
         return implode("\n", [...$rows, ...$upstreams]) . "\n";

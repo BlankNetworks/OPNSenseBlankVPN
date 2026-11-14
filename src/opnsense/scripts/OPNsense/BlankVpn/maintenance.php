@@ -214,6 +214,27 @@ try {
                         $beforeOutage = $retry || $observedOutage ? [] : ($loaded ?? []);
                         Operations::resetOutageStates($settings, $assignments, $beforeOutage, $after);
                     }
+                    $combined = Policy::combinedProfiles($settings, $assignments);
+                    if ($combined !== []) {
+                        $changedPath = $retry;
+                        foreach ($settings['smartInterfaces'] as $interface) {
+                            foreach (SmartRouting::activeServices($settings, $services) as $service) {
+                                $marker = Policy::marker('service', $service['id'] . ':' . $interface);
+                                $changedPath = $changedPath || ($loaded[$marker] ?? null) !== ($after[$marker] ?? null);
+                            }
+                        }
+                        if ($settings['coverage'] === 'network') {
+                            foreach ($settings['interfaces'] as $interface) {
+                                $marker = Policy::marker('device', 'network:' . $interface);
+                                $changedPath = $changedPath || ($loaded[$marker] ?? null) !== ($after[$marker] ?? null);
+                            }
+                        }
+                        if ($changedPath) {
+                            foreach (Operations::combinedStateScopes($settings, $assignments) as $scope) {
+                                Operations::resetKillSwitch($scope);
+                            }
+                        }
+                    }
                     $segments = [];
                     $bypassOutages = [];
                     if (SmartRouting::usesBypass($settings)) {

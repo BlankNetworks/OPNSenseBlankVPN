@@ -227,6 +227,25 @@ final class Operations
         }
     }
 
+    public static function combinedStateScopes(array $settings, array $assignments): array
+    {
+        if (!$settings['enabled']) {
+            return [];
+        }
+        if ($settings['coverage'] === 'network') {
+            return $settings['networkMode'] === 'full_multi' ? Policy::segmentNetworks($settings['interfaces']) : [];
+        }
+
+        $scopes = [];
+        foreach ($assignments as $row) {
+            if (Policy::mode($row) === 'full_multi' && !Policy::assignmentPaused($row) &&
+                in_array($row['interface'], $settings['interfaces'], true)) {
+                array_push($scopes, $row['ip'], $row['ipv6'] ?? '');
+            }
+        }
+        return array_values(array_unique(array_filter($scopes)));
+    }
+
     public static function resetKillSwitch(string $source): void
     {
         $network = str_contains($source, '/') ? Policy::cidr($source) : null;

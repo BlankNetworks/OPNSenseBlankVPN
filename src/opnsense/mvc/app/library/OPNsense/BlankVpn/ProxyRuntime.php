@@ -45,12 +45,12 @@ final class ProxyRuntime
         $services = SmartRouting::activeServices($settings, SmartRouting::services($model));
         $selected = array_column($services, 'profile');
         if ($settings['coverage'] === 'network') {
-            if ($settings['networkMode'] === 'full') {
+            if (Policy::usesBase($settings['networkMode'])) {
                 $selected[] = $settings['networkProfile'];
             }
         } else {
             foreach (Policy::assignments($model, true) as $assignment) {
-                if (Policy::mode($assignment) === 'full') {
+                if (Policy::usesBase(Policy::mode($assignment))) {
                     array_push($selected, $assignment['profile'], $assignment['backup']);
                 }
             }

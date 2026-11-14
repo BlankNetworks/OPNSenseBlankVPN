@@ -286,13 +286,7 @@
                 <tbody id="bv-subscription-list"></tbody>
             </table>
         </div>
-        <div class="bv-heading">
-            <label>Find a server <input id="bv-proxy-search" class="form-control" type="search" autocomplete="off"></label>
-            <label>Protocol <select id="bv-proxy-filter" class="form-control">
-                <option value="">All protocols</option><option value="socks5">SOCKS5</option>
-            </select></label>
-            <p id="bv-proxy-count" class="text-muted" role="status"></p>
-        </div>
+        <p id="bv-proxy-count" class="text-muted" role="status"></p>
         <div class="bv-scroll">
             <table class="table bv-table">
                 <thead><tr><th scope="col">Server</th><th scope="col">Protocol</th><th scope="col">Core</th><th scope="col">Actions</th></tr></thead>
@@ -332,11 +326,12 @@
                         <select id="bv-network-mode" class="form-control">
                             <option value="full">Use one VPN or proxy</option>
                             <option value="multi">Use domain lists (Multi-Path)</option>
+                            <option value="full_multi">Whole-Network + Multi-Path</option>
                             <option value="blocked">Block internet</option>
                             <option value="disabled">Use regular internet</option>
                         </select>
                     </label>
-                    <label id="bv-network-profile-field" hidden>Saved server
+                    <label id="bv-network-profile-field" hidden><span id="bv-network-profile-label">Saved server</span>
                         <select id="bv-network-profile" class="form-control"></select>
                     </label>
                 </div>
@@ -348,7 +343,7 @@
                         <div id="bv-interface-rules" class="bv-interface-rules"></div>
                         <label class="bv-check">
                             <input id="bv-smart-assigned" type="checkbox">
-                            Use domain lists only for devices set to Multi-Path
+                            Use domain lists only for devices with Multi-Path enabled
                         </label>
                     </div>
                     <label>Additional networks that should stay local
@@ -429,11 +424,14 @@
                         <select id="bv-mode" class="form-control">
                             <option value="full">All traffic through one server</option>
                             <option value="multi">Multi-Path</option>
+                            <option value="full_multi">Base VPN + Multi-Path</option>
                             <option value="disabled">Off</option>
                             <option value="blocked">Blocked</option>
                         </select>
                     </label>
-                    <label id="bv-profile-field">Saved server <select id="bv-profile" class="form-control"></select></label>
+                    <label id="bv-profile-field"><span id="bv-profile-label">Saved server</span>
+                        <select id="bv-profile" class="form-control"></select>
+                    </label>
                     <label id="bv-failure-field">If the server fails
                         <select id="bv-failure" class="form-control">
                             <option value="backup">Use a backup server</option>
@@ -591,10 +589,8 @@
             <h2 id="bv-update-title">Package updates</h2>
             <p id="bv-update-status" role="status"></p>
             <div class="bv-actions">
-                <button type="button" id="bv-update-enable" class="btn btn-primary" hidden>Enable signed updates</button>
-                <button type="button" id="bv-update-check" class="btn btn-default" disabled>Check for updates</button>
-                <button type="button" id="bv-update-apply" class="btn btn-primary" hidden>Apply update</button>
-                <a href="/ui/core/firmware">Open OPNsense Firmware</a>
+                <button type="button" id="bv-update-check" class="btn btn-default" disabled>Check for update</button>
+                <button type="button" id="bv-update-apply" class="btn btn-primary" disabled>Update</button>
             </div>
         </section>
         <section id="bv-system-backups" class="bv-panel" aria-labelledby="bv-backup-title" hidden>
