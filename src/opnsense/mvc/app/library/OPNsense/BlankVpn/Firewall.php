@@ -12,6 +12,8 @@ final class Firewall
     private const VPN_EGRESS_TAG = 'blankvpn_tunnel_only';
     private const TAILNET_TUNNEL_TAG = 'blankvpn_tailnet_tunnel';
     private const TAILNET_WAN_TAG = 'blankvpn_tailnet_wan';
+    // Tailscale carries 1280-byte IP packets. Leave room for IPv4 and TCP headers.
+    private const TAILNET_TCP_SCRUB = 'max-mss 1240';
     // Run after the OPNsense user rules so explicit quick rules are respected.
     private const TAILNET_DEFAULT_PRIORITY = 490000;
     private const STATIC_DESTINATIONS = Policy::PRIORITY + 30;
@@ -962,10 +964,11 @@ final class Firewall
     private static function stateOptions(array $profile, bool $tailnet): array
     {
         // A floating ingress state can match on output before PF evaluates tunnel source NAT.
+        $scrub = $tailnet ? ['scrub' => self::TAILNET_TCP_SCRUB] : [];
         if (($profile['kind'] ?? '') === 'proxy') {
-            return ['tag' => self::VPN_EGRESS_TAG, 'state-policy' => 'floating'];
+            return ['tag' => self::VPN_EGRESS_TAG, 'state-policy' => 'floating'] + $scrub;
         }
-        return $tailnet ? ['tag' => self::TAILNET_TUNNEL_TAG, 'state-policy' => 'if-bound'] :
+        return $tailnet ? ['tag' => self::TAILNET_TUNNEL_TAG, 'state-policy' => 'if-bound'] + $scrub :
             ['tag' => self::VPN_EGRESS_TAG];
     }
 
@@ -1002,7 +1005,7 @@ final class Firewall
             'tagged' => $tag, 'quick' => false, 'disablereplyto' => true,
             'statetype' => 'keep', 'state-policy' => 'floating',
             'label' => self::tailnetOutputMarker($profile['logicalInterface'], $family, $tag)
-        ]);
+        ] + ($tag === self::TAILNET_TUNNEL_TAG ? ['scrub' => self::TAILNET_TCP_SCRUB] : []));
     }
 
     private static function tailnetOutputMarker(string $interface, string $family, string $tag): string
@@ -1018,6 +1021,33 @@ final class Firewall
             }
         }
         return $markers;
+    }
+
+    public static function tailnetForwardingInstalled(array $profile, array $loaded, array $markers, string $nat, string $source): bool
+    {
+        if (($profile['kind'] ?? '') === 'proxy') {
+            return true;
+        }
+        $marker = self::tailnetOutputMarker($profile['logicalInterface'], 'inet', self::TAILNET_TUNNEL_TAG);
+        $output = $loaded[$marker] ?? [];
+        $address = explode('/', $profile['address'], 2)[0];
+        if (($output['action'] ?? '') !== 'pass' || ($output['source'] ?? '') !== $address ||
+            ($output['tagged'] ?? '') !== self::TAILNET_TUNNEL_TAG) {
+            return false;
+        }
+        return array_any($markers, static fn (string $path): bool =>
+            ($loaded[$path]['tag'] ?? '') === self::TAILNET_TUNNEL_TAG &&
+            ($loaded[$path]['source'] ?? '') === $source) &&
+            self::sourceNatLoaded($nat, $profile['interface'], $source, $address);
+    }
+
+    private static function sourceNatLoaded(string $nat, string $interface, string $source, string $address): bool
+    {
+        $interface = preg_quote($interface, '/');
+        $source = preg_quote($source, '/');
+        $address = preg_quote($address, '/');
+        return preg_match('/^(?:@\d+\s+)?nat\s+on\s+' . $interface . '\s+inet\s+from\s+' .
+            $source . '(?:\/32)?\s+to\s+any\s+->\s+' . $address . '(?:\/32)?(?:\s|$)/m', $nat) === 1;
     }
 
     private static function bypassSmartDns(Plugin $firewall, string $interface, string $ip, string $family): void
@@ -1058,10 +1088,11 @@ final class Firewall
         bool $default = false,
         string $family = 'inet'
     ): void {
-        $port = Resolver::scopedPort($port, $interface === Policy::TAILSCALE_DEVICE ||
+        $tailnet = $interface === Policy::TAILSCALE_DEVICE ||
             in_array($interface, explode(',', (string)(
                 Config::getInstance()->object()->OPNsense->BlankVpn->settings->tailscaleInterfaces ?? ''
-            )), true));
+            )), true);
+        $port = Resolver::scopedPort($port, $tailnet);
         if (!self::dnsRedirectionAvailable() || !Resolver::allowedPort($port)) {
             return;
         }
@@ -1073,11 +1104,11 @@ final class Firewall
             'tag' => $tag, 'natreflection' => 'disable', 'descr' => 'Blank VPN & Proxy DNS redirection'
         ]);
         $firewall->registerFilterRule(Policy::PRIORITY + ($default ? 6 : 5), [
-            'type' => 'pass', 'interface' => $interface, 'ipprotocol' => $family,
+            'type' => 'pass', 'direction' => 'in', 'interface' => $interface, 'ipprotocol' => $family,
             'from' => $ip, 'to' => $target, 'to_port' => (string)$port, 'protocol' => 'tcp/udp',
             'tagged' => $tag, 'quick' => true, 'statetype' => 'keep', 'disablereplyto' => true,
             'label' => $tag
-        ]);
+        ] + ($tailnet ? ['state-policy' => 'floating'] : []));
     }
 
     public static function dnsRedirectionAvailable(): bool
@@ -1224,6 +1255,9 @@ final class Firewall
                 'tagged' => $tagged[1] ?? null, 'tag' => $tag[1] ?? null,
                 'quick' => preg_match('/^.+?\bquick\s+(?:on|inet|inet6|proto|from|all)\b/', $line) === 1
             ] + (isset($ingress[1]) ? ['ingress' => $ingress[1]] : []);
+            if (preg_match('/\bmax-mss\s+([0-9]+)\b/', $line, $mss)) {
+                $rules[$match[1]]['mss'] = (int)$mss[1];
+            }
         }
         return $rules;
     }

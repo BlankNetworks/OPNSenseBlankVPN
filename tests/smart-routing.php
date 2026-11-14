@@ -773,7 +773,8 @@ namespace {
     $tailnetPass = $nativePeer->rules[Policy::marker('device', 'native-peer')];
     checkRouting($tailnetPass['interface'] === Policy::TAILSCALE_DEVICE && $tailnetPass['from'] === $tailnet['ip'] &&
         $tailnetPass['gateway'] === 'VPN' && $tailnetPass['state-policy'] === 'if-bound' &&
-        $tailnetPass['tag'] === 'blankvpn_tailnet_tunnel' && $nativePeer->nat[0]['from'] === $tailnet['ip'] &&
+        $tailnetPass['tag'] === 'blankvpn_tailnet_tunnel' && $tailnetPass['scrub'] === 'max-mss 1240' &&
+        $nativePeer->nat[0]['from'] === $tailnet['ip'] &&
         $nativePeer->rules[Policy::marker('kill_v6', 'native-peer')]['from'] === $tailnet['ipv6'],
         'A native peer routes through its VPN and blocks IPv6 with a kill switch.');
     $pausedPeer = new Plugin();
@@ -828,8 +829,20 @@ namespace {
     $marker = array_key_first($reply->rules);
     checkRouting($reply->rules[$marker]['from'] === explode('/', $chicago['address'])[0] &&
         $reply->rules[$marker]['direction'] === 'out' && $reply->rules[$marker]['state-policy'] === 'floating' &&
+        $reply->rules[$marker]['scrub'] === 'max-mss 1240' &&
         Firewall::forwardedReplyMarkers([$tailnetBase => $sharedRules->rules[$tailnetBase]], [$tailnetBase], $chicago) === [$marker],
         'The route test observes the translated egress state which tracks replies.');
+    $loadedPaths = [
+        $tailnetBase => ['tag' => 'blankvpn_tailnet_tunnel', 'source' => Policy::TAILSCALE_V4],
+        $marker => ['action' => 'pass', 'source' => explode('/', $chicago['address'])[0], 'tagged' => 'blankvpn_tailnet_tunnel']
+    ];
+    $liveNat = 'nat on ovpnc1 inet from 100.64.0.0/10 to any -> ' . explode('/', $chicago['address'])[0] . " port 1024:65535\n";
+    checkRouting(Firewall::tailnetForwardingInstalled($chicago, $loadedPaths, [$tailnetBase], $liveNat, Policy::TAILSCALE_V4) &&
+        !Firewall::tailnetForwardingInstalled($chicago, $loadedPaths, [$tailnetBase],
+            str_replace('ovpnc1', 'igc0', $liveNat), Policy::TAILSCALE_V4) &&
+        !Firewall::tailnetForwardingInstalled($chicago, [$tailnetBase => $loadedPaths[$tailnetBase]],
+            [$tailnetBase], $liveNat, Policy::TAILSCALE_V4),
+        'The Tailscale VPN test detects missing loaded NAT or return rules independently of a router probe.');
     checkRouting(Operations::serviceStateScopes($tailnetScope, []) === [Policy::TAILSCALE_V4, Policy::TAILSCALE_V6],
         'Tailscale state resets target Tailscale sources even on an Ethernet transit link.');
 

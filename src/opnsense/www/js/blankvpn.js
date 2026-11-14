@@ -698,9 +698,10 @@
                 } else {
                     cell(row, interfaceId ? networkName(interfaceId) : '—', 'Interface');
                 }
-                const onDemand = assignment && (usesBaseServer(assignment.mode) || assignment.mode === 'multi') &&
-                    assignment.onDemand !== false;
-                const ruleDetail = [assignment?.profile ? profileName(assignment.profile) : '', onDemand ? 'On Demand' : ''];
+                const keepReady = assignment && (tailnet || assignment.mode === 'full_multi');
+                const onDemand = assignment?.mode === 'full' && assignment.onDemand !== false && !keepReady;
+                const ruleDetail = [assignment?.profile ? profileName(assignment.profile) : '',
+                    onDemand ? 'On Demand' : keepReady && usesBaseServer(assignment.mode) ? 'Always on' : ''];
                 if (bindMac) {
                     ruleDetail.push('Follows MAC address');
                 }
@@ -1663,10 +1664,11 @@
             byId('device-kill-field').hidden = !supportsKillSwitch;
             kill.disabled = !supportsKillSwitch || combined;
             requireKillSwitch(kill, combined);
-            byId('device-on-demand-field').hidden = !supportsKillSwitch;
+            const allowOnDemand = full && !tailnet;
+            byId('device-on-demand-field').hidden = !allowOnDemand;
             byId('device-on-demand-note').hidden = !supportsKillSwitch;
-            byId('device-on-demand').disabled = !supportsKillSwitch;
-            byId('device-on-demand-note').textContent = byId('device-on-demand').checked
+            byId('device-on-demand').disabled = !allowOnDemand;
+            byId('device-on-demand-note').textContent = allowOnDemand && byId('device-on-demand').checked
                 ? 'Automatically uses this rule when the device connects. Shared tunnels may stay ready.'
                 : 'Keep the tunnel ready while this rule is enabled.';
             const killSwitch = supportsKillSwitch && kill.checked;
@@ -2062,7 +2064,7 @@
                     const observation = {
                         seen: 'Device traffic seen in both directions',
                         unseen: 'No completed connection observed from the device. Open a new page on the device and try again.',
-                        inactive: 'Device rule has no active VPN path',
+                        inactive: result.forwardingIssue || 'Device rule has no active VPN path',
                         unavailable: 'Device traffic status unavailable'
                     };
                     const kind = result.reachable !== true || result.deviceTraffic === 'inactive' ? 'fail'

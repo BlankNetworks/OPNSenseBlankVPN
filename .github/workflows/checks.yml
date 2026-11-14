@@ -91,6 +91,7 @@ jobs:
             set -eu
             sh tests/freebsd-package.sh "dist/os-blank-vpn-$PACKAGE_VERSION-$PACKAGE_ARCH.pkg" "$PACKAGE_ARCH"
             if [ "$PACKAGE_ARCH" = amd64 ]; then
+              env ASSUME_ALWAYS_YES=yes pkg install dnsmasq bind-tools
               sh tests/freebsd-kill-switch.sh --isolated-vm
             fi
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

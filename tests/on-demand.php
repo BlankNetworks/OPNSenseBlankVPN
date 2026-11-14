@@ -27,7 +27,14 @@ check($onDemand([$base, array_replace($base, ['profile' => 'primary', 'failure' 
 check($onDemand([$base], [['profile' => 'tunnel']]) === [], 'Multi-Path consumer keeps the exit warm.');
 check($onDemand([array_replace($base, ['failure' => 'wan'])]) === [], 'Explicit WAN fallback retains health checks.');
 check($onDemand([array_replace($base, ['interface' => 'opt9'])]) === [], 'Unmanaged interfaces do not determine On Demand.');
-check($onDemand([array_replace($base, ['interface' => 'tailscale0'])]) === ['tunnel' => true], 'Eligible tailnet traffic can wake an exit.');
+check($onDemand([array_replace($base, ['interface' => 'tailscale0'])]) === [],
+    'An existing On Demand flag must keep a native Tailscale peer’s VPN warm.');
+check($onDemand([$base + ['kind' => 'tailnet']]) === [], 'A Tailscale transit peer also keeps its VPN warm.');
+check($onDemand([$base, array_replace($base, ['mode' => 'full_multi'])]) === [],
+    'A combined rule keeps its base VPN warm even when another device uses it On Demand.');
+check(OnDemand::keepalive(['keepalive' => 0], false) === 25 &&
+    OnDemand::keepalive(['keepalive' => 18], false) === 18 && OnDemand::keepalive(['keepalive' => 18], true) === 0,
+    'Always-on WireGuard exits need a positive keepalive interval even when an imported profile specified zero.');
 check(OnDemand::selectExits(array_replace($settings, ['coverage' => 'network']), [$base], []) === [],
     'Whole-network modes retain health checks.');
 

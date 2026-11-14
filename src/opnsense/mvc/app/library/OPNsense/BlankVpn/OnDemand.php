@@ -32,7 +32,9 @@ final class OnDemand
                 !in_array($row['interface'], $settings['interfaces'], true)) {
                 continue;
             }
-            if (Policy::onDemand($row) && Policy::killSwitch($row) && ($row['failure'] ?? 'block') === 'block') {
+            if (Policy::mode($row) === 'full' && Policy::assignmentScope($row) === 'local' &&
+                $row['interface'] !== Policy::TAILSCALE_DEVICE && Policy::onDemand($row) &&
+                Policy::killSwitch($row) && ($row['failure'] ?? 'block') === 'block') {
                 $onDemand[$profile] = true;
             } else {
                 $always[$profile] = true;
@@ -66,7 +68,7 @@ final class OnDemand
             if (!preg_match('/\A(?:off|[0-9]{1,5})\z/', $current)) {
                 continue;
             }
-            $keepalive = isset($onDemand[$id]) ? 0 : (int)($profile['keepalive'] ?? 25);
+            $keepalive = self::keepalive($profile, isset($onDemand[$id]));
             if ($keepalive === (int)$current || $keepalive < 0 || $keepalive > 65535 || !WireGuard::check($profile)['ok']) {
                 continue;
             }
@@ -78,6 +80,11 @@ final class OnDemand
             }
         }
         return $complete;
+    }
+
+    public static function keepalive(array $profile, bool $idle): int
+    {
+        return $idle ? 0 : ((int)($profile['keepalive'] ?? 0) ?: 25);
     }
 
     private static function records(string $output, int $fields): array

@@ -73,3 +73,8 @@
 - Tailscale exit-node forwarding applies source NAT on the selected VPN or WAN interface and tracks the return traffic to the original peer.
 - Whole-Network, individual device and Multi-Path policies share that forwarding path. Unassigned peers in individual coverage can use the regular exit-node WAN path. Protected peers and destinations retain their Kill Switch guards.
 - The device table reserves a Ping column. Test fills it with the measured router HTTPS latency, and clicking the value shows whether OPNsense observed a completed connection from the device.
+
+## 0.8.26
+
+- Keep VPNs selected by Tailscale device rules and combined policies ready, including existing rules saved with On Demand. Active Multi-Path exits stay ready alongside the base.
+- Clamp TCP on Tailscale VPN paths to fit Tailscale’s MTU and retain DNS return states across interfaces. Route tests check for the installed source NAT and return rule.

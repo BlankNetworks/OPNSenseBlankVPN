@@ -786,13 +786,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
     assert(bv('assignment-interface-field').hidden && !bv('interface').required &&
         bv('interface').value === 'tailscale0' && !bv('switch-now') &&
-        bv('device-on-demand').checked && bv('device-bind-mac-field').hidden,
+        bv('device-on-demand').disabled && bv('device-on-demand-field').hidden && bv('device-bind-mac-field').hidden,
         'Native peer rules must select the Tailscale interface automatically without a reconnect toggle.');
     bv('profile').value = 'vpn1';
     bv('assign-form').requestSubmit(bv('save-device'));
     await wait();
     assert(requests.some(x => x.action === 'assign' && x.data.kind === 'tailnet' && x.data.interface === 'tailscale0' &&
-        x.data.ip === '100.101.102.104' && x.data.profile === 'vpn1' && x.data.onDemand === true &&
+        x.data.ip === '100.101.102.104' && x.data.profile === 'vpn1' && x.data.onDemand === false &&
         !Object.hasOwn(x.data, 'bindMac') && !Object.hasOwn(x.data, 'switchNow')),
         'Selecting a native exit peer must submit both the interface and the chosen VPN server.');
     reply.dashboard.tailnetDevices[0].online = false;
@@ -800,11 +800,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     const offlinePeer = bv('tailnet-device-list').querySelector('[aria-label="Edit Remote iPad"]').closest('tr');
     assert(offlinePeer.cells[0].querySelector('.bv-offline')?.textContent === 'Offline' &&
-        offlinePeer.textContent.includes('On Demand'),
-        'An offline Tailscale device must keep its On Demand rule.');
+        offlinePeer.textContent.includes('Always on'),
+        'An offline Tailscale device keeps its VPN ready.');
     offlinePeer.querySelector('[aria-label="Edit Remote iPad"]').click();
-    assert(bv('device-on-demand').checked && !bv('device-on-demand').disabled,
-        'On Demand must remain editable for an offline Tailscale peer.');
+    assert(bv('device-on-demand').disabled && bv('device-on-demand-field').hidden,
+        'Tailscale peer rules keep the VPN ready even while the peer is offline.');
     bv('close-assignment').click();
     reply.dashboard.settings.tailscaleSetup = {ready:false, disableSnat:true, reason:'Tailscale is disconnected.'};
     bv('refresh').click();
@@ -867,9 +867,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('assign-form').requestSubmit(bv('save-device'));
     await wait();
     assert(requests.some(x => x.action === 'assign' && x.data.kind === 'tailnet' && x.data.mode === 'full_multi' &&
-        x.data.profile === 'vpn1' && x.data.failure === 'block' && x.data.killSwitch === true && x.data.onDemand === true) &&
+        x.data.profile === 'vpn1' && x.data.failure === 'block' && x.data.killSwitch === true && x.data.onDemand === false) &&
         tailnetTable.querySelector('[aria-label="Test Remote iPad"]') && tailnetTable.textContent.includes('Base VPN + Multi-Path'),
-        'A combined Tailscale rule must keep On Demand and base server Ping.');
+        'A combined Tailscale rule must keep the base ready and retain its Ping test.');
     Object.assign(reply.dashboard.assignments[0], {mode:'full',profile:'vpn1'});
     bv('refresh').click();
     await wait();

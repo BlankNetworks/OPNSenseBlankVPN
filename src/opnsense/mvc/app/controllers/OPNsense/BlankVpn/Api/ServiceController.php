@@ -452,16 +452,23 @@ class ServiceController extends ApiControllerBase
         $paths = array_filter($markers, static fn (string $marker): bool =>
             ($loaded[$marker]['action'] ?? '') === 'pass' &&
             ($loaded[$marker]['gateway'] ?? '') === $route['interface']);
+        $forwardingIssue = '';
         if ($paths !== []) {
             try {
-                $seen = (new Diagnostics())->hasRoutedTraffic($source,
-                    Firewall::forwardedReplyMarkers($loaded, $paths, $route));
-                $observed = $seen ? 'seen' : 'unseen';
+                if (Policy::tailnetAddress(explode('/', $source, 2)[0]) &&
+                    !Firewall::tailnetForwardingInstalled($route, $loaded, $paths, Firewall::loadedNat(), $source)) {
+                    $observed = 'inactive';
+                    $forwardingIssue = 'The selected tunnel is missing its Tailscale source NAT or return rule.';
+                } else {
+                    $seen = (new Diagnostics())->hasRoutedTraffic($source,
+                        Firewall::forwardedReplyMarkers($loaded, $paths, $route));
+                    $observed = $seen ? 'seen' : 'unseen';
+                }
             } catch (\RuntimeException) {
                 $observed = 'unavailable';
             }
         }
-        return $probe + ['deviceTraffic' => $observed, 'usingBackup' => $usingBackup];
+        return $probe + ['deviceTraffic' => $observed, 'forwardingIssue' => $forwardingIssue, 'usingBackup' => $usingBackup];
     }
 
     private function probeExit(BlankVpn $model, array $route): array
