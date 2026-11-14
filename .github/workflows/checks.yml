@@ -169,6 +169,7 @@ jobs:
         with:
           release: "15.1"
           arch: x86_64
+          envs: PACKAGE_VERSION BASE_URL
           copyback: false
           prepare: |
             env ASSUME_ALWAYS_YES=yes pkg bootstrap
