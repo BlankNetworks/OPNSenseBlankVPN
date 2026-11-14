@@ -28,7 +28,17 @@ cleanup() {
     if [ "$status" -ne 0 ]; then
         jexec "$router" /sbin/pfctl -vvsr >&2 || :
         jexec "$router" /sbin/pfctl -ss >&2 || :
+        for jail_name in "$client" "$wan" "$router"; do
+            jexec "$jail_name" ifconfig >&2 || :
+            jexec "$jail_name" netstat -rn -f inet6 >&2 || :
+            jexec "$jail_name" ndp -an >&2 || :
+        done
     fi
+    for link in "$lan_link" "$wan_link" "$vpn_link"; do
+        if [ -n "$link" ]; then
+            ifconfig -j "$router" "$link" destroy 2>/dev/null || :
+        fi
+    done
     for jail_name in "$client" "$wan" "$vpn" "$router"; do
         jail -r "$jail_name" 2>/dev/null || :
     done
@@ -56,6 +66,7 @@ jail -c "name=$wan" persist vnet "vnet.interface=$wan_peer"
 jail -c "name=$vpn" persist vnet "vnet.interface=$vpn_peer"
 
 set_address() {
+    jexec "$1" sysctl net.inet6.ip6.dad_count=0
     jexec "$1" ifconfig "$2" inet "$3" up -txcsum -txcsum6
     jexec "$1" ifconfig "$2" inet6 "$4" no_dad
     jexec "$1" ifconfig lo0 up
@@ -102,18 +113,18 @@ fail() {
 }
 
 probe() {
-    jexec "$client" ping "-$1" -n -c 1 -t 2 -S "$2" "$3" >"$stage/ping" 2>&1
+    jexec "$client" ping "-$1" -n -c "$4" -t "$5" -S "$2" "$3" >"$stage/ping" 2>&1
 }
 
 reachable() {
-    if ! probe "$@"; then
+    if ! probe "$@" 3 5; then
         cat "$stage/ping" >&2
         fail "Expected IPv$1 reachability from $2 to $3."
     fi
 }
 
 blocked() {
-    if probe "$@"; then
+    if probe "$@" 1 2; then
         fail "Unexpected IPv$1 reachability from $2 to $3."
     else
         status=$?
@@ -170,7 +181,7 @@ echo 'The tagged WAN guard dropped protected IPv4 and IPv6 without blocking the 
 write_protected_rules() {
     {
         printf 'set timeout { icmp.first 90, icmp.error 90 }\n'
-        printf 'table <connected> const { 192.0.2.0/24, 2001:db8:10::/64 }\n'
+        printf 'table <connected> const { 192.0.2.0/24, 2001:db8:10::/64, fe80::/10, ff02::/16 }\n'
         write_egress_guard
         if [ "$1" = healthy ]; then
             printf 'pass in quick on %s route-to (%s 198.51.100.2) inet from %s to ! <connected> tag %s keep state label "vpn_route"\n' \
