@@ -37,3 +37,9 @@
 - Whole-Network coverage allows device renaming and a **Bypass VPN** exception for eligible LAN devices. Independent device routing rules are kept for **Only devices I choose**.
 - Multi-Path learns addresses through the selected service resolver and filters HTTPS and SVCB hints for routed domains. Ordinary traffic retains the base VPN and base DNS behavior.
 - **Test route** checks the saved service’s DNS answer and its live PF table and tunnel rule. Combined coverage also verifies the client DNS redirect when applying rules.
+
+## 0.8.20
+
+- Saved VPN and proxy servers have a dedicated **Ping** column. Testing, reading errors, or clearing results leaves the server rows and actions in place.
+- Multi-Path builds its server choices once and renders destination pickers when the tab is open.
+- Dashboard refresh reuses a single proxy catalog read and shares WireGuard route lookups within each request.

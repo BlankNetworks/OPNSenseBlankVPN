@@ -246,6 +246,25 @@ final class WireGuard
 
     public static function check(array $profile): array
     {
+        return self::checkProfile($profile, self::routeInterface(...));
+    }
+
+    public static function checkProfiles(array $profiles): array
+    {
+        $routeInterface = self::routeLookup();
+        return array_map(static fn (array $profile): array => self::checkProfile($profile, $routeInterface), $profiles);
+    }
+
+    private static function routeLookup(): callable
+    {
+        $interfaces = [];
+        return static function (string $destination) use (&$interfaces): string {
+            return $interfaces[$destination] ??= self::routeInterface($destination);
+        };
+    }
+
+    private static function checkProfile(array $profile, callable $routeInterface): array
+    {
         try {
             if (!empty($profile['disabled'])) {
                 return ['ok' => false, 'error' => 'This VPN tunnel is disabled.'];
@@ -254,7 +273,7 @@ final class WireGuard
             if ((string)(new General())->enabled !== '1') {
                 throw new RuntimeException('The OPNsense WireGuard service is disabled.');
             }
-            self::checkUnderlay((string)$profile['endpoint']);
+            self::checkUnderlay((string)$profile['endpoint'], $routeInterface);
             return ['ok' => true];
         } catch (RuntimeException $exception) {
             return ['ok' => false, 'error' => $exception->getMessage()];
@@ -712,13 +731,14 @@ final class WireGuard
         }
     }
 
-    private static function checkUnderlay(?string $endpoint = null): void
+    private static function checkUnderlay(?string $endpoint = null, ?callable $routeInterface = null): void
     {
-        $default = self::routeInterface('default');
+        $routeInterface ??= self::routeInterface(...);
+        $default = $routeInterface('default');
         if ($default === '' || self::isTunnel($default)) {
             throw new RuntimeException('An active non-VPN IPv4 default route is needed for WireGuard transport.');
         }
-        if ($endpoint !== null && self::routeInterface($endpoint) !== $default) {
+        if ($endpoint !== null && $routeInterface($endpoint) !== $default) {
             throw new RuntimeException('The WireGuard endpoint must be reachable over the active underlying WAN route.');
         }
     }

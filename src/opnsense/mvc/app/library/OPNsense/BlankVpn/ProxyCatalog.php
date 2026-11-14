@@ -71,6 +71,21 @@ final class ProxyCatalog
         return self::managedNordNodes(self::read(), $location);
     }
 
+    public static function dashboardNodes(array $nodeIds): array
+    {
+        $data = self::read();
+        $names = [];
+        foreach ($nodeIds as $id) {
+            if (isset($data['nodes'][$id]['name'])) {
+                $names[$id] = $data['nodes'][$id]['name'];
+            }
+        }
+        return [
+            'names' => $names,
+            'managedNord' => self::managedNordNodes($data, null),
+        ];
+    }
+
     private static function managedNordNodes(array $data, ?string $location): array
     {
         $nodes = array_filter($data['nodes'], static fn (array $node): bool =>

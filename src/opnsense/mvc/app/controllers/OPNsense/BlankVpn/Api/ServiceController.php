@@ -74,9 +74,10 @@ class ServiceController extends ApiControllerBase
             if ($settings['enabled'] && $loaded === null) {
                 $warnings[] = 'The active firewall rules are unavailable.';
             }
+            $ownership = WireGuard::checkProfiles($profiles);
             foreach ($profiles as $id => $profile) {
                 $status = WireGuard::status($profile, $runtime);
-                $owned = WireGuard::check($profile);
+                $owned = $ownership[$id];
                 if (!empty($profile['disabled'])) {
                     $status['status'] = 'Disabled';
                 } elseif (!$owned['ok']) {
@@ -103,16 +104,17 @@ class ServiceController extends ApiControllerBase
                 ];
             }
             $proxyStatus = ProxyRuntime::lastStatus();
-            $proxyNodes = [];
+            $proxyNames = [];
             $managedNord = [];
             try {
-                $proxyNodes = $proxyRoutes !== [] ? ProxyCatalog::read()['nodes'] : [];
-                $managedNord = ProxyCatalog::managedNord();
+                $proxyCatalog = ProxyCatalog::dashboardNodes(array_column($proxyRoutes, 'node'));
+                $proxyNames = $proxyCatalog['names'];
+                $managedNord = $proxyCatalog['managedNord'];
             } catch (\RuntimeException $error) {
                 $warnings[] = $error->getMessage();
             }
             foreach ($proxyRoutes as $id => $route) {
-                $route['name'] = $proxyNodes[$route['node']]['name'] ?? $route['name'];
+                $route['name'] = $proxyNames[$route['node']] ?? $route['name'];
                 $managed = $managedNord[$route['node']] ?? [];
                 unset($managedNord[$route['node']]);
                 $checked = $health[$id] ?? [];

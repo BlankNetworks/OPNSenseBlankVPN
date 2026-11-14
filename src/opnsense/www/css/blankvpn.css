@@ -618,3 +618,147 @@
     display: block;
     font-weight: 700;
 }
+
+.blankvpn .bv-server-table {
+    table-layout: fixed;
+    min-width: 43rem;
+}
+
+.blankvpn .bv-profiles th:nth-child(3) {
+    width: 6rem;
+}
+
+.blankvpn .bv-server-table .bv-ping-heading {
+    width: 8.5rem;
+}
+
+.blankvpn .bv-server-table .bv-server-actions {
+    width: 14rem;
+}
+
+.blankvpn .bv-server-table td {
+    overflow-wrap: anywhere;
+}
+
+.blankvpn .bv-ping-result {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 1.5rem;
+    align-items: center;
+    gap: .15rem;
+    width: 7.25rem;
+    height: 1.75rem;
+    margin-inline: auto;
+    line-height: 1.2;
+    text-align: start;
+    white-space: nowrap;
+    color: var(--bv-muted);
+    font-size: .9em;
+    font-variant-numeric: tabular-nums;
+}
+
+.blankvpn #bv-proxy-list .bv-ping-result {
+    margin-inline-start: 0;
+}
+
+.blankvpn .bv-ping-result[data-result="pass"] {
+    color: var(--bv-pass-ink);
+}
+
+.blankvpn .bv-ping-result[data-result="fail"] {
+    color: var(--bv-error-ink);
+}
+
+.blankvpn .bv-ping-result .bv-test-dismiss,
+.blankvpn .bv-ping-error {
+    margin: 0;
+    border: 0;
+    border-radius: .25rem;
+    color: inherit;
+    background: transparent;
+}
+
+.blankvpn .bv-ping-error {
+    grid-column: 1;
+    padding: .1rem .25rem;
+    justify-self: start;
+    font: inherit;
+    text-decoration: underline;
+    text-underline-offset: .12em;
+}
+
+.blankvpn .bv-ping-result .bv-test-dismiss {
+    grid-column: 2;
+}
+
+.blankvpn .bv-ping-announcement {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+}
+
+.blankvpn .bv-ping-dialog {
+    width: min(31rem, calc(100% - 2rem));
+    margin: auto;
+}
+
+.blankvpn .bv-ping-dialog::backdrop {
+    background: #10172580;
+}
+
+.blankvpn #bv-ping-dialog-detail {
+    margin-block: .75rem 1rem;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 767px) {
+    .blankvpn .bv-server-table,
+    .blankvpn .bv-server-table tbody,
+    .blankvpn .bv-server-table tr,
+    .blankvpn .bv-server-table td {
+        display: block;
+    }
+
+    .blankvpn .bv-server-table {
+        min-width: 0;
+        padding: 0;
+        text-align: start;
+    }
+
+    .blankvpn .bv-server-table thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+    }
+
+    .blankvpn .bv-server-table tr + tr {
+        border-top: 1px solid var(--bv-line);
+        margin-top: .65rem;
+        padding-top: .5rem;
+    }
+
+    .blankvpn .bv-server-table td {
+        padding: .23rem .1rem;
+        border: 0;
+    }
+
+    .blankvpn .bv-server-table td[data-label]::before {
+        content: attr(data-label) " ";
+        font-weight: 600;
+    }
+
+    .blankvpn .bv-server-table td.bv-ping-cell {
+        display: flex;
+        align-items: center;
+        min-height: 2.21rem;
+        gap: .4rem;
+    }
+
+    .blankvpn .bv-ping-result {
+        margin-inline: 0;
+    }
+}

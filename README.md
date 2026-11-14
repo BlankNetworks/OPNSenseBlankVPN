@@ -113,7 +113,7 @@ VPN and proxy servers appear together in **Network Settings**, grouped alphabeti
 
 ### Test servers
 
-In **Saved VPN servers**, a new server shows **Standby**. Select **Test** to check HTTPS from the router through that server. A passing test shows **Ready**, and a failed test shows **Error**. Use **×** to dismiss the error details. Routing is configured separately in **Network Settings**.
+In **Saved VPN servers**, a new server shows **Standby**. Select **Test** to check HTTPS from the router through that server. A passing test shows **Ready**, with latency in the server’s **Ping** column. A failed test shows **Error**. Select **Failed** in the Ping column for details or use **×** to dismiss the result. Routing is configured separately in **Network Settings**.
 
 Use **Ping server** next to a selected Mullvad relay to check ICMP from OPNsense. **Test** can run with device routing off. Native VPN tests use a verified firewall route with a fallback block. Proxy tests try HTTPS targets in different regions. For basic SOCKS5 servers, a failed test can also report upstream TCP, SOCKS5 authentication or TLS errors.
 
@@ -123,7 +123,7 @@ The GitHub release includes Mihomo, tun2socks, Xray, sing-box, and the Clash YAM
 
 1. Open **Proxy Login** over HTTPS. Add a single server with **Add a proxy manually**, paste its share link with an optional server name, or import a base64 list, Clash YAML, Xray JSON, or sing-box JSON.
 2. For a provider feed, add its direct HTTPS subscription URL. The router follows public HTTPS redirects after validating each destination and reports DNS, TLS, HTTP, timeout, or format errors. The list shows reported traffic allowance, usage, and expiry when the provider sends those fields. New subscriptions enable automatic refresh every six hours. Change the setting per saved subscription. An enabled exit retains its server if a later refresh removes it.
-3. Choose **Test** to check HTTPS through a proxy. Imported servers are enabled by default and appear in the server picker. Assign a server in **Network Settings** or **Multi-Path Settings** to start its tunnel once routing is enabled. **Disable** hides an unused server from the picker. Each subscription supports up to 2,048 entries and 4 MiB.
+3. Choose **Test** to check HTTPS through a proxy. The **Ping** column shows the result. Imported servers are enabled by default and appear in the server picker. Assign a server in **Network Settings** or **Multi-Path Settings** to start its tunnel once routing is enabled. **Disable** hides an unused server from the picker. Each subscription supports up to 2,048 entries and 4 MiB.
 
 Use **Edit** beside a saved VPN exit or proxy server. Proxy names also appear in routing choices and survive subscription refreshes when the same server configuration returns.
 

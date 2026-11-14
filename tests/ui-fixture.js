@@ -307,15 +307,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(bv('relay-test').textContent.includes('12.345 ms') &&
         requests.some(x => x.action === 'testRelay' && x.data.relay === 'ca-test-wg-001'), 'per-relay ping missing');
-    assert(bv('profile-list').querySelector('button').textContent === 'Test', 'VPN button must say Test');
+    const vpnRow = bv('profile-list').rows[0];
+    const vpnTest = vpnRow.querySelector('[data-test-key]');
     const vpnStatus = (id) => bv('profile-list').querySelector('[data-vpn-status="' + id + '"]')?.textContent;
-    assert(vpnStatus('vpn1') === 'Standby' &&
+    const vpnPing = vpnRow.querySelector('[data-test-result]');
+    assert(vpnTest.textContent === 'Test' && vpnStatus('vpn1') === 'Standby' &&
         bv('profile-list').closest('table').tHead.rows[0].cells[2].textContent === 'Status' &&
-        !bv('profile-list').textContent.includes('Tunnel counters'), 'untested VPN row must display a simple Standby status');
-    bv('profile-list').querySelector('button').click();
+        bv('profile-list').closest('table').tHead.rows[0].cells[3].textContent === 'Ping' &&
+        vpnPing.closest('td') !== vpnTest.closest('td') && vpnPing.firstElementChild.textContent === '—',
+        'The VPN Ping column must be separate from the Test action and available before testing.');
+    const geometry = (row) => [row, ...row.cells, row.querySelector('[data-test-key]')].map((element) => {
+        const {x, y, width, height} = element.getBoundingClientRect();
+        return [x, y, width, height];
+    });
+    const steady = (row, before) => geometry(row).every((rect, index) =>
+        rect.every((value, dimension) => Math.abs(value - before[index][dimension]) < .5));
+    const beforeVpn = geometry(vpnRow);
+    vpnTest.click();
+    assert(vpnTest.disabled && vpnPing.firstElementChild.textContent === 'Testing…' && steady(vpnRow, beforeVpn),
+        'Starting the VPN test must preserve the layout.');
     await wait();
-    assert(vpnStatus('vpn1') === 'Ready' &&
-        bv('profile-list').querySelector('[data-test-result]').textContent.includes('45.2 ms'), 'exit HTTPS test missing Ready status');
+    assert(vpnStatus('vpn1') === 'Ready' && vpnPing.firstElementChild.textContent === '45.2 ms' && steady(vpnRow, beforeVpn),
+        'The VPN ping result must preserve layout and set Ready status.');
     bv('profile-list').querySelector('[aria-label="Edit name for Canada"]').click();
     const vpnName = bv('profile-list').querySelector('.bv-name-editor');
     vpnName.querySelector('input').value = 'Canada home';
@@ -324,14 +337,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'renameProfile' && x.data.id === 'vpn1' && x.data.name === 'Canada home') &&
         bv('profile-list').textContent.includes('Canada home') &&
         bv('profile-list').querySelector('[data-test-result]').textContent.includes('45.2 ms'), 'VPN rename lost the row or its result');
-    exitTestError = 'HTTPS probe failed.';
-    bv('profile-list').querySelector('button').click();
+    exitTestError = 'The HTTPS test did not complete through the tunnel. '.repeat(14);
+    const renamedVpn = bv('profile-list').rows[0];
+    const renamedGeometry = geometry(renamedVpn);
+    renamedVpn.querySelector('[data-test-key]').click();
     await wait();
-    assert(vpnStatus('vpn1') === 'Error' &&
-        bv('profile-list').querySelector('[data-test-result] span').textContent === exitTestError, 'failed test did not set Error status');
-    bv('profile-list').querySelector('.bv-test-dismiss').click();
-    assert(bv('profile-list').querySelector('[data-test-result]').hidden && vpnStatus('vpn1') === 'Error',
-        'Dismissing the error details must preserve the server status.');
+    const vpnError = renamedVpn.querySelector('.bv-ping-error');
+    assert(vpnStatus('vpn1') === 'Error' && !vpnError.hidden && vpnError.title === exitTestError &&
+        steady(renamedVpn, renamedGeometry), 'A long error must stay in the Ping column without expanding the VPN row.');
+    vpnError.click();
+    assert(bv('ping-dialog').open && bv('ping-dialog-detail').textContent === exitTestError,
+        'The Ping result must retain the complete error details.');
+    bv('ping-dialog').close();
+    renamedVpn.querySelector('.bv-test-dismiss').click();
+    assert(vpnError.hidden && renamedVpn.querySelector('[data-test-result] span').textContent === '—' &&
+        vpnStatus('vpn1') === 'Error' && steady(renamedVpn, renamedGeometry),
+        'Dismissing the error details must preserve the server status and layout.');
     exitTestError = null;
     [...bv('profile-list').querySelectorAll('button')].find(button => button.textContent === 'Disable').click();
     await wait();
@@ -448,16 +469,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'check' && x.method === 'POST'), 'approved catalog check did not run');
     assert(bv('proxy-list').textContent.includes('Example proxy'), 'proxy catalog not displayed');
-    [...bv('proxy-list').querySelectorAll('button')].find((item) => item.textContent === 'Test').click();
+    const proxyRow = bv('proxy-list').rows[0];
+    const proxyTest = proxyRow.querySelector('[data-test-key]');
+    const proxyPing = proxyRow.querySelector('[data-test-result]');
+    const beforeProxy = geometry(proxyRow);
+    proxyTest.click();
+    assert(proxyPing.firstElementChild.textContent === 'Testing…' && steady(proxyRow, beforeProxy),
+        'Starting the proxy test must preserve the layout.');
     await wait();
+    const failedTest = proxyPing.querySelector('.bv-ping-error');
     assert(requests.some(x => x.action === 'testProxyNode' && x.data.id === 'proxy-1') &&
-        bv('proxy-list').querySelector('[data-test-result]').textContent.includes('The proxy connection timed out.'), 'saved proxy test did not report its failure');
+        !failedTest.hidden && failedTest.title.includes('The proxy connection timed out.') &&
+        failedTest.textContent === 'Failed' && steady(proxyRow, beforeProxy),
+        'The proxy failure should remain in the Ping column without moving buttons.');
 
-    assert([...bv('proxy-list').querySelectorAll('button:not(.bv-test-dismiss)')].map(button => button.textContent).join(',') === 'Test,Edit,Disable,Remove',
+    assert([...proxyTest.closest('td').querySelectorAll('button')].map(button => button.textContent).join(',') === 'Test,Edit,Disable,Remove',
         'proxy row actions must use simple labels');
-    const failedTest = bv('proxy-list').querySelector('[data-result="fail"]');
-    assert(getComputedStyle(failedTest).backgroundColor === 'rgb(255, 240, 241)' &&
-        getComputedStyle(failedTest, '::before').content.includes('Test failed'), 'Failed test row lost its warning treatment');
+    assert(getComputedStyle(failedTest).color === 'rgb(142, 39, 60)',
+        'Failed test result lost its warning color.');
     bv('proxy-list').querySelector('[aria-label="Edit name for Example proxy"]').click();
     const proxyName = bv('proxy-list').querySelector('.bv-name-editor');
     proxyName.querySelector('input').value = 'SOCKS5 office';
@@ -465,7 +494,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'renameProxyNode' && x.data.id === 'proxy-1' && x.data.name === 'SOCKS5 office') &&
         bv('proxy-list').textContent.includes('SOCKS5 office') &&
-        bv('proxy-list').querySelector('[data-test-result]').textContent.includes('timed out'), 'Proxy rename lost the row or its result');
+        bv('proxy-list').querySelector('.bv-ping-error').title.includes('timed out'), 'Proxy rename lost the row or its result');
     assert(bv('subscription-list').textContent.includes('Test feed'), 'proxy subscription not displayed');
     assert(bv('subscription-list').textContent.includes('2.0 KiB used / 1.0 MiB'), 'subscription quota not displayed');
     assert(bv('subscription-auto').checked, 'auto-refresh should default on for new subscriptions');
@@ -916,13 +945,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('network-kill').checked && reply.dashboard.settings.networkKillSwitch === true &&
         bv('current-routing').textContent.includes('Kill Switch on'),
         'Combined network coverage must allow turning the Kill Switch back on.');
-    document.querySelector('[data-bv-section="smart"]').click();
-    assert(bv('smart-status').textContent.includes('Bypass uses direct internet when available'),
-        'Multi-Path must describe the direct Bypass policy in combined mode.');
+    const renderedService = bv('service-list').firstElementChild;
     reply.dashboard.services.push({id:'youtube-demo', name:'YouTube', domains:['youtube.com','googlevideo.com'],
         profile:'vpn1', routing:{lan:{gateway:'wg1'}}});
     bv('refresh').click();
     await wait();
+    assert(bv('service-list').firstElementChild === renderedService &&
+        !bv('service-list').textContent.includes('YouTube'), 'Refresh must defer rendering the hidden Multi-Path panel.');
+    document.querySelector('[data-bv-section="smart"]').click();
+    assert(bv('smart-status').textContent.includes('Bypass uses direct internet when available'),
+        'Multi-Path must describe the direct Bypass policy in combined mode.');
     const youtubeRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('YouTube'));
     youtubeRow.querySelector('[aria-label="Test route for YouTube"]').click();
     await wait();

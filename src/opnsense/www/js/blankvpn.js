@@ -30,6 +30,7 @@
         const bypassDestination = 'bypass';
         const serviceOrder = new Intl.Collator(undefined, {sensitivity: 'base', numeric: true});
         const maxDomainBytes = 131072;
+        const testDisplays = new WeakMap();
         const state = {
             profiles: [],
             assignments: [],
@@ -481,6 +482,9 @@
             if (section === 'vpns') {
                 restoreSavedLogin();
             }
+            if (section === 'smart') {
+                renderServices();
+            }
             if (section === 'system') {
                 renderSystem();
                 if (state.canManageUpdates) {
@@ -711,7 +715,7 @@
                     } else if (assignment) {
                         actions.append(button('Edit', () => openAssignment(assignment, tailnet ? 'tailnet' : 'lan', discovered), 'Edit ' + name));
                         if (state.settings?.enabled && !paused && usesBaseServer(assignment.mode) && assignment.profile) {
-                            appendConnectionTest(actions, 'testDeviceRoute', assignment.id, name, '', false, 'Ping');
+                            appendConnectionTest(actions, 'testDeviceRoute', assignment.id, name, {title: 'Ping'});
                         }
                         if (tailnet) {
                             const action = paused ? 'Enable' : 'Disable';
@@ -771,7 +775,7 @@
             const body = byId('profile-list');
             const vpns = state.profiles.filter((profile) => profile.kind !== 'proxy' || profile.provider === 'nord').sort(compareServers);
             if (!vpns.length) {
-                empty(body, 'No VPN servers have been added.', 4);
+                empty(body, 'No VPN servers have been added.', 5);
             } else {
                 body.replaceChildren();
                 for (const profile of vpns) {
@@ -782,12 +786,15 @@
                     const services = state.services.filter((service) => service.profile === profile.id).length;
                     cell(row, profile.name || profile.relay, '', used + ' device assignment' + (used === 1 ? '' : 's')
                         + ' · ' + services + ' service' + (services === 1 ? '' : 's'));
-                    cell(row, providerName(profile), '', profile.relay || profile.providerServer || profile.gateway || profile.protocol || 'Imported WireGuard');
-                    const status = cell(row, vpnStatus(profile));
+                    cell(row, providerName(profile), 'VPN service', profile.relay || profile.providerServer || profile.gateway || profile.protocol || 'Imported WireGuard');
+                    const status = cell(row, vpnStatus(profile), 'Status');
                     status.className = 'bv-vpn-status';
                     status.dataset.vpnStatus = profile.id;
                     status.setAttribute('aria-live', 'polite');
+                    const ping = cell(row, '—', 'Ping');
+                    ping.className = 'bv-ping-cell';
                     const actions = row.insertCell();
+                    actions.setAttribute('role', 'cell');
                     const remove = button('Remove', (event) => removeProfile(profile, event.currentTarget),
                         'Remove ' + profileName(profile.id));
                     remove.disabled = network || used > 0 || services > 0;
@@ -797,7 +804,8 @@
                     if (state.canManage) {
                         const dormant = profile.node && profile.id.startsWith('proxy-');
                         appendConnectionTest(actions, dormant ? 'testProxyNode' : 'testExit',
-                            dormant ? profile.node : profile.id, profileName(profile.id), profile.node, profile.disabled === true);
+                            dormant ? profile.node : profile.id, profileName(profile.id),
+                            {nodeId: profile.node, disabled: profile.disabled === true, ping});
                         const edit = nameEditor(row, profile.name || profile.relay, profile.node || profile.id,
                             profile.node ? 'renameProxyNode' : 'renameProfile', renderProfiles, (name) => { profile.name = name; });
                         if (edit) {
@@ -1052,21 +1060,24 @@
                 : 'dns-sd -P "Blank VPN & Proxy" _https._tcp local ' + port + ' blankvpn.local ' + address;
         }
 
-        function domainDestinations(current) {
-            const choices = [
+        function domainDestinations() {
+            return [
                 {value: bypassDestination, label: 'Bypass (direct internet)'},
                 ...routingServers().map((profile) => {
                     const choice = exitChoice(profile);
                     return hasVpnDns(profile) ? choice : {...choice, label: choice.label + ' (IP entries only)'};
                 })
             ];
-            if (current && !choices.some((choice) => choice.value === current)) {
-                choices.push({value: current, label: 'Unavailable server'});
-            }
-            return choices;
         }
 
         function renderServices() {
+            if (state.section !== 'smart') {
+                return;
+            }
+            const choices = domainDestinations();
+            const knownDestinations = new Set(choices.map((choice) => choice.value));
+            const choicesFor = (current) => current && !knownDestinations.has(current)
+                ? [...choices, {value: current, label: 'Unavailable server'}] : choices;
             const interfaces = state.activeSmartInterfaces;
             const settings = state.settings;
             const networkMode = settings?.coverage === 'network' ? settings.networkMode : '';
@@ -1101,7 +1112,7 @@
                         select.className = 'form-control';
                         select.setAttribute('aria-label', 'Destination for ' + service.name);
                         const current = state.serviceDestinations.get(service.id) ?? saved;
-                        options(select, domainDestinations(current), 'Leave unassigned', current);
+                        options(select, choicesFor(current), 'Leave unassigned', current);
                         const save = document.createElement('button');
                         save.type = 'submit';
                         save.className = 'btn btn-default btn-sm';
@@ -1179,7 +1190,7 @@
             }
 
             const select = byId('service-profile');
-            options(select, domainDestinations(select.value), 'Leave unassigned');
+            options(select, choicesFor(select.value), 'Leave unassigned');
             options(byId('service-preset'), Object.keys(state.presets).map((name) => ({value: name, label: name})),
                 'Custom list');
         }
@@ -1346,16 +1357,20 @@
             const servers = byId('proxy-list');
             servers.replaceChildren();
             if (!results.length) {
-                empty(servers, 'Import a server or subscription to get started.', 4);
+                empty(servers, 'Import a server or subscription to get started.', 5);
             }
             for (const node of results) {
                 const row = servers.insertRow();
                 cell(row, node.name, '', endpoint(node.host, node.port));
-                cell(row, proxyProtocol(node).toUpperCase(), '', node.legacy ? 'Legacy or unencrypted transport' : '');
+                cell(row, proxyProtocol(node).toUpperCase(), 'Protocol', node.legacy ? 'Legacy or unencrypted transport' : '');
                 const exit = state.profiles.find((profile) => profile.node === node.id);
-                cell(row, node.core, '', node.disabled ? 'Disabled' : exit?.status || 'Ready to assign');
+                cell(row, node.core, 'Core', node.disabled ? 'Disabled' : exit?.status || 'Ready to assign');
+                const ping = cell(row, '—', 'Ping');
+                ping.className = 'bv-ping-cell';
                 const actions = row.insertCell();
-                appendConnectionTest(actions, exit ? 'testExit' : 'testProxyNode', exit?.id || node.id, node.name, node.id);
+                actions.setAttribute('role', 'cell');
+                appendConnectionTest(actions, exit ? 'testExit' : 'testProxyNode', exit?.id || node.id, node.name,
+                    {nodeId: node.id, ping});
                 const edit = nameEditor(row, node.name, node.id, 'renameProxyNode',
                     renderProxyCatalog, (name) => { node.name = name; });
                 if (edit) {
@@ -1824,47 +1839,72 @@
             await testConnection('testRelay', relay, key, false);
         }
 
-        function appendConnectionTest(actions, action, id, name, nodeId = '', disabled = false, title = 'Test') {
+        function appendConnectionTest(actions, action, id, name, {nodeId, disabled = false, title = 'Test', ping} = {}) {
             const key = nodeId ? 'proxy:' + nodeId : (action === 'testDeviceRoute' ? 'device:' : 'exit:') + id;
-            const status = document.createElement('small');
-            status.className = 'bv-test-result';
-            const detail = document.createElement('span');
-            detail.setAttribute('role', 'status');
-            const dismiss = document.createElement('button');
-            dismiss.type = 'button';
-            dismiss.className = 'bv-test-dismiss';
-            dismiss.textContent = '×';
-            dismiss.setAttribute('aria-label', 'Dismiss test error for ' + name);
-            dismiss.addEventListener('click', () => {
-                const result = state.tests.get(key);
-                if (result?.kind === 'fail') {
-                    result.dismissed = true;
-                    updateConnectionTest(control, status);
-                    control.focus();
-                }
-            });
-            status.append(detail, dismiss);
             const control = button(title, () => void testConnection(action, id, key, Boolean(nodeId)), title + ' ' + name);
             control.dataset.testKey = key;
             control.dataset.proxyTest = String(Boolean(nodeId));
             control.dataset.disabled = String(disabled);
+
+            const status = document.createElement(ping ? 'div' : 'small');
+            status.className = ping ? 'bv-ping-result' : 'bv-test-result';
             status.dataset.testResult = key;
-            actions.append(control, status);
-            updateConnectionTest(control, status);
+            const detail = document.createElement('span');
+            detail.setAttribute('role', 'status');
+            const dismiss = button('×', () => {
+                const result = state.tests.get(key);
+                if (result?.kind === 'fail') {
+                    result.dismissed = true;
+                    refreshConnectionTests(key);
+                    control.focus();
+                }
+            }, 'Dismiss test error for ' + name);
+            dismiss.className = 'bv-test-dismiss';
+            let error;
+            if (ping) {
+                error = button('Failed', () => {
+                    const dialog = byId('ping-dialog');
+                    byId('ping-dialog-title').textContent = name + ' · Test failed';
+                    byId('ping-dialog-detail').textContent = state.tests.get(key)?.text || '';
+                    dialog.showModal();
+                }, 'Show test error for ' + name);
+                error.className = 'bv-ping-error';
+                status.append(detail, error, dismiss);
+                ping.replaceChildren(status);
+            } else {
+                status.append(detail, dismiss);
+                actions.append(status);
+            }
+            actions.prepend(control);
+            testDisplays.set(control, {status, detail, dismiss, error});
+            updateConnectionTest(control);
         }
 
-        function updateConnectionTest(control, status) {
+        function updateConnectionTest(control) {
+            const {status, detail, dismiss, error} = testDisplays.get(control);
             const result = state.tests.get(control.dataset.testKey);
-            control.disabled = control.dataset.disabled === 'true' || result?.kind === 'pending' || (control.dataset.proxyTest === 'true' && state.proxyTestRunning);
-            status.hidden = !result || result.dismissed === true;
-            status.firstElementChild.textContent = result?.text || '';
-            status.lastElementChild.hidden = result?.kind !== 'fail';
-            status.dataset.result = result?.kind || '';
+            control.disabled = control.dataset.disabled === 'true' || result?.kind === 'pending' ||
+                (control.dataset.proxyTest === 'true' && state.proxyTestRunning);
+            const failed = result?.kind === 'fail' && result.dismissed !== true;
+            if (error) {
+                const label = failed ? 'Failed' : result?.kind === 'pass' ? result.latency
+                    : result?.kind === 'pending' ? 'Testing…' : '—';
+                detail.textContent = label;
+                detail.classList.toggle('bv-ping-announcement', failed);
+                error.hidden = !failed;
+                error.title = failed ? result.text : '';
+            } else {
+                status.hidden = !result || result.dismissed === true;
+                detail.textContent = result?.text || '';
+            }
+            dismiss.hidden = !failed;
+            status.dataset.result = result?.dismissed ? '' : result?.kind || '';
         }
 
-        function refreshConnectionTests() {
-            for (const control of root.querySelectorAll('[data-test-key]')) {
-                updateConnectionTest(control, control.nextElementSibling);
+        function refreshConnectionTests(key, proxy = false) {
+            const selector = proxy ? '[data-proxy-test="true"]' : '[data-test-key="' + CSS.escape(key) + '"]';
+            for (const control of root.querySelectorAll(selector)) {
+                updateConnectionTest(control);
             }
         }
 
@@ -1877,9 +1917,10 @@
             }
             const relay = action === 'testRelay';
             state.tests.set(key, {kind: 'pending', text: relay ? 'Pinging from OPNsense…' : 'Testing HTTPS…'});
-            refreshConnectionTests();
             if (relay) {
                 renderRelayChoice();
+            } else {
+                refreshConnectionTests(key, proxy);
             }
             try {
                 const result = await api(action, relay ? {relay: id} : {id});
@@ -1902,7 +1943,7 @@
                     ? {kind: 'pass', text: 'ICMP reply · ' + result.milliseconds + ' ms'}
                     : {kind: 'fail', text: 'No ICMP reply. The WireGuard service may still be available.'})
                     : result.reachable === true
-                    ? {kind: 'pass', text: 'HTTPS passed · ' + result.milliseconds + ' ms'}
+                    ? {kind: 'pass', text: 'HTTPS passed · ' + result.milliseconds + ' ms', latency: result.milliseconds + ' ms'}
                     : {kind: 'fail', text: result.detail || 'The HTTPS test did not complete.'});
             } catch (error) {
                 state.tests.set(key, {kind: 'fail', text: errorMessage(error, 'The connection test could not be completed.')});
@@ -1910,10 +1951,12 @@
                 if (proxy) {
                     state.proxyTestRunning = false;
                 }
-                refreshConnectionTests();
                 if (relay) {
                     renderRelayChoice();
-                } else if (action === 'testExit' || action === 'testProxyNode') {
+                } else {
+                    refreshConnectionTests(key, proxy);
+                }
+                if (action === 'testExit' || action === 'testProxyNode') {
                     const profile = state.profiles.find((item) =>
                         item.id === id || (item.node && 'proxy:' + item.node === key));
                     const status = [...byId('profile-list').querySelectorAll('[data-vpn-status]')]

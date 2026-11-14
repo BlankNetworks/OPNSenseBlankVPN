@@ -6,6 +6,14 @@
         <h1>Blank VPN &amp; Proxy</h1>
     </header>
 
+    <dialog id="bv-ping-dialog" class="bv-panel bv-ping-dialog" aria-labelledby="bv-ping-dialog-title">
+        <h2 id="bv-ping-dialog-title">Test details</h2>
+        <p id="bv-ping-dialog-detail"></p>
+        <form method="dialog">
+            <button type="submit" class="btn btn-default">Close</button>
+        </form>
+    </dialog>
+
     <nav class="bv-navigation" aria-label="Blank VPN &amp; Proxy pages">
         <button type="button" data-bv-section="vpns" aria-controls="bv-tunnels" aria-pressed="true">VPN Login</button>
         <button type="button" data-bv-section="proxies" aria-controls="bv-proxies" aria-pressed="false" data-manage-only>Proxy Login</button>
@@ -186,16 +194,17 @@
             <h2 id="bv-saved-vpn-title">Saved VPN servers</h2>
             <p class="text-muted">Use Network Settings to assign a saved server to devices or a whole network.</p>
             <div class="bv-scroll">
-                <table class="table bv-table bv-profiles">
-                    <thead>
-                        <tr>
-                            <th scope="col">Profile</th>
-                            <th scope="col">VPN service and server</th>
-                            <th scope="col">Status</th>
-                            <th scope="col"><span class="sr-only">Actions</span></th>
+                <table class="table bv-table bv-profiles bv-server-table" role="table">
+                    <thead role="rowgroup">
+                        <tr role="row">
+                            <th scope="col" role="columnheader">Profile</th>
+                            <th scope="col" role="columnheader">VPN service and server</th>
+                            <th scope="col" role="columnheader">Status</th>
+                            <th scope="col" role="columnheader" class="bv-ping-heading">Ping</th>
+                            <th scope="col" role="columnheader" class="bv-server-actions"><span class="sr-only">Actions</span></th>
                         </tr>
                     </thead>
-                    <tbody id="bv-profile-list"></tbody>
+                    <tbody id="bv-profile-list" role="rowgroup"></tbody>
                 </table>
             </div>
         </section>
@@ -288,9 +297,17 @@
         </div>
         <p id="bv-proxy-count" class="text-muted" role="status"></p>
         <div class="bv-scroll">
-            <table class="table bv-table">
-                <thead><tr><th scope="col">Server</th><th scope="col">Protocol</th><th scope="col">Core</th><th scope="col">Actions</th></tr></thead>
-                <tbody id="bv-proxy-list"></tbody>
+            <table class="table bv-table bv-server-table" role="table">
+                <thead role="rowgroup">
+                    <tr role="row">
+                        <th scope="col" role="columnheader">Server</th>
+                        <th scope="col" role="columnheader">Protocol</th>
+                        <th scope="col" role="columnheader">Core</th>
+                        <th scope="col" role="columnheader" class="bv-ping-heading">Ping</th>
+                        <th scope="col" role="columnheader" class="bv-server-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="bv-proxy-list" role="rowgroup"></tbody>
             </table>
         </div>
         <div class="bv-actions" id="bv-proxy-pages" hidden>
