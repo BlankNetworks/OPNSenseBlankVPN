@@ -400,6 +400,25 @@
             </details>
         </section>
 
+        <section id="bv-network-device" class="bv-panel" aria-labelledby="bv-network-device-title" hidden>
+            <div class="bv-heading">
+                <h2 id="bv-network-device-title">Edit device</h2>
+                <button id="bv-close-network-device" type="button" class="btn btn-default">Close</button>
+            </div>
+            <form id="bv-network-device-form">
+                <div class="bv-fields">
+                    <label>Device name <input id="bv-network-device-name" type="text" class="form-control" maxlength="80" required></label>
+                </div>
+                <label id="bv-network-device-bypass-field" class="bv-check" hidden>
+                    <input id="bv-network-device-bypass" type="checkbox"> Bypass VPN for this device
+                </label>
+                <p id="bv-network-device-note" class="text-muted"></p>
+                <div class="bv-actions">
+                    <button id="bv-save-network-device" type="submit" class="btn btn-primary">Save device</button>
+                </div>
+            </form>
+        </section>
+
         <section id="bv-assignment" class="bv-panel" aria-labelledby="bv-assignment-title" hidden>
             <div class="bv-heading">
                 <h2 id="bv-assignment-title" tabindex="-1">Device assignment</h2>

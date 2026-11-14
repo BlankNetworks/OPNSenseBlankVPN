@@ -46,7 +46,7 @@ $policy = [
         'id' => $assignment, 'ip' => '192.168.2.100', 'interface' => 'lan', 'mac' => '02:00:00:00:00:11',
         'ipv6' => '', 'paused' => '0', 'kind' => 'lan', 'mode' => 'full', 'label' => 'Office iPad',
         'profile' => $exit, 'backup' => '', 'killSwitch' => '', 'failure' => 'block',
-        'onDemand' => '0', 'bindMac' => '1',
+        'onDemand' => '0', 'bindMac' => '1', 'networkBypass' => '1', 'networkBypassIpv6' => '',
     ]],
     'services' => [['id' => $service, 'name' => 'Country suffix', 'domains' => ['.cn'], 'profile' => $exit]],
     'routes' => [$exit => str_repeat('d', 64)],
@@ -55,7 +55,8 @@ $policy = [
 $backup = RoutingBackup::envelope($policy, $key);
 $json = json_encode($backup, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT);
 check(RoutingBackup::decode($json, $key) === $policy, 'Routing settings must round-trip across JSON.');
-check($backup['assignments'][0]['onDemand'] === '0' && $backup['assignments'][0]['bindMac'] === '1',
+check($backup['assignments'][0]['onDemand'] === '0' && $backup['assignments'][0]['bindMac'] === '1' &&
+    $backup['assignments'][0]['networkBypass'] === '1',
     'New policy controls must retain their original values.');
 check(!str_contains($json, $key) && !isset($backup['ownership']), 'The backup must not expose local authentication material.');
 expectFail(fn () => RoutingBackup::decode($json, str_repeat('e', 64)), 'original Blank VPN & Proxy installation');
@@ -69,6 +70,9 @@ expectFail(fn () => RoutingBackup::envelope($corrupt, $key), 'unsupported fields
 $corrupt = $policy;
 $corrupt['assignments'][0]['privateKey'] = 'unapproved';
 expectFail(fn () => RoutingBackup::envelope($corrupt, $key), 'unsupported fields');
+$corrupt = $policy;
+$corrupt['assignments'][0]['networkBypassIpv6'] = '2001:db8::40';
+expectFail(fn () => RoutingBackup::envelope($corrupt, $key), 'invalid device rule');
 $corrupt = $policy;
 $corrupt['assignments'][] = ['id' => '9cc929a4-8905-414f-94c3-68f5d49cdef1'] + $policy['assignments'][0];
 expectFail(fn () => RoutingBackup::envelope($corrupt, $key), 'duplicate devices');
@@ -87,6 +91,12 @@ check(RoutingBackup::decode(json_encode(RoutingBackup::envelope($mixed, $key)), 
     'Mixed routing lists should retain exact address prefixes and DNS suffixes.');
 
 $legacy = $policy;
+unset($legacy['assignments'][0]['networkBypass'], $legacy['assignments'][0]['networkBypassIpv6']);
+$legacyBackup = array_intersect_key($backup, array_flip(['format', 'version', 'router', 'integrity'])) + $legacy;
+$legacyBackup['integrity'] = hash_hmac('sha256', json_encode([$legacy, $legacyBackup['version']], JSON_THROW_ON_ERROR), $key);
+$migrated = RoutingBackup::decode(json_encode($legacyBackup, JSON_THROW_ON_ERROR), $key);
+check($migrated['assignments'][0]['networkBypass'] === '0' && $migrated['assignments'][0]['networkBypassIpv6'] === '',
+    'Existing signed routing backups load without a Bypass exception.');
 unset($legacy['assignments'][0]['onDemand'], $legacy['assignments'][0]['bindMac']);
 $result = RoutingBackup::envelope($legacy, $key)['assignments'][0];
 check($result['onDemand'] === '1' && $result['bindMac'] === '0', 'Legacy policies must receive the model defaults.');

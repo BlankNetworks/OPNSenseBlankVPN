@@ -9,6 +9,8 @@ final class Resolver
     public const LOCAL_PORT = 46650;
     public const FALLBACK_PORT = 46657;
     public const BYPASS_PORT = 46658;
+    public const DEVICE_BYPASS_PORT = 46659;
+    public const SERVICE_PORT = 46668;
     private const COMBINED_PORT_OFFSET = 200;
 
     private static function vpnPorts(): array
@@ -31,7 +33,10 @@ final class Resolver
     public static function allowedPort(int $port): bool
     {
         $profilePorts = self::profilePorts();
-        return in_array($port, [self::LOCAL_PORT, self::FALLBACK_PORT, self::BYPASS_PORT, SmartRouting::PORT], true) ||
+        return in_array($port, [
+            self::LOCAL_PORT, self::FALLBACK_PORT, self::BYPASS_PORT, self::DEVICE_BYPASS_PORT,
+            self::SERVICE_PORT, SmartRouting::PORT
+        ], true) ||
             in_array($port, $profilePorts, true) ||
             in_array($port - self::COMBINED_PORT_OFFSET, $profilePorts, true);
     }
@@ -66,13 +71,28 @@ final class Resolver
             $bypass = SmartRouting::bypassServices($settings, $services);
             $fallback = $settings['coverage'] === 'network' && Policy::usesBase($settings['networkMode']) &&
                 !$settings['networkKillSwitch'] && $settings['interfaces'] !== [];
-            $wan = ($fallback || array_filter($bypass, static fn (array $list) =>
+            $deviceBypass = $settings['coverage'] === 'network' &&
+                Policy::networkBypassAssignments($settings, Policy::assignments($model, true)) !== [];
+            $wan = ($fallback || $deviceBypass || array_filter($bypass, static fn (array $list) =>
                 SmartRouting::hasDomains($list['domains'])) !== []) ? WanEgress::gateways() : [];
             $wanUpstreams = isset($wan['inet'])
                 ? WanEgress::dnsUpstreams($wan, Firewall::parseLoadedRules(self::command(['/sbin/pfctl', '-sr'], false)))
                 : [];
             $bypassDirectives = SmartRouting::dnsDirectives($bypass, $profiles, $wanUpstreams);
-            $directives = SmartRouting::dnsDirectives($services, $profiles, $wanUpstreams);
+            $directives = SmartRouting::dnsDirectives($services, $profiles, $wanUpstreams, self::SERVICE_PORT);
+            $forward = SmartRouting::dnsDirectives($services, $profiles, forwardOnly: true);
+            if ($forward !== []) {
+                // HTTPS and SVCB address hints do not enter PF's learned-address table. Keep A/AAAA
+                // as the address source for routed suffixes while retaining those records on the base path.
+                $wanted[self::SERVICE_PORT] = self::configuration(self::SERVICE_PORT, $hostname, $host,
+                    ['filter-rr=64,65', ...$forward], true, true);
+                $ipsetPorts[self::SERVICE_PORT] = true;
+            }
+            if ($deviceBypass) {
+                $directUpstreams = array_map(static fn (string $server): string => 'server=' . $server, $wanUpstreams);
+                $wanted[self::DEVICE_BYPASS_PORT] = self::configuration(self::DEVICE_BYPASS_PORT, $hostname, $host,
+                    $directUpstreams, true, true);
+            }
             if ($bypassDirectives !== [] && Operations::watchMultiPathOutages($settings, $assignments)) {
                 $wanted[self::BYPASS_PORT] = self::configuration(self::BYPASS_PORT, $hostname, $host,
                     $bypassDirectives, true, true);
@@ -91,7 +111,7 @@ final class Resolver
             if ($directives !== [] && self::usesSharedDns($settings, $assignments)) {
                 $wanted[SmartRouting::PORT] = self::configuration(SmartRouting::PORT, $hostname, $host,
                     ['server=127.0.0.1#53', ...$directives], true);
-                $ipsetPorts[SmartRouting::PORT] = true;
+                $ipsetPorts[SmartRouting::PORT] = $bypassDirectives !== [];
             }
             foreach (array_keys(Policy::combinedProfiles($settings, $assignments)) as $id) {
                 $profile = $profiles[$id] ?? [];
@@ -99,14 +119,14 @@ final class Resolver
                 if ($port !== 0) {
                     $wanted[$port] = self::configuration($port, $hostname, $host,
                         [...self::profileUpstreams($profile), ...$directives], true, true);
-                    $ipsetPorts[$port] = $directives !== [];
+                    $ipsetPorts[$port] = $bypassDirectives !== [];
                 }
             }
             if ($fallback) {
                 $upstreams = array_map(static fn (string $server): string => 'server=' . $server, $wanUpstreams);
                 $wanted[self::FALLBACK_PORT] = self::configuration(self::FALLBACK_PORT, $hostname, $host,
                     [...$upstreams, ...$directives], true, true);
-                $ipsetPorts[self::FALLBACK_PORT] = $directives !== [];
+                $ipsetPorts[self::FALLBACK_PORT] = $bypassDirectives !== [];
             }
         }
 
@@ -209,6 +229,29 @@ final class Resolver
             }
         }
         return array_keys($ports);
+    }
+
+    public static function testAddresses(int $port, string $name): array
+    {
+        if (!self::allowedPort($port) || SmartRouting::domains($name) !== [$name]) {
+            throw new \InvalidArgumentException('Choose a valid Multi-Path DNS test.');
+        }
+        $drill = is_executable('/usr/bin/drill') ? '/usr/bin/drill' : '/usr/local/bin/drill';
+        if (!is_executable($drill)) {
+            throw new \RuntimeException('The router does not have the DNS diagnostic command.');
+        }
+        $reply = self::command(['/bin/timeout', '5', $drill, '-p', (string)$port, $name, '@127.0.0.1', 'A'], false);
+        return self::answerAddresses($reply);
+    }
+
+    public static function answerAddresses(string $reply): array
+    {
+        if (!preg_match('/^;; ANSWER SECTION:\R(.*?)(?:^;;|\z)/ms', $reply, $section)) {
+            return [];
+        }
+        preg_match_all('/^[^\s]+\s+\d+\s+IN\s+A\s+([0-9.]+)\s*$/m', $section[1], $matches);
+        return array_values(array_unique(array_filter($matches[1], static fn (string $address): bool =>
+            filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false)));
     }
 
     public static function dashboardAddresses(): array

@@ -204,6 +204,20 @@ namespace {
         $diagnostics->reservationProvider('lan', '192.168.10.18', '02:00:00:00:00:99') === '',
         'Accept an unambiguous native DHCP lease and reject an incorrect MAC.');
 
+    $neighbors = new Diagnostics(new Backend(['interface list ndp' => [
+        ['intf' => 'igc0', 'ip' => '2001:db8::6', 'mac' => '02:00:00:00:00:06'],
+        ['intf' => 'igc0', 'ip' => '2001:db8::9', 'mac' => '02:00:00:00:00:09'],
+        ['intf' => 'igc0', 'ip' => '2001:db8::9', 'mac' => '02:00:00:00:00:06'],
+        ['intf' => 'igc0', 'ip' => '2001:db8::7', 'mac' => '02:00:00:00:00:06', 'expired' => true],
+    ]]), $config);
+    $identity = ['interface' => 'lan', 'mac' => '02:00:00:00:00:06'];
+    check($neighbors->confirmedNeighborIpv6Addresses([
+        'confirmed' => $identity + ['ipv6' => '2001:db8:0:0::6'],
+        'wrongInterface' => ['interface' => 'opt1'] + $identity + ['ipv6' => '2001:db8::6'],
+        'ambiguous' => $identity + ['ipv6' => '2001:db8::9'],
+        'expired' => $identity + ['ipv6' => '2001:db8::7'],
+    ]) === ['confirmed' => '2001:db8::6'], 'Confirm only the unique current IPv6 owner on the requested LAN.');
+
     $offlineBackend = new Backend(['interface list ifconfig' => null]);
     $offline = (new Diagnostics($offlineBackend, $config))->devices();
     check(count($offlineBackend->calls) === 1 && $offline['devices'] === [] &&

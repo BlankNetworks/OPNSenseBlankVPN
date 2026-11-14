@@ -20,8 +20,9 @@ final class RoutingBackup
     ];
     private const ASSIGNMENT = [
         'ip', 'interface', 'mac', 'ipv6', 'paused', 'kind', 'mode', 'label', 'profile', 'backup', 'killSwitch',
-        'failure', 'onDemand', 'bindMac',
+        'failure', 'onDemand', 'bindMac', 'networkBypass', 'networkBypassIpv6',
     ];
+    private const BYPASS_DEFAULTS = ['networkBypass' => '0', 'networkBypassIpv6' => ''];
     private const CATALOG = ['worldwide', 'countries', 'cities'];
 
     public static function export(BlankVpn $model): array
@@ -85,7 +86,8 @@ final class RoutingBackup
     {
         unset($row['id']);
         foreach ($row as $field => $value) {
-            if (in_array($field, ['bindMac', 'onDemand'], true) && $node->getChild($field) === null) {
+            if (in_array($field, ['bindMac', 'onDemand', 'networkBypass', 'networkBypassIpv6'], true) &&
+                $node->getChild($field) === null) {
                 continue;
             }
             $node->$field = $value;
@@ -316,7 +318,15 @@ final class RoutingBackup
         unset($document['format'], $document['version'], $document['router'], $document['integrity']);
         $policy = self::validatePolicy($document);
         if (!is_string($integrity) || !hash_equals(self::integrity($key, $policy), $integrity)) {
-            throw new DomainException('The backup file has changed since it was exported. Select the original file.');
+            // Older signed exports predate the two optional per-device bypass fields.
+            $legacy = $policy;
+            foreach ($legacy['assignments'] as $index => &$row) {
+                $row = array_diff_key($row, array_diff_key(self::BYPASS_DEFAULTS, $document['assignments'][$index]));
+            }
+            unset($row);
+            if (!is_string($integrity) || $legacy === $policy || !hash_equals(self::integrity($key, $legacy), $integrity)) {
+                throw new DomainException('The backup file has changed since it was exported. Select the original file.');
+            }
         }
         return $policy;
     }
@@ -372,7 +382,7 @@ final class RoutingBackup
         $used = [];
         foreach ($assignments as &$row) {
             self::keys($row, ['id', ...self::ASSIGNMENT]);
-            $row += ['onDemand' => '1', 'bindMac' => '0'];
+            $row += ['onDemand' => '1', 'bindMac' => '0'] + self::BYPASS_DEFAULTS;
             foreach (self::ASSIGNMENT as $name) {
                 self::text($row[$name] ?? null, 400);
             }
@@ -380,7 +390,7 @@ final class RoutingBackup
             self::oneOf($row['mode'], ['full', 'multi', 'full_multi', 'disabled', 'blocked', 'default']);
             self::oneOf($row['failure'], ['block', 'backup', 'wan']);
             self::oneOf($row['killSwitch'], ['', '0', '1']);
-            foreach (['paused', 'onDemand', 'bindMac'] as $flag) {
+            foreach (['paused', 'onDemand', 'bindMac', 'networkBypass'] as $flag) {
                 self::oneOf($row[$flag], ['0', '1']);
             }
             self::text($row['label'], 400, '/^[^\p{C}<>]{0,100}$/uD');
@@ -389,9 +399,11 @@ final class RoutingBackup
                 !filter_var($row['ip'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ||
                 (!$nativeTailnet && !Policy::interfaceId($row['interface'])) ||
                 ($row['kind'] === 'lan' && !Policy::validMac($row['mac'])) ||
-                ($row['kind'] === 'tailnet' && ($row['mac'] !== '' || $row['bindMac'] === '1' ||
+                ($row['kind'] === 'tailnet' && ($row['mac'] !== '' || $row['bindMac'] === '1' || $row['networkBypass'] === '1' ||
                     !Policy::tailnetAddress($row['ip']) || !Policy::tailnetAddress($row['ipv6'], true))) ||
                 ($row['ipv6'] !== '' && Policy::ipv6Address($row['ipv6']) !== $row['ipv6']) ||
+                ($row['networkBypassIpv6'] !== '' &&
+                    ($row['networkBypass'] !== '1' || $row['networkBypassIpv6'] !== $row['ipv6'])) ||
                 (Policy::usesBase($row['mode']) ? !self::uuid($row['profile']) : $row['profile'] !== '') ||
                 ($row['mode'] === 'full_multi' && ($row['failure'] !== 'block' || $row['killSwitch'] !== '1')) ||
                 ($row['failure'] === 'backup'

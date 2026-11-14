@@ -1,6 +1,6 @@
 <model>
     <mount>//OPNsense/BlankVpn</mount>
-    <version>1.11.0</version>
+    <version>1.12.0</version>
     <description>Blank VPN &amp; Proxy configuration and native object ownership</description>
     <items>
         <settings>
@@ -67,6 +67,8 @@
                 <killSwitch type="TextField"/>
                 <onDemand type="BooleanField"><Default>1</Default></onDemand>
                 <bindMac type="BooleanField"><Default>0</Default></bindMac>
+                <networkBypass type="BooleanField"><Default>0</Default></networkBypass>
+                <networkBypassIpv6 type="TextField"/>
                 <failure type="OptionField">
                     <Default>block</Default>
                     <OptionValues>

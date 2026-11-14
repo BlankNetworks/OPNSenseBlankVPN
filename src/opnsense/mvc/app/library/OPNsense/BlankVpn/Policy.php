@@ -156,9 +156,64 @@ final class Policy
             in_array($assignment['bindMac'] ?? '0', ['1', 1, true], true);
     }
 
+    public static function networkBypassAssignments(array $settings, array $assignments): array
+    {
+        if (empty($settings['enabled']) || ($settings['coverage'] ?? '') !== 'network' ||
+            !in_array($settings['networkMode'] ?? '', ['full', 'multi', 'full_multi'], true)) {
+            return [];
+        }
+        return array_filter($assignments, static function (array $row) use ($settings): bool {
+            $interface = $row['interface'] ?? '';
+            return in_array($row['kind'] ?? '', ['', 'lan'], true) &&
+                in_array($row['networkBypass'] ?? '0', ['1', 1, true], true) &&
+                self::interfaceId($interface) && in_array($interface, $settings['interfaces'] ?? [], true) &&
+                !in_array($interface, $settings['tailscaleInterfaces'] ?? [], true);
+        });
+    }
+
+    public static function networkBypassSources(array $settings, array $assignments, Diagnostics $diagnostics): array
+    {
+        $rows = self::networkBypassAssignments($settings, $assignments);
+        if ($rows === []) {
+            return [];
+        }
+        $state = self::macState();
+        $claims = DeviceIdentity::combineClaims($state['observations'] ?? []);
+        $reservations = DeviceIdentity::filterReservations($diagnostics->reservations(), $claims);
+        $bindings = DeviceIdentity::lanBindings($rows, DeviceIdentity::index($reservations));
+        $scopes = [];
+        foreach ($rows as $id => $row) {
+            $ip = $bindings[$id] ?? null;
+            if ($ip === null || $ip !== ($state['confirmed'][$id] ?? null)) {
+                continue;
+            }
+            $sources = ['inet' => $ip];
+            $ip6 = self::networkBypassIpv6($row);
+            if ($ip6 !== null && $ip6 === ($state['networkBypassIpv6'][$id] ?? null)) {
+                $sources['inet6'] = $ip6;
+            }
+            $scopes[$id] = ['interface' => $row['interface'], 'sources' => $sources];
+        }
+        return $scopes;
+    }
+
+    private static function networkBypassIpv6(array $row): ?string
+    {
+        $ip = $row['networkBypassIpv6'] ?? '';
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ||
+            inet_pton($ip) !== @inet_pton($row['ipv6'] ?? '') ||
+            self::contains('fe80::/10', $ip) || self::contains('ff00::/8', $ip) ||
+            self::contains('::ffff:0:0/96', $ip) || self::contains('::/127', $ip)) {
+            return null;
+        }
+        return inet_ntop(inet_pton($ip)) ?: null;
+    }
+
     public static function refreshMacConflicts(BlankVpn $model): void
     {
-        $rules = array_filter(self::assignments($model, true), self::bindsMac(...));
+        $assignments = self::assignments($model, true);
+        $exceptions = self::networkBypassAssignments(self::settings($model), $assignments);
+        $rules = array_filter($assignments, self::bindsMac(...)) + $exceptions;
         if ($rules === []) {
             return;
         }
@@ -171,7 +226,16 @@ final class Policy
         $rows = array_filter($reservations, static fn (array $row): bool => isset($addresses[$row['ip']]));
         $previous = self::macState();
         $observations = $diagnostics->reservationClaims($rows, $previous['observations'] ?? []);
-        self::writeState('mac-claims.json', json_encode(compact('confirmed', 'observations'), JSON_THROW_ON_ERROR));
+        $ipv6Requests = [];
+        foreach ($exceptions as $id => $row) {
+            $ip6 = self::networkBypassIpv6($row);
+            if ($ip6 !== null && isset($confirmed[$id])) {
+                $ipv6Requests[$id] = ['interface' => $row['interface'], 'mac' => $row['mac'], 'ipv6' => $ip6];
+            }
+        }
+        $networkBypassIpv6 = $ipv6Requests === [] ? [] : $diagnostics->confirmedNeighborIpv6Addresses($ipv6Requests);
+        self::writeState('mac-claims.json',
+            json_encode(compact('confirmed', 'observations', 'networkBypassIpv6'), JSON_THROW_ON_ERROR));
     }
 
     private static function macState(): array

@@ -4,6 +4,7 @@ namespace OPNsense\BlankVpn\Api;
 
 use OPNsense\Base\ApiControllerBase;
 use OPNsense\Core\ACL;
+use OPNsense\Core\Backend;
 use OPNsense\Core\Config;
 use OPNsense\BlankVpn\BlankVpn;
 use OPNsense\BlankVpn\DeviceIdentity;
@@ -58,6 +59,7 @@ class ServiceController extends ApiControllerBase
             }
             unset($device);
             $effectiveAssignments = Policy::routingAssignments($assignments, $diagnostics);
+            $networkBypassSources = Policy::networkBypassSources($routing, $assignments, $diagnostics);
             $tailnet = $settings['tailscaleInstalled'] ? $diagnostics->tailnetStatus() : [];
             $settings['dashboardMagicDns'] = Resolver::magicDnsFromStatus($tailnet);
             $settings['tailscaleSetup'] = $diagnostics->nativeTailnetSetup($tailnet);
@@ -145,7 +147,23 @@ class ServiceController extends ApiControllerBase
                 $row['bindMac'] = Policy::bindsMac($row);
                 $row['effectiveIp'] = $effectiveAssignments[$id]['ip'];
                 $row['reservationIp'] = $row['bindMac'] ? DeviceIdentity::effective($row, $reservationIndex) : null;
+                $row['networkBypass'] = ($row['kind'] ?? 'lan') !== 'tailnet' && ($row['networkBypass'] ?? '') === '1';
+                unset($row['networkBypassIpv6']);
                 $row['paused'] = Policy::assignmentPaused($row);
+                $bypassSource = $networkBypassSources[$id]['sources']['inet'] ?? null;
+                $bypassPass = $loaded[Policy::marker('device_bypass', $id . ':inet')] ?? [];
+                $bypassGuard = $loaded[Policy::marker('device_bypass_guard', $id . ':inet')] ?? [];
+                $row['networkBypassStatus'] = match (true) {
+                    !$row['networkBypass'] => '',
+                    !self::networkBypassActive($settings) || $row['paused'] ||
+                        !in_array($row['interface'], $lanInterfaces, true) ||
+                        !in_array($row['interface'], $settings['interfaces'], true) => 'saved',
+                    $bypassSource !== null && ($bypassPass['source'] ?? '') === $bypassSource &&
+                        ($bypassPass['action'] ?? '') === 'pass' => 'direct',
+                    $bypassSource !== null && ($bypassGuard['source'] ?? '') === $bypassSource &&
+                        ($bypassGuard['action'] ?? '') === 'block' => 'guard',
+                    default => 'pending'
+                };
                 $assignments[$id] = $row + [
                     'device' => $row['interface'] . '/' . (($row['kind'] ?? '') === 'tailnet' ? $row['ip'] : $row['mac']),
                     'verified' => false,
@@ -279,9 +297,6 @@ class ServiceController extends ApiControllerBase
     {
         return $this->respond(fn () => Operations::exclusive(function () {
             $settings = Policy::settings(new BlankVpn());
-            if ($settings['coverage'] === 'network') {
-                return ['probed' => 0];
-            }
             $interfaces = array_diff($settings['interfaces'] ?: ['lan'], $settings['tailscaleInterfaces']);
             return (new Diagnostics())->probeLanNeighbors($interfaces);
         }), true, true);
@@ -1395,6 +1410,9 @@ class ServiceController extends ApiControllerBase
                 $node->ip = $ip;
                 $node->mac = $kind === 'lan' ? $mac : '';
                 $node->ipv6 = $ipv6;
+                if (($prior['networkBypassIpv6'] ?? '') !== '' && $prior['networkBypassIpv6'] !== $ipv6) {
+                    $node->networkBypassIpv6 = '';
+                }
                 $node->kind = $kind;
                 $node->mode = $mode;
                 $node->interface = $interface;
@@ -1437,6 +1455,143 @@ class ServiceController extends ApiControllerBase
             }
             return $result;
         }), true, true);
+    }
+
+    public function setNetworkDeviceAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $id = $this->input('id', 64);
+            $label = $this->request->hasPost('label') ? trim($this->input('label', 400)) : null;
+            $bypass = $this->request->hasPost('networkBypass') ? $this->flag('networkBypass') : null;
+            if (($label !== null && !preg_match('/^[^\p{C}<>]{0,100}$/uD', $label)) ||
+                ($label === null && $bypass === null)) {
+                throw new \DomainException('Enter a valid device name or change its Bypass setting.');
+            }
+            $result = Operations::change(function (BlankVpn $model) use ($id, $label, $bypass) {
+                $assignments = Policy::assignments($model);
+                $saved = $assignments[$id] ?? [];
+                if ($id !== '' && $saved === []) {
+                    throw new \DomainException('This device rule no longer exists. Refresh and try again.');
+                }
+                $settings = Policy::settings($model);
+                $diagnostics = new Diagnostics();
+                $provider = '';
+                $reservation = null;
+                if ($saved === []) {
+                    [$identity, $provider] = $this->newNetworkDevice($settings, $assignments, $diagnostics);
+                    $reservation = $identity['ip'];
+                    $node = $model->assignments->assignment->add();
+                    foreach ($identity as $field => $value) {
+                        $node->$field = $value;
+                    }
+                    $node->mode = 'default';
+                } else {
+                    $identity = $saved;
+                    $node = $model->assignments->assignment->getChild($id);
+                }
+                if ($label !== null) {
+                    $node->label = $label;
+                }
+                $wasBypassed = ($saved['networkBypass'] ?? '') === '1';
+                $changed = $bypass !== null && $wasBypassed !== $bypass;
+                $ipv6 = '';
+                if ($changed) {
+                    if ($bypass && !self::networkBypassInterface($settings, $identity)) {
+                        throw new \DomainException('Choose a device on a managed LAN or VLAN to use Bypass.');
+                    }
+                    if ($bypass) {
+                        $reservation ??= DeviceIdentity::reservation(
+                            $identity['interface'], $identity['mac'], $diagnostics->reservations()
+                        );
+                        $ipv6 = $saved === [] ? $identity['ipv6']
+                            : ($diagnostics->confirmedNeighborIpv6Addresses([$identity])[0] ?? '');
+                    }
+                    $node->networkBypass = $bypass ? '1' : '0';
+                    $node->networkBypassIpv6 = $ipv6;
+                }
+                if ($provider !== '') {
+                    $diagnostics->reserveDevice($provider, $identity['interface'], $identity['ip'], $identity['mac']);
+                }
+                $reload = $changed && self::networkBypassActive($settings);
+                return [
+                    'reload' => $reload,
+                    'dhcpProvider' => $provider,
+                    'pendingReservation' => $bypass === true && $changed && $reservation === null
+                ];
+            });
+            return [
+                'message' => $result['pendingReservation'] ? 'Device saved. Bypass waits for a matching DHCP reservation.'
+                    : 'Device settings saved.'
+            ];
+        }), true, true);
+    }
+
+    private function newNetworkDevice(array $settings, array $assignments, Diagnostics $diagnostics): array
+    {
+        $identity = [
+            'kind' => 'lan',
+            'interface' => $this->input('interface', 20),
+            'ip' => $this->input('ip', 45),
+            'mac' => strtolower($this->input('mac', 17)),
+            'ipv6' => Policy::ipv6Address(trim($this->input('ipv6', 45))),
+            'bindMac' => $this->flag('bindMac') ? '1' : '0'
+        ];
+        if (!self::networkBypassInterface($settings, $identity) || !Policy::validMac($identity['mac']) ||
+            !filter_var($identity['ip'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            throw new \DomainException('Choose a LAN device with a valid DHCP lease or reservation.');
+        }
+        $effective = Policy::routingAssignments($assignments, $diagnostics);
+        foreach ($assignments as $id => $other) {
+            if ($other['interface'] === $identity['interface'] && (
+                $other['mac'] === $identity['mac'] || $effective[$id]['ip'] === $identity['ip'] ||
+                ($identity['ipv6'] !== '' && $other['ipv6'] === $identity['ipv6'])
+            )) {
+                throw new \DomainException('This device or address already has a saved rule. Refresh and edit the existing rule.');
+            }
+        }
+        if ($identity['ipv6'] !== '' && $diagnostics->confirmedNeighborIpv6Addresses([$identity]) === []) {
+            throw new \DomainException('This IPv6 address could not be confirmed on the device. Refresh or leave it blank.');
+        }
+        $provider = '';
+        if (!$diagnostics->hasReservation($identity['interface'], $identity['ip'], $identity['mac'])) {
+            if ($this->flag('reserveIp')) {
+                $provider = $diagnostics->reservationProvider($identity['interface'], $identity['ip'], $identity['mac']);
+            }
+            if ($provider === '') {
+                throw new \DomainException('Reserve the device’s current DHCP address before saving.');
+            }
+        }
+        return [$identity, $provider];
+    }
+
+    private static function networkBypassInterface(array $settings, array $row): bool
+    {
+        return ($row['kind'] ?? 'lan') !== 'tailnet' && Policy::interfaceId($row['interface']) &&
+            in_array($row['interface'], $settings['interfaces'], true) &&
+            !in_array($row['interface'], $settings['tailscaleInterfaces'], true) &&
+            isset(Policy::availableInterfaces()[$row['interface']]);
+    }
+
+    private static function networkBypassActive(array $settings): bool
+    {
+        return $settings['enabled'] && $settings['coverage'] === 'network'
+            && in_array($settings['networkMode'], ['full', 'full_multi', 'multi'], true);
+    }
+
+    private static function loadedNetworkBypassSources(string $id): array
+    {
+        if ($id === '') {
+            return [];
+        }
+        $loaded = Firewall::loadedRules() ?? [];
+        $sources = [];
+        foreach (['inet', 'inet6'] as $family) {
+            $source = $loaded[Policy::marker('device_bypass_guard', $id . ':' . $family)]['source'] ?? '';
+            if (filter_var($source, FILTER_VALIDATE_IP)) {
+                $sources[] = $source;
+            }
+        }
+        return $sources;
     }
 
     public function setTailnetRuleEnabledAction()
@@ -1486,10 +1641,12 @@ class ServiceController extends ApiControllerBase
                 $model->assignments->assignment->del($id);
                 $settings = Policy::settings($model);
                 $nativeTailnet = $row['interface'] === Policy::TAILSCALE_DEVICE;
+                $networkBypass = self::networkBypassActive($settings) && ($row['networkBypass'] ?? '') === '1';
                 return [
                     'ip' => $row['ip'], 'reload' => $settings['enabled'],
-                    'killSwitchReset' => $settings['enabled'] && $nativeTailnet
-                        ? array_values(array_filter([$row['ip'], $row['ipv6'] ?? ''])) : []
+                    'killSwitchReset' => $networkBypass ? self::loadedNetworkBypassSources($id)
+                        : ($settings['enabled'] && $nativeTailnet
+                            ? array_values(array_filter([$row['ip'], $row['ipv6'] ?? ''])) : [])
                 ];
             });
             if ($result['killSwitchReset'] !== []) {
@@ -1514,6 +1671,72 @@ class ServiceController extends ApiControllerBase
             $domains = SmartRouting::destinations($this->input('domains', SmartRouting::MAX_DOMAIN_BYTES));
             return $this->saveDomainList($id, $this->input('profile', 80), $name, $domains);
         }), true, true);
+    }
+
+    public function testServiceRouteAction()
+    {
+        return $this->respond(function () {
+            $model = new BlankVpn();
+            $settings = Policy::effectiveRouting($model);
+            $id = $this->input('id', 64);
+            $service = SmartRouting::forwardServices($settings, SmartRouting::services($model))[$id] ?? null;
+            if ($service === null || !SmartRouting::hasDomains($service['domains'])) {
+                throw new \DomainException('Enable Multi-Path and assign a server to this domain list first.');
+            }
+            $profiles = Policy::routes($model);
+            $profile = $profiles[$service['profile']] ?? [];
+            $table = SmartRouting::table($service);
+            $name = SmartRouting::testHostname($service['domains']);
+            $loaded = Firewall::loadedRules();
+            if ($loaded === null) {
+                throw new \RuntimeException('The router could not read the active firewall rules.');
+            }
+            $marker = SmartRouting::addressEntries($service['domains']) === [] ? 'service' : 'service_dns';
+            $results = [];
+            $answerChecks = [];
+            $wholeCombined = $settings['coverage'] === 'network' && $settings['networkMode'] === 'full_multi';
+            $base = $wholeCombined ? ($profiles[$settings['networkProfile']] ?? []) : [];
+            $nat = $wholeCombined ? Firewall::loadedNat() : '';
+            foreach ($settings['smartInterfaces'] as $interface) {
+                $route = $loaded[Policy::marker($marker, $id . ':' . $interface)] ?? [];
+                $port = Resolver::SERVICE_PORT;
+                if ($wholeCombined) {
+                    $key = 'network:' . $interface;
+                    $port = ($loaded[Policy::marker('wan_fallback', $key . ':inet')]['action'] ?? '') === 'pass'
+                        ? Resolver::FALLBACK_PORT : Resolver::combinedPort($base);
+                    if (!Firewall::dnsRedirectLoaded($loaded, $nat, $key, $port, 'inet')) {
+                        $results[$interface] = 'Client DNS redirect missing';
+                        continue;
+                    }
+                }
+                $tag = Policy::marker('smart', $interface);
+                $scope = $loaded[Policy::marker('combined_scope', $interface)] ??
+                    $loaded[Policy::marker('smart_scope', $interface)] ?? [];
+                if (($route['action'] ?? '') !== 'pass' || ($route['table'] ?? '') !== $table ||
+                    ($route['tagged'] ?? '') !== $tag || ($scope['tag'] ?? '') !== $tag ||
+                    ($route['gateway'] ?? '') !== ($profile['interface'] ?? '')) {
+                    $results[$interface] = 'Selected tunnel rule unavailable';
+                    continue;
+                }
+                if (!isset($answerChecks[$port])) {
+                    $raw = (new Backend())->configdpRun('blankvpn test_service_dns', [(string)$port, $name], false, 8);
+                    $addresses = json_decode($raw, true);
+                    if (!is_array($addresses)) {
+                        throw new \RuntimeException('The router DNS diagnostic did not return a result.');
+                    }
+                    $answerChecks[$port] = [$addresses, $addresses === [] ? [] :
+                        SmartRouting::matchedAddresses($table, $addresses)];
+                }
+                [$addresses, $matched] = $answerChecks[$port];
+                $results[$interface] = match (true) {
+                    $addresses === [] => 'No IPv4 DNS answer through the selected server',
+                    count($matched) !== count($addresses) =>
+                        count($matched) . ' of ' . count($addresses) . ' answers learned by PF',
+                    default => 'DNS and firewall match ' . ($profile['name'] ?? $route['gateway'])
+                };
+            }
+            return ['host' => $name, 'results' => $results];
+        }, true, true);
     }
 
     public function setServiceDestinationAction()

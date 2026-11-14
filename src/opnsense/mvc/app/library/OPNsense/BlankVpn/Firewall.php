@@ -70,21 +70,24 @@ final class Firewall
         $bypassDomains = $bypass !== [] && SmartRouting::hasDomains(array_merge(...array_column($bypass, 'domains')));
         $wan = WanEgress::gateways($firewall);
         $multiOutage = self::multiPathOutage($firewall, $services, $profiles, $health);
-        $assignments = $settings['coverage'] === 'device'
-            ? Policy::routingAssignments(Policy::assignments($model), $diagnostics) : [];
+        $rows = Policy::assignments($model);
+        $assignments = $settings['coverage'] === 'device' ? Policy::routingAssignments($rows, $diagnostics) : [];
+        $deviceBypass = Policy::networkBypassSources($settings, $rows, $diagnostics);
         $combinedInterfaces = self::combinedInterfaces($assignments);
         if (($settings['coverage'] === 'network' && $settings['networkMode'] === 'full_multi') ||
-            $combinedInterfaces !== [] || $bypass !== []) {
+            $combinedInterfaces !== [] || $bypass !== [] || $deviceBypass !== []) {
             $combined = Policy::localNetworks(array_replace($settings, ['localNetworks' => []]));
             $combinedFile = Policy::writeState('combined-local-networks', implode("\n", $combined) . "\n");
             $firewall->registerTable(Policy::COMBINED_LOCAL_TABLE, true, $combinedFile);
         }
-        if ($bypassDomains || ($settings['coverage'] === 'network' && Policy::usesBase($settings['networkMode']) &&
+        if ($bypassDomains || $deviceBypass !== [] ||
+            ($settings['coverage'] === 'network' && Policy::usesBase($settings['networkMode']) &&
             !$settings['networkKillSwitch'])) {
             self::registerWanDns($firewall, $wan);
         }
         $wan = array_filter($wan, static fn (array $gateway, string $family): bool =>
             self::wanGatewayMapped($firewall, $gateway, $family), ARRAY_FILTER_USE_BOTH);
+        self::registerDeviceBypass($firewall, $interfaces, $deviceBypass, $wan);
         if ($bypass !== []) {
             self::registerBypass($firewall, $settings, $interfaces, $bypass, $wan, $assignments, $diagnostics);
         }
@@ -180,6 +183,43 @@ final class Firewall
                     self::redirectDns($firewall, $interface, 'any', $basePort, $id, 58, false, $family);
                 }
                 self::registerGuard($firewall, $id, $interface, 'any', $family);
+            }
+        }
+    }
+
+    private static function registerDeviceBypass(
+        Plugin $firewall,
+        array $interfaces,
+        array $scopes,
+        array $wan
+    ): void {
+        foreach ($scopes as $id => $scope) {
+            $interface = $scope['interface'];
+            if (empty($interfaces[$interface]['if'])) {
+                continue;
+            }
+            foreach ($scope['sources'] as $family => $source) {
+                $key = $id . ':' . $family;
+                self::redirectDns($firewall, $interface, $source, Resolver::DEVICE_BYPASS_PORT,
+                    'network-bypass:' . $id, 54, false, $family);
+                $rule = [
+                    'direction' => 'in', 'interface' => $interface, 'ipprotocol' => $family,
+                    'from' => $source, 'quick' => true, 'disablereplyto' => true
+                ];
+                $firewall->registerFilterRule(Policy::PRIORITY + 7, [
+                    'type' => 'block', 'protocol' => 'tcp/udp', 'to_port' => '53',
+                    'label' => Policy::marker('device_bypass_dns_guard', $key)
+                ] + $rule);
+                $internet = ['to' => '<' . Policy::COMBINED_LOCAL_TABLE . '>', 'to_not' => true] + $rule;
+                if (isset($wan[$family])) {
+                    $firewall->registerFilterRule(Policy::PRIORITY + 7, [
+                        'type' => 'pass', 'gateway' => $wan[$family]['gateway'], 'skip_rules_gw_down' => true,
+                        'statetype' => 'keep', 'label' => Policy::marker('device_bypass', $key)
+                    ] + $internet);
+                }
+                $firewall->registerFilterRule(Policy::PRIORITY + 7, [
+                    'type' => 'block', 'label' => Policy::marker('device_bypass_guard', $key)
+                ] + $internet);
             }
         }
     }
@@ -987,12 +1027,34 @@ final class Firewall
             }
             preg_match('/\broute-to\s+[({\s]*([a-zA-Z][a-zA-Z0-9_.-]*)\b/', $line, $gateway);
             preg_match('/^(?:@\d+\s+)?(pass|block|match)\b/', ltrim($line), $action);
-            preg_match('/\bfrom\s+([0-9.]+)(?:\/32)?\s/', $line, $source);
+            preg_match('/\bfrom\s+([a-f0-9:.]+)(?:%[\w.-]+)?(?:\/(?:32|128))?\s/i', $line, $source);
+            preg_match('/\bto\s+<([a-z0-9_]+)>/i', $line, $table);
+            preg_match('/\b(?:port\s*=\s*)([0-9]+)\b/', $line, $port);
+            preg_match('/\btagged\s+"?(blankvpn_[a-z0-9_]+)/', $line, $tagged);
+            preg_match('/\btag\s+"?(blankvpn_[a-z0-9_]+)/', $line, $tag);
             $rules[$match[1]] = [
-                'gateway' => $gateway[1] ?? null, 'action' => $action[1] ?? null, 'source' => $source[1] ?? null
+                'gateway' => $gateway[1] ?? null, 'action' => $action[1] ?? null, 'source' => $source[1] ?? null,
+                'table' => $table[1] ?? null, 'port' => isset($port[1]) ? (int)$port[1] : null,
+                'tagged' => $tagged[1] ?? null, 'tag' => $tag[1] ?? null
             ];
         }
         return $rules;
+    }
+
+    public static function dnsRedirectLoaded(array $loaded, string $nat, string $id, int $port, string $family): bool
+    {
+        $tag = Policy::marker('dns', $id . ':' . $family);
+        $rule = $loaded[$tag] ?? [];
+        return ($rule['action'] ?? '') === 'pass' && ($rule['port'] ?? null) === $port &&
+            ($rule['tagged'] ?? '') === $tag &&
+            preg_match('/^(?:@\d+\s+)?rdr\b[^\r\n]*\btag\s+"?' . $tag . '\b[^\r\n]*' .
+                '(?:->|rdr-to)\s+' . ($family === 'inet6' ? '::1' : '127\.0\.0\.1') .
+                '\s+port\s+' . $port . '\b/m', $nat) === 1;
+    }
+
+    public static function loadedNat(): string
+    {
+        return (new Backend())->configdRun('blankvpn loaded_nat', false, 15);
     }
 
     public static function loadedRules(): ?array
@@ -1031,8 +1093,22 @@ final class Firewall
                 }
             }
         }
-        $assignments = $settings['coverage'] === 'device'
-            ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
+        $diagnostics = new Diagnostics();
+        $rows = Policy::assignments($model, true);
+        foreach (Policy::networkBypassSources($settings, $rows, $diagnostics) as $id => $scope) {
+            foreach ($scope['sources'] as $family => $address) {
+                $key = $id . ':' . $family;
+                $guard = $loaded[Policy::marker('device_bypass_guard', $key)] ?? [];
+                $dnsGuard = $loaded[Policy::marker('device_bypass_dns_guard', $key)] ?? [];
+                $route = $loaded[Policy::marker('device_bypass', $key)] ?? [];
+                if (($guard['source'] ?? '') !== $address || ($guard['action'] ?? '') !== 'block' ||
+                    ($dnsGuard['source'] ?? '') !== $address || ($dnsGuard['action'] ?? '') !== 'block' ||
+                    ($route !== [] && (($route['source'] ?? '') !== $address || empty($route['gateway'])))) {
+                    throw new \RuntimeException('A device Bypass rule or its WAN guard does not match the confirmed device address.');
+                }
+            }
+        }
+        $assignments = $settings['coverage'] === 'device' ? Policy::routingAssignments($rows, $diagnostics) : [];
         foreach ($assignments as $id => $row) {
             $mode = Policy::mode($row);
             $guard = $loaded[Policy::marker('kill', $id)] ?? [];
@@ -1071,6 +1147,22 @@ final class Firewall
             }
         }
         $services = SmartRouting::forwardServices($settings, $lists);
+        if ($settings['coverage'] === 'network' && $settings['networkMode'] === 'full_multi' &&
+            array_filter($services, static fn (array $service): bool => SmartRouting::hasDomains($service['domains'])) !== []) {
+            $profiles = Policy::routes($model);
+            $base = $profiles[$settings['networkProfile']] ?? [];
+            $nat = self::loadedNat();
+            foreach ($settings['interfaces'] as $interface) {
+                $id = 'network:' . $interface;
+                $port = ($loaded[Policy::marker('wan_fallback', $id . ':inet')]['action'] ?? '') === 'pass'
+                    ? Resolver::FALLBACK_PORT : Resolver::combinedPort($base);
+                if (!self::dnsRedirectLoaded($loaded, $nat, $id, $port, 'inet') ||
+                    !self::dnsRedirectLoaded($loaded, $nat, $id, $port, 'inet6')) {
+                    throw new \RuntimeException('The DNS redirect for Whole-Network + Multi-Path did not load on ' . $interface . '.');
+                }
+            }
+        }
+
         $combinedInterfaces = self::combinedInterfaces($assignments);
         foreach ($services as $id => $service) {
             foreach ($settings['smartInterfaces'] as $interface) {

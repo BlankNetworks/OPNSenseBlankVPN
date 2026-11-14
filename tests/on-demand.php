@@ -37,6 +37,10 @@ check(DeviceBindings::changedAddresses($old, $new) === ['192.168.10.2', '192.168
     'A move resets old and new IPv4 states without touching unchanged bindings or duplicate reset addresses.');
 check(DeviceBindings::changedAddresses($new, $new) === [], 'Unchanged assignments do not reset states.');
 check(DeviceBindings::changedAddresses([], ['a' => 'fd00::2']) === [], 'IPv6 addresses are independent.');
+check(DeviceBindings::changedAddresses(
+    ['network-bypass:device:inet6' => '2001:db8::2'],
+    ['network-bypass:device:inet6' => '2001:db8::3']
+) === ['2001:db8::2', '2001:db8::3'], 'Changed whole-network exception IPv6 states are reset in both directions.');
 check(DeviceBindings::changedAddresses(['a' => '192.168.10.2'], []) === ['192.168.10.2'],
     'A missing reservation resets the previous IPv4 states.');
 

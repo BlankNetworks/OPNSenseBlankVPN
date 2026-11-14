@@ -133,6 +133,19 @@ final class SmartRouting
         return array_keys($destinations);
     }
 
+    public static function testHostname(array $destinations): string
+    {
+        $domains = array_values(array_filter(self::domainEntries($destinations),
+            static fn (string $name): bool => !str_starts_with($name, '.')));
+        if ($domains === []) {
+            throw new DomainException('Add a specific domain to test this list.');
+        }
+        if (in_array('youtube.com', $domains, true)) {
+            return 'www.youtube.com';
+        }
+        return $domains[0];
+    }
+
     public static function matches(string $name, string $suffix): bool
     {
         $suffix = ltrim($suffix, '.');
@@ -262,8 +275,13 @@ final class SmartRouting
         return isset($profile['proxyDns']) || self::profileDns($profile) !== [];
     }
 
-    public static function dnsDirectives(array $services, array $profiles, array $bypassUpstreams = []): array
-    {
+    public static function dnsDirectives(
+        array $services,
+        array $profiles,
+        array $bypassUpstreams = [],
+        ?int $forwardPort = null,
+        bool $forwardOnly = false
+    ): array {
         $lines = [];
         $bypassLists = array_filter($services, static fn (array $service): bool =>
             ($service['profile'] ?? '') === self::BYPASS);
@@ -279,6 +297,9 @@ final class SmartRouting
             $source = explode('/', $profile['address'] ?? '')[0];
             $servers = self::profileDns($profile);
             $bypass = $service['profile'] === self::BYPASS;
+            if ($bypass && $forwardOnly) {
+                continue;
+            }
             $table = $bypass ? $bypassTable : self::table($service);
             foreach (self::domainEntries($service['domains']) as $domain) {
                 $domain = ltrim($domain, '.');
@@ -301,6 +322,10 @@ final class SmartRouting
                 if (isset($bypassSuffixes[$domain])) {
                     continue;
                 }
+                if ($forwardPort !== null) {
+                    $lines[] = "server=/{$domain}/127.0.0.1#{$forwardPort}";
+                    continue;
+                }
                 $lines[] = "ipset=/{$domain}/{$table}";
                 if (isset($profile['proxyDns'])) {
                     $lines[] = "server=/{$domain}/127.0.0.1#{$profile['proxyDns']}";
@@ -321,6 +346,20 @@ final class SmartRouting
     public static function active(array $settings, array $services): bool
     {
         return self::activeServices($settings, $services) !== [];
+    }
+
+    public static function matchedAddresses(string $table, array $addresses): array
+    {
+        if (!preg_match('/^bvs_[a-f0-9]{24}$/D', $table) ||
+            array_filter($addresses, static fn ($ip): bool => !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4))) {
+            return [];
+        }
+        $raw = (new Backend())->configdpRun('blankvpn matched_service_addresses', [$table], false, 10);
+        $learned = json_decode($raw, true);
+        if (!is_array($learned)) {
+            throw new \RuntimeException('The live Multi-Path destination table could not be read.');
+        }
+        return array_values(array_intersect($addresses, $learned));
     }
 
     public static function status(): array

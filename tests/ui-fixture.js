@@ -76,6 +76,9 @@ window.jQuery.ajax = async (request) => {
             return {ok:true};
         }
     }
+    if (action === 'testServiceRoute') {
+        return {ok:true, host:'www.youtube.com', results:{lan:'DNS and firewall match New York'}};
+    }
     if (action === 'account') {
         reply.dashboard.mullvadSignedIn = true;
         reply.dashboard.mullvadLoginSaved = data.saveLogin;
@@ -152,6 +155,16 @@ window.jQuery.ajax = async (request) => {
         const fields = {...data, effectiveIp:existing?.effectiveIp ?? data.ip};
         if (existing) Object.assign(existing, fields);
         else reply.dashboard.assignments.push({id:'mac-device', ...fields});
+    }
+    if (action === 'setNetworkDevice') {
+        const existing = reply.dashboard.assignments.find(row => row.id === data.id);
+        const status = data.networkBypass === undefined ? {} : {networkBypassStatus:data.networkBypass ? 'direct' : ''};
+        if (existing) {
+            Object.assign(existing, data, status);
+        } else {
+            reply.dashboard.assignments.push({id:'network-device1', kind:'lan', mode:'default',
+                profile:'', networkBypass:false, ...data, ...status});
+        }
     }
     if (action === 'setTailnetRuleEnabled') {
         reply.dashboard.assignments.find(row => row.id === data.id).paused = !data.enabled;
@@ -808,10 +821,67 @@ document.addEventListener('DOMContentLoaded', async () => {
         x.data.networkMode === 'full' && x.data.networkProfile === 'proxy1' && x.data.networkKillSwitch === true) &&
         bv('add-device').hidden && reply.dashboard.settings.networkProfile === 'proxy1',
         'Whole-Network proxy coverage settings did not apply.');
+    const networkAssign = reply.dashboard.assignments[0];
     assert(bv('device-list').textContent.includes('New console') &&
         bv('device-list').textContent.includes('Covered by network rule') &&
-        !bv('device-list').querySelector('button') && bv('device-guide').textContent.includes('Only Devices I choose'),
-        'Whole-Network view must show discovered devices read-only and explain individual assignments.');
+        bv('device-list').querySelector('[aria-label="Edit New console"]') &&
+        bv('device-guide').textContent.includes('Only Devices I choose'),
+        'Whole-Network coverage must let users edit discovered devices and explain individual assignments.');
+    bv('device-list').querySelector('[aria-label="Edit <b>Device rule</b>"]').click();
+    assert(!bv('network-device').hidden && !bv('network-device-bypass-field').hidden && bv('assignment').hidden,
+        'Editing a Whole-Network device must offer Bypass without changing its individual rule.');
+    bv('network-device-name').value = 'Renamed LAN device';
+    bv('network-device-form').requestSubmit(bv('save-network-device'));
+    await wait();
+    assert(networkAssign.label === 'Renamed LAN device' && networkAssign.mode === 'full' && networkAssign.profile === 'vpn1' &&
+        bv('device-list').querySelector('[aria-label="Edit Renamed LAN device"]'),
+        'A Whole-Network name edit must preserve the saved mode and server.');
+    bv('device-list').querySelector('[aria-label="Bypass VPN for Renamed LAN device"]').click();
+    await wait();
+    assert(networkAssign.networkBypass === true && bv('device-list').textContent.includes('Direct internet'),
+        'A saved device can bypass Whole-Network coverage from its row and show a confirmed direct route.');
+    networkAssign.networkBypassStatus = 'guard';
+    bv('refresh').click();
+    await wait();
+    assert(bv('device-list').textContent.includes('Direct internet unavailable'),
+        'A loaded guard must show the direct route unavailable.');
+    bv('device-list').querySelector('[aria-label="Bypass VPN for New console"]').click();
+    assert(bv('network-device-bypass').checked && bv('network-device-note').textContent.includes('DHCP address'),
+        'A new device bypass must identify its DHCP reservation before saving.');
+    bv('network-device-form').requestSubmit(bv('save-network-device'));
+    await wait();
+    assert(requests.some(x => x.action === 'setNetworkDevice' && x.data.label === 'New console' &&
+        x.data.ip === '10.0.0.30' && x.data.reserveIp === true && x.data.networkBypass === true),
+        'Saving a new device bypass must store the current identity and exception.');
+    assert(!bv('tailnet-device-list').querySelector('[aria-label^="Bypass VPN"]'),
+        'Tailscale devices must never offer a Whole-Network bypass.');
+    bv('tailnet-device-list').querySelector('[aria-label="Edit Remote iPad"]').click();
+    assert(bv('network-device-bypass-field').hidden,
+        'A saved Tailscale device name must be editable without a Whole-Network bypass control.');
+    bv('network-device-name').value = 'Renamed iPad';
+    bv('network-device-form').requestSubmit(bv('save-network-device'));
+    await wait();
+    assert(requests.some(x => x.action === 'setNetworkDevice' && x.data.id === 'tailnet1' &&
+        x.data.label === 'Renamed iPad' && x.data.networkBypass === undefined) &&
+        reply.dashboard.assignments.find(row => row.id === 'tailnet1').mode === 'full_multi',
+        'Renaming a Tailscale peer must preserve its routing without submitting a bypass field.');
+    bv('coverage').value = 'device';
+    bv('coverage').dispatchEvent(new Event('input', {bubbles:true}));
+    assert(!bv('device-list').querySelector('[aria-label^="Bypass VPN"], [aria-label^="Use network rule"]'),
+        'Only Devices I choose must hide Whole-Network bypass controls.');
+    assert(bv('device-list').querySelector('[aria-label="Edit New console"]').closest('tr').textContent.includes('No individual rule'),
+        'A device saved for Whole-Network coverage alone must stay unassigned in individual coverage.');
+    bv('device-list').querySelector('[aria-label="Edit Renamed LAN device"]').click();
+    assert(!bv('assignment').hidden && bv('network-device').hidden && bv('profile').value === 'vpn1',
+        'Only Devices I choose must still show the saved individual assignment.');
+    bv('close-assignment').click();
+    bv('coverage').value = 'network';
+    bv('coverage').dispatchEvent(new Event('input', {bubbles:true}));
+    bv('device-list').querySelector('[aria-label="Use network rule for Renamed LAN device"]').click();
+    await wait();
+    assert(networkAssign.networkBypass === false && networkAssign.mode === 'full' &&
+        bv('device-list').querySelector('[aria-label="Bypass VPN for Renamed LAN device"]'),
+        'Removing a Whole-Network bypass must preserve the individual rule.');
     assert(dismiss.hidden, 'Success messages must hide the error dismiss control.');
     bv('network-mode').value = 'full_multi';
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
@@ -849,6 +919,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelector('[data-bv-section="smart"]').click();
     assert(bv('smart-status').textContent.includes('Bypass uses direct internet when available'),
         'Multi-Path must describe the direct Bypass policy in combined mode.');
+    reply.dashboard.services.push({id:'youtube-demo', name:'YouTube', domains:['youtube.com','googlevideo.com'],
+        profile:'vpn1', routing:{lan:{gateway:'wg1'}}});
+    bv('refresh').click();
+    await wait();
+    const youtubeRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('YouTube'));
+    youtubeRow.querySelector('[aria-label="Test route for YouTube"]').click();
+    await wait();
+    assert(requests.some(x => x.action === 'testServiceRoute' && x.data.id === 'youtube-demo') &&
+        youtubeRow.textContent.includes('www.youtube.com') && youtubeRow.textContent.includes('DNS and firewall match New York'),
+        'The Multi-Path test must show its hostname and result in the service row.');
+    reply.dashboard.services.pop();
     reply.dashboard.services.push({id:'bypass-demo', name:'Direct test', domains:['example.net'], profile:'bypass',
         routing:{lan:{bypass:true}, opt1:{bypass:false, guard:true}}});
     bv('refresh').click();

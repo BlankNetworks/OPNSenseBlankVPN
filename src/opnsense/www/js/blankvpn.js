@@ -75,6 +75,7 @@
             canManage: true,
             editing: null,
             assignmentDevice: null,
+            networkDevice: null,
             busy: false,
             dashboardRequest: null,
             deviceRefreshRunning: false,
@@ -491,6 +492,7 @@
             } else {
                 byId('assignment').hidden = true;
                 state.editing = null;
+                closeNetworkDevice();
             }
         }
 
@@ -520,9 +522,11 @@
             const wholeNetwork = byId('coverage').value === 'network';
             const wholeNetworkApplies = wholeNetwork && state.settings?.enabled &&
                 state.settings.coverage === 'network' && state.settings.networkMode !== 'disabled';
+            const allowBypass = supportsNetworkDeviceBypass(byId('network-mode').value);
+            const bypassApplies = wholeNetworkApplies && supportsNetworkDeviceBypass(state.settings.networkMode);
             byId('add-device').hidden = wholeNetwork;
             byId('device-guide').textContent = wholeNetwork
-                ? 'To assign devices individually, choose Only Devices I choose under Routing coverage.'
+                ? 'Edit device names or allow a LAN device to use direct internet. To assign individual servers, choose Only Devices I choose.'
                 : 'Refresh to find LAN devices and current DHCP leases. Select a device to set up its routing rule.';
             const managed = list(state.settings?.interfaces);
             const transit = list(state.settings?.tailscaleInterfaces);
@@ -587,14 +591,29 @@
                 const canUseInterface = tailnet ? nativeTailnet || transit.length > 0 : managed.includes(interfaceId);
                 const blocked = assignment?.killSwitchActive === true;
                 const paused = assignment?.paused === true;
+                const bypass = assignment?.networkBypass === true;
                 const waitingForAddress = bindMac && !effectiveIp;
                 const staleReservation = !!(observedIp && device?.reservationIpv4 && device.reservationIpv4 !== observedIp);
                 let status;
-                if (assignment) {
-                    status = paused ? 'Disabled' : wholeNetwork ? 'Paused by Whole-Network coverage' : !state.settings?.enabled
+                if (wholeNetwork && bypass) {
+                    status = 'Bypass saved';
+                    if (bypassApplies && canUseInterface) {
+                        if (assignment.networkBypassStatus === 'direct') {
+                            status = 'Direct internet';
+                        } else if (assignment.networkBypassStatus === 'guard') {
+                            status = 'Direct internet unavailable';
+                        } else if (waitingForAddress) {
+                            status = 'Waiting for device address';
+                        } else if (assignment.networkBypassStatus === 'pending') {
+                            status = 'Bypass pending';
+                        }
+                    }
+                } else if (wholeNetwork && !tailnet && canUseInterface && wholeNetworkApplies) {
+                    status = 'Covered by network rule';
+                } else if (assignment) {
+                    status = assignment.mode === 'default' ? 'No individual rule' : paused ? 'Disabled'
+                        : wholeNetwork ? 'Individual rule paused' : !state.settings?.enabled
                         ? 'Saved · Routing off' : waitingForAddress ? 'Waiting for DHCP' : assignment.appliedRoute || 'Rule saved';
-                } else if (wholeNetwork && !tailnet && canUseInterface) {
-                    status = wholeNetworkApplies ? 'Covered by network rule' : 'Discovered';
                 } else if (!canUseInterface) {
                     status = tailnet ? 'Exit node setup needed' : 'Interface outside coverage';
                 } else if (!tailnet && device?.addressConflict) {
@@ -644,7 +663,7 @@
                 if (bindMac) {
                     ruleDetail.push('Follows MAC address');
                 }
-                cell(row, assignment ? modes[assignment.mode] || 'Regular internet' : 'No rule', 'Rule',
+                cell(row, assignment ? modes[assignment.mode] || 'No rule' : 'No rule', 'Rule',
                     ruleDetail.filter(Boolean).join(' · '));
                 const statusDetail = [];
                 if (!tailnet && !canUseInterface) {
@@ -661,7 +680,7 @@
                 cell(row, status, 'Status', statusDetail.join(' '));
                 const actions = row.insertCell();
                 actions.setAttribute('role', 'cell');
-                if (state.canManage && !wholeNetwork) {
+                if (state.canManage) {
                     const discovered = device ? {
                         ip: waitingForAddress ? assignment.ip : ip, reserveAddress, effectiveIp,
                         ipv6: tailnet || routableV6.length === 1 ? routableV6[0] : '',
@@ -669,7 +688,27 @@
                         reserved, reserveIp: reserveIp && !offline, canUseInterface, macBindingSupported,
                         addressConflict: device.addressConflict === true
                     } : null;
-                    if (assignment) {
+                    if (wholeNetwork) {
+                        const eligible = !tailnet && !transit.includes(interfaceId) && canUseInterface && (assignment ||
+                            (!device?.addressConflict && device?.mac && ip && (reserved || (reserveIp && !offline))));
+                        const showBypass = bypass || (eligible && allowBypass);
+                        if (assignment || eligible) {
+                            actions.append(button('Edit', () => openNetworkDevice(assignment, discovered, showBypass),
+                                'Edit ' + name));
+                        }
+                        if (showBypass) {
+                            const action = bypass ? 'Use network rule' : 'Bypass VPN';
+                            actions.append(button(action, (event) => {
+                                if (assignment) {
+                                    void mutate(event.currentTarget,
+                                        () => api('setNetworkDevice', {id: assignment.id, networkBypass: !bypass}),
+                                        bypass ? 'Device bypass removed.' : 'Device bypass saved.', closeNetworkDevice);
+                                } else {
+                                    openNetworkDevice(null, discovered, true, true);
+                                }
+                            }, action + ' for ' + name));
+                        }
+                    } else if (assignment) {
                         actions.append(button('Edit', () => openAssignment(assignment, tailnet ? 'tailnet' : 'lan', discovered), 'Edit ' + name));
                         if (state.settings?.enabled && !paused && usesBaseServer(assignment.mode) && assignment.profile) {
                             appendConnectionTest(actions, 'testDeviceRoute', assignment.id, name, '', false, 'Ping');
@@ -705,7 +744,7 @@
             const online = state.tailnetDevices.filter(device => device.online).length;
             byId('tailnet-count').textContent = state.tailnetDevices.length ? ' · ' + online + ' online' : '';
             byId('tailnet-routing-hint').textContent = wholeNetwork
-                ? 'Choose Only Devices I choose to assign a Tailscale device.'
+                ? 'Choose Only Devices I choose to route Tailscale traffic.'
                 : nativeTailnet ? 'Uses the OPNsense exit node.' : transit.length ? 'Uses the configured gateway link.'
                     : state.settings?.tailscaleSetup?.reason || 'Check Tailscale Settings for exit node setup.';
             const count = state.devices.length + state.tailnetDevices.length;
@@ -1103,6 +1142,26 @@
                         Number.isInteger(service.learned) ? service.learned + ' learned addresses' : '');
                     const actions = row.insertCell();
                     if (state.canManage) {
+                        if (saved && !isBypass && entries.some((entry) => !entry.includes('/')) && status.length > 0) {
+                            const result = document.createElement('div');
+                            result.className = 'bv-muted';
+                            result.setAttribute('role', 'status');
+                            const test = button('Test route', async () => {
+                                test.disabled = true;
+                                result.textContent = 'Checking DNS and firewall rules…';
+                                try {
+                                    const reply = await api('testServiceRoute', {id: service.id});
+                                    const details = Object.entries(reply.results || {})
+                                        .map(([id, text]) => networkName(id) + ' · ' + text);
+                                    result.textContent = reply.host + ' · ' + details.join(' · ');
+                                } catch (error) {
+                                    result.textContent = errorMessage(error, 'The route test failed.');
+                                } finally {
+                                    test.disabled = false;
+                                }
+                            }, 'Test route for ' + service.name);
+                            actions.append(test, result);
+                        }
                         actions.append(button('Edit', () => editService(service), 'Edit ' + service.name));
                         actions.append(button('Remove', (event) => {
                             if (window.confirm('Remove the Multi-Path list for ' + service.name + '?')) {
@@ -1413,6 +1472,7 @@
                 if (!state.canManage) {
                     byId('assignment').hidden = true;
                     state.editing = null;
+                    closeNetworkDevice();
                 }
                 state.availableInterfaces = array(data.settings?.availableInterfaces || data.availableInterfaces);
                 if (!byId('assignment').hidden && byId('device-kind').value === 'tailnet') {
@@ -1593,7 +1653,38 @@
                     : (choices.length === 1 ? choices[0].value : '')));
         }
 
+        function supportsNetworkDeviceBypass(mode) {
+            return usesBaseServer(mode) || mode === 'multi';
+        }
+
+        function closeNetworkDevice() {
+            byId('network-device').hidden = true;
+            state.networkDevice = null;
+        }
+
+        function openNetworkDevice(assignment, discovered, showBypass, enableBypass = false) {
+            byId('assignment').hidden = true;
+            state.editing = null;
+            state.networkDevice = {assignment, discovered, showBypass};
+            const name = byId('network-device-name');
+            name.value = assignment?.label || discovered?.label || discovered?.ip || '';
+            byId('network-device-bypass-field').hidden = !showBypass;
+            byId('network-device-bypass').checked = enableBypass || assignment?.networkBypass === true;
+            const reserve = !assignment && discovered?.reserveIp;
+            const notes = [];
+            if (showBypass) {
+                notes.push('Bypass sends this device’s IPv4 traffic directly to the internet when Whole-Network VPN or Multi-Path coverage is active.');
+            }
+            if (reserve) {
+                notes.push('Saving reserves the device’s current DHCP address.');
+            }
+            byId('network-device-note').textContent = notes.join(' ');
+            byId('network-device').hidden = false;
+            name.focus();
+        }
+
         function openAssignment(assignment = null, kind = 'lan', discovered = null) {
+            closeNetworkDevice();
             state.editing = assignment;
             state.assignmentDevice = discovered;
             const device = assignment || discovered;
@@ -1606,7 +1697,7 @@
             byId('device-kind').value = assignment?.kind || kind;
             byId('device-kind').disabled = locked;
             renderAssignmentInterfaces(device?.interface || '');
-            byId('mode').value = modes[assignment?.mode] ? assignment.mode : (assignment && !assignment.profile ? 'disabled' : 'full');
+            byId('mode').value = modes[assignment?.mode] ? assignment.mode : 'full';
             byId('ip').readOnly = locked;
             byId('ipv6').readOnly = Boolean(discovered && kind === 'tailnet');
             byId('interface').disabled = Boolean(device?.interface);
@@ -2002,7 +2093,7 @@
             let failure = '';
             try {
                 await state.dashboardRequest;
-                if (state.canManage && byId('coverage').value === 'device') {
+                if (state.canManage) {
                     byId('observed').textContent = 'Finding LAN and Tailscale devices…';
                     await api('discoverDevices', {});
                 }
@@ -2019,6 +2110,40 @@
         });
         byId('add-device').addEventListener('click', () => openAssignment());
         byId('add-tailnet-peer').addEventListener('click', () => openAssignment(null, 'tailnet'));
+        byId('close-network-device').addEventListener('click', () => {
+            closeNetworkDevice();
+            byId('refresh').focus();
+        });
+        byId('network-device-form').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const current = state.networkDevice;
+            if (!current || byId('coverage').value !== 'network') {
+                return;
+            }
+            const {assignment, discovered, showBypass} = current;
+            const label = byId('network-device-name').value.trim();
+            if (!label) {
+                byId('network-device-name').focus();
+                return;
+            }
+            let payload = {label};
+            if (assignment) {
+                payload.id = assignment.id;
+            } else {
+                if (discovered.reserveIp && !window.confirm('Reserve this IP address and save the device? OPNsense will reload the DHCP service.')) {
+                    return;
+                }
+                payload = {...payload, ip: discovered.reserveAddress, mac: discovered.mac,
+                    interface: discovered.interface, reserveIp: discovered.reserveIp, bindMac: discovered.macBindingSupported};
+            }
+            if (showBypass) {
+                const bypass = byId('network-device-bypass').checked;
+                if (bypass !== (assignment?.networkBypass === true)) {
+                    payload.networkBypass = bypass;
+                }
+            }
+            void mutate(event.submitter, () => api('setNetworkDevice', payload), 'Device saved.', closeNetworkDevice);
+        });
         byId('close-assignment').addEventListener('click', () => {
             byId('assignment').hidden = true;
             state.editing = null;
@@ -2513,7 +2638,12 @@
             if (event.target !== byId('local')) {
                 updateCoverage();
             }
-            if (event.target === byId('coverage')) {
+            if ([byId('coverage'), byId('network-mode')].includes(event.target)) {
+                closeNetworkDevice();
+                if (event.target === byId('coverage')) {
+                    byId('assignment').hidden = true;
+                    state.editing = null;
+                }
                 renderDeviceRules();
             }
         });

@@ -24,6 +24,21 @@ try {
             $rules = Firewall::parseLoadedRules(Resolver::command(['/sbin/pfctl', '-sr']));
             echo json_encode((object)$rules, JSON_THROW_ON_ERROR), "\n";
             break;
+        case 'loaded_nat':
+            echo Resolver::command(['/sbin/pfctl', '-sn']);
+            break;
+        case 'test_service_dns':
+            $port = (int)($argv[2] ?? '');
+            echo json_encode(Resolver::testAddresses($port, $argv[3] ?? ''), JSON_THROW_ON_ERROR), "\n";
+            break;
+        case 'matched_service_addresses':
+            $table = $argv[2] ?? '';
+            if (!preg_match('/^bvs_[a-f0-9]{24}$/D', $table)) {
+                exit(64);
+            }
+            $addresses = Resolver::command(['/sbin/pfctl', '-t', $table, '-T', 'show']);
+            echo json_encode(preg_split('/\s+/', trim($addresses), -1, PREG_SPLIT_NO_EMPTY), JSON_THROW_ON_ERROR), "\n";
+            break;
         case 'proxies':
             $model = new BlankVpn();
             $activeProxies = array_fill_keys(ProxyRuntime::reconcile($model)['active'], true);

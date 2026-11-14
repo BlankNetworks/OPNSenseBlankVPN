@@ -502,6 +502,50 @@ final class Diagnostics
         return in_array(['interface' => $interface, 'ip' => $ip, 'mac' => $mac], $this->reservations(), true);
     }
 
+    public function confirmedNeighborIpv6Addresses(array $requests): array
+    {
+        if ($requests === []) {
+            return [];
+        }
+        $targets = [];
+        foreach ($requests as $id => $request) {
+            $ip = self::ip((string)($request['ipv6'] ?? ''));
+            $mac = self::mac((string)($request['mac'] ?? ''));
+            if ($ip !== null && str_contains($ip, ':') && !self::within($ip, 'fe80::', 10) && $mac !== null) {
+                $targets[$request['interface'] . '/' . $ip][$id] = ['ip' => $ip, 'mac' => $mac];
+            }
+        }
+        if ($targets === []) {
+            return [];
+        }
+        $neighbors = $this->read('interface list ndp', ['json']);
+        $owners = [];
+        $interfaces = $this->localInterfaces();
+        foreach ($neighbors ?? [] as $row) {
+            if (!is_array($row) || !empty($row['expired']) || !empty($row['permanent']) ||
+                in_array($row['type'] ?? '', ['published', 'proxy'], true)) {
+                continue;
+            }
+            $key = ($interfaces[$row['intf'] ?? '']['id'] ?? '') . '/' . self::ip((string)($row['ip'] ?? ''));
+            $owner = self::mac((string)($row['mac'] ?? ''));
+            if (isset($targets[$key]) && $owner !== null) {
+                $owners[$key][$owner] = true;
+            }
+        }
+        $confirmed = [];
+        foreach ($targets as $key => $rows) {
+            if (count($owners[$key] ?? []) !== 1) {
+                continue;
+            }
+            foreach ($rows as $id => $row) {
+                if (isset($owners[$key][$row['mac']])) {
+                    $confirmed[$id] = $row['ip'];
+                }
+            }
+        }
+        return $confirmed;
+    }
+
     public function hasRoutedTraffic(string $ip, string $rule): bool
     {
         foreach ($this->connections($ip)['connections'] as $session) {

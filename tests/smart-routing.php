@@ -652,5 +652,29 @@ namespace {
     $compileDevice->invoke(null, $moved, $settings, $interfaces, ['device-a' => $assignment], $profiles, [], $diag);
     checkRouting(isset($moved->rules[Policy::marker('kill', 'device-a')]) &&
         !isset($moved->rules[Policy::marker('device', 'device-a')]), 'A missing reservation must not fall through to WAN.');
+    $youtube = ['video' => ['id' => 'video', 'domains' => ['youtube.com'], 'profile' => 'jp']];
+    $youtubeTable = SmartRouting::table($youtube['video']);
+    checkRouting(SmartRouting::testHostname(['.cn', 'youtube.com']) === 'www.youtube.com',
+        'The test uses the actual YouTube hostname within the saved list.');
+    checkRouting(SmartRouting::dnsDirectives($youtube, $profiles, [], Resolver::SERVICE_PORT) === [
+        'server=/youtube.com/127.0.0.1#' . Resolver::SERVICE_PORT
+    ], 'The base resolver delegates only matching names to the service resolver.');
+    $youtubeDirectives = SmartRouting::dnsDirectives($youtube, $profiles, forwardOnly: true);
+    checkRouting(in_array("ipset=/youtube.com/{$youtubeTable}", $youtubeDirectives, true) &&
+        !in_array('server=/youtube.com/127.0.0.1#' . Resolver::SERVICE_PORT, $youtubeDirectives, true),
+        'The service resolver learns the addresses before they reach the client.');
+    $dnsId = Policy::marker('dns', 'network:lan:inet');
+    $dnsPort = Resolver::combinedPort($profiles['jp']);
+    $rules = Firewall::parseLoadedRules("pass quick on igc1 inet proto udp from any to 127.0.0.1 port = {$dnsPort} "
+        . "label \"{$dnsId}\" tagged {$dnsId}\n");
+    $nat = "rdr on igc1 inet proto udp from any to any port = domain tag {$dnsId} -> 127.0.0.1 port {$dnsPort}\n";
+    checkRouting(Firewall::dnsRedirectLoaded($rules, $nat, 'network:lan', $dnsPort, 'inet') &&
+        !Firewall::dnsRedirectLoaded($rules, '', 'network:lan', $dnsPort, 'inet') &&
+        !Firewall::dnsRedirectLoaded($rules, $nat, 'network:lan', $dnsPort + 1, 'inet'),
+        'A filter pass, redirect tag, and correct listener port must all be present.');
+    checkRouting(Resolver::answerAddresses(";; ANSWER SECTION:\nwww.youtube.com. 60 IN CNAME video.example.\n"
+        . "video.example. 10 IN A 192.0.2.10\nvideo.example. 10 IN A 192.0.2.20\n\n;; ADDITIONAL SECTION:\n"
+        . "unrelated.example. 10 IN A 203.0.113.2\n") === ['192.0.2.10', '192.0.2.20'],
+        'The diagnostic uses address records in the answer section after CNAMEs.');
     echo "Multi-Path and per-IP policy fixtures passed.\n";
 }
