@@ -99,7 +99,8 @@ final class Resolver
             $wanUpstreams = isset($wan['inet'])
                 ? WanEgress::dnsUpstreams($wan, $loaded) : [];
             $wanted = self::listenerPlan(
-                $settings, $hostname, $host, $assignments, $profiles, $services, $wanUpstreams, $fallback, $deviceBypass
+                $settings, $hostname, $host, $assignments, $profiles, $services, $wanUpstreams, $fallback, $deviceBypass,
+                $loaded
             );
         }
 
@@ -181,7 +182,8 @@ final class Resolver
         array $services,
         array $wanUpstreams,
         bool $fallback,
-        bool $deviceBypass
+        bool $deviceBypass,
+        array $loaded
     ): array {
         $protectedNetwork = $settings['coverage'] === 'network' && !empty($settings['networkKillSwitch']);
         $routed = SmartRouting::forwardServices($settings, $services);
@@ -189,7 +191,6 @@ final class Resolver
         $publicLists = $routed + $bypass;
         $bypassDirectives = SmartRouting::dnsDirectives($bypass, $profiles, $wanUpstreams);
         $directives = SmartRouting::dnsDirectives($publicLists, $profiles, $wanUpstreams, self::SERVICE_PORT);
-        $protectedDirectives = SmartRouting::dnsDirectives($routed, $profiles, forwardPort: self::PROTECTED_MULTI_PORT);
         $wanted = [self::LOCAL_PORT => self::configuration(self::LOCAL_PORT, $hostname, $host, [], true, true)];
 
         // HTTPS and SVCB address hints do not enter PF's learned-IP tables.
@@ -198,7 +199,6 @@ final class Resolver
             $wanted[self::SERVICE_PORT] = self::configuration(self::SERVICE_PORT, $hostname, $host,
                 ['filter-rr=64,65', ...$forward], true, true);
         }
-        $protectedForward = SmartRouting::dnsDirectives($routed, $profiles, forwardOnly: true);
         $protectedMulti = $protectedNetwork && Policy::usesMultiPath($settings['networkMode']);
         foreach ($assignments as $row) {
             if (Policy::usesMultiPath(Policy::mode($row)) && Policy::killSwitch($row)) {
@@ -206,7 +206,13 @@ final class Resolver
                 break;
             }
         }
+        $protectedDirectives = [];
         if ($protectedMulti) {
+            $available = self::liveDnsServices($settings, $routed, $profiles, $loaded);
+            $protectedDirectives = SmartRouting::dnsDirectives($routed, $profiles,
+                forwardPort: self::PROTECTED_MULTI_PORT, availableServices: $available);
+            $protectedForward = SmartRouting::dnsDirectives($routed, $profiles, forwardOnly: true,
+                availableServices: $available);
             $wanted[self::PROTECTED_MULTI_PORT] = self::configuration(self::PROTECTED_MULTI_PORT, $hostname, $host,
                 ['filter-rr=64,65', ...$protectedForward], true, true);
         }
@@ -246,6 +252,37 @@ final class Resolver
                 [...$upstreams, ...$directives], true, true);
         }
         return $wanted;
+    }
+
+    private static function liveDnsServices(array $settings, array $services, array $profiles, array $loaded): array
+    {
+        $available = [];
+        foreach ($services as $service) {
+            $profile = $profiles[$service['profile']] ?? [];
+            if (!SmartRouting::hasDomains($service['domains']) || self::profileUpstreams($profile) === []) {
+                continue;
+            }
+            $table = SmartRouting::table($service);
+            $marker = SmartRouting::addressEntries($service['domains']) === [] ? 'service' : 'service_dns';
+            foreach ($settings['smartInterfaces'] as $interface) {
+                $id = $service['id'] . ':' . $interface;
+                $tag = Policy::marker('smart', $interface);
+                $scope = $loaded[Policy::marker('combined_scope', $interface)] ??
+                    $loaded[Policy::marker('smart_scope', $interface)] ?? [];
+                $route = $loaded[Policy::marker($marker, $id)] ?? [];
+                $guard = $loaded[Policy::marker($marker . '_guard', $id)] ?? [];
+                if (($scope['tag'] ?? '') === $tag &&
+                    ($route['action'] ?? '') === 'pass' && ($route['table'] ?? '') === $table &&
+                    ($route['tagged'] ?? '') === $tag &&
+                    ($route['gateway'] ?? '') === ($profile['interface'] ?? '') &&
+                    ($guard['action'] ?? '') === 'block' && ($guard['table'] ?? '') === $table &&
+                    ($guard['tagged'] ?? '') === $tag) {
+                    $available[$service['id']] = true;
+                    break;
+                }
+            }
+        }
+        return $available;
     }
 
     private static function profileUpstreams(array $profile): array

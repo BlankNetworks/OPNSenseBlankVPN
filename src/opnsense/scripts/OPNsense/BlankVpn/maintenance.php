@@ -108,7 +108,9 @@ try {
             Operations::exclusive(function () {
                 $model = new BlankVpn();
                 $settings = Policy::effectiveRouting($model);
-                $loaded = Firewall::loadedRules() ?? [];
+                // The root maintenance worker can read PF directly, without an IPC timeout
+                // masquerading as an empty ruleset and failing every tunnel health check.
+                $loaded = Firewall::parseLoadedRules(Resolver::command(['/sbin/pfctl', '-sr']));
                 Policy::refreshMacConflicts($model);
                 $assignments = $settings['coverage'] === 'device'
                     ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
@@ -149,6 +151,7 @@ try {
                     }
                 }
                 $runningProxySet = array_fill_keys($runningProxies, true);
+                $previousProxySet = array_fill_keys($previousProxies, true);
                 $forward = SmartRouting::forwardServices($settings, $services);
                 $selected = Operations::policyProbeExits($settings, $assignments, $forward);
                 $watchedExits = array_fill_keys(Operations::killSwitchProbeExits(
@@ -162,7 +165,7 @@ try {
                     @file_get_contents(Policy::STATE_DIR . '/local-networks') !==
                         implode("\n", Policy::localNetworks($settings)) . "\n";
                 foreach ($routes as $id => $profile) {
-                    if (!isset($selected[$id])) {
+                    if (!isset($selected[$id]) || !empty($profile['disabled'])) {
                         continue;
                     }
                     if (isset($onDemand[$id]) &&
@@ -180,38 +183,32 @@ try {
                         continue;
                     }
                     if (($profile['kind'] ?? '') === 'proxy') {
-                        if ($profile['slot'] % 4 !== (int)gmdate('i') % 4 && isset($runningProxySet[$id]) &&
+                        if ($profile['slot'] % 4 !== (int)gmdate('i') % 4 &&
+                            isset($runningProxySet[$id], $previousProxySet[$id]) &&
                             empty($old[$id]['onDemand'])) {
                             continue;
                         }
                         $probe = ProxyRuntime::probe($profile);
-                    } elseif (($profile['kind'] ?? '') === 'native') {
-                        $source = $profile['address'];
-                        $changed = $changed || ($old[$id]['source'] ?? '') !== $source;
-                        $verified = Firewall::probePathInstalled($profile, $loaded);
-                        $probe = WireGuard::probeSource($verified ? $source : '');
                     } else {
-                        $probe = WireGuard::probe($profile, Firewall::probePathInstalled($profile, $loaded));
+                        $verified = Firewall::probePathInstalled($profile, $loaded);
+                        if (!$verified && ($profile['address'] ?? '') !== '' && (int)gmdate('i') % 4 === 0) {
+                            // Rebuild a missing pin after a tunnel starts late. Never send an unpinned probe.
+                            $changed = true;
+                        }
+                        $probe = ($profile['kind'] ?? '') === 'native'
+                            ? WireGuard::probeSource($verified ? $profile['address'] : '')
+                            : WireGuard::probe($profile, $verified);
                     }
-                    $previous = $old[$id] ?? [];
-                    $success = !empty($probe['reachable']);
-                    $failures = $success ? 0 : min(2, ($previous['failures'] ?? 0) + 1);
-                    $watchExit = isset($watchedExits[$id]);
-                    $reachable = $success || (!$watchExit && $failures < 2 && ($previous['reachable'] ?? true));
-                    $health[$id] = [
-                        'reachable' => $reachable, 'failures' => $failures, 'checkedAt' => time(),
-                        'probeSucceeded' => $success
-                    ];
-                    if (($profile['kind'] ?? '') === 'native') {
-                        $health[$id]['source'] = $source;
+                    $observation = Operations::probeObservation(
+                        $old[$id] ?? [], $profile, $probe['reachable'] ?? null, isset($watchedExits[$id]), time()
+                    );
+                    if ($observation['health'] !== []) {
+                        $health[$id] = $observation['health'];
                     }
-                    $probeChanged = ($previous['probeSucceeded'] ?? false) !== $success;
-                    if ($watchExit && $probeChanged && !$success) {
+                    $changed = $changed || $observation['reload'];
+                    if ($observation['failed']) {
                         $failedExits[] = $id;
                     }
-                    $changed = $changed || ($previous['reachable'] ?? true) !== $reachable ||
-                        ($watchExit && ($probeChanged || ($success && time() - ($previous['checkedAt'] ?? 0) >
-                            (($profile['kind'] ?? '') === 'proxy' ? 300 : 180))));
                 }
                 if ($changed || $bindingsChanged || Operations::pathReloadPending()) {
                     Operations::reloadRoutingPaths($model, $settings, $assignments, $loaded,

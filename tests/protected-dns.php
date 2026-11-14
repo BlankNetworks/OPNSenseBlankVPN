@@ -25,15 +25,27 @@ $settings = [
     'smartInterfaces' => ['lan'], 'deviceMultiInterfaces' => [], 'strictInterfaces' => [],
     'smartAssignedOnly' => false,
 ];
-$base = ['dnsPort' => 46651, 'address' => '10.64.0.9/32', 'dns' => ['10.64.0.1']];
+$base = ['dnsPort' => 46651, 'address' => '10.64.0.9/32', 'dns' => ['10.64.0.1'], 'interface' => 'wg3'];
 $proxy = ProxyRuntime::route('video', 0, str_repeat('a', 64), 'Video', 'mihomo', 'socks5');
 $profiles = ['base' => $base, 'video' => $proxy];
 $routed = ['id' => 'video', 'profile' => 'video', 'domains' => ['video.example.net']];
 $bypass = ['id' => 'direct', 'profile' => SmartRouting::BYPASS, 'domains' => ['example.net']];
 $lists = ['video' => $routed, 'direct' => $bypass];
 $wan = ['9.9.9.9@192.0.2.9'];
-$makePlan = static fn (array $settings, array $assignments = [], bool $fallback = false): array =>
-    $plan->invoke(null, $settings, 'blankvpn.home.arpa', '192.0.2.1', $assignments, $profiles, $lists, $wan, $fallback, false);
+$serviceRoute = Policy::marker('service', 'video:lan');
+$serviceGuard = Policy::marker('service_guard', 'video:lan');
+$scope = Policy::marker('combined_scope', 'lan');
+$tag = Policy::marker('smart', 'lan');
+$liveRules = [
+    $scope => ['tag' => $tag],
+    $serviceRoute => ['action' => 'pass', 'table' => SmartRouting::table($routed),
+        'gateway' => $proxy['interface'], 'tagged' => $tag],
+    $serviceGuard => ['action' => 'block', 'table' => SmartRouting::table($routed), 'tagged' => $tag],
+];
+$makePlan = static fn (
+    array $settings, array $assignments = [], bool $fallback = false, ?array $savedLists = null, ?array $loaded = null
+): array => $plan->invoke(null, $settings, 'blankvpn.home.arpa', '192.0.2.1', $assignments,
+    $profiles, $savedLists ?? $lists, $wan, $fallback, false, $loaded ?? $liveRules);
 
 $combinedPort = Resolver::protectedCombinedPort($base);
 $protectedPort = Resolver::protectedPort($base);
@@ -59,7 +71,44 @@ checkDnsPlan(str_contains($wholeCombined[$protectedMulti],
 checkDnsPlan(str_contains($wholeCombined[Resolver::LOCAL_PORT], "\nlisten-address=127.0.0.1,::1\n") &&
     str_contains($wholeCombined[Resolver::LOCAL_PORT], "\nlog-async=16\n") &&
     !str_contains($wholeCombined[Resolver::LOCAL_PORT], "\nserver="),
-    'During an outage the local-only resolver accepts both address families with no upstream.');
+    'The local-only resolver accepts both address families without a public upstream.');
+
+$downList = ['id' => 'down', 'profile' => 'stopped', 'domains' => ['stopped.example.org', '198.18.0.2/32']];
+$downLists = $lists + ['down' => $downList];
+$partial = $makePlan($settings, savedLists: $downLists);
+checkDnsPlan(str_contains($partial[$combinedPort], "\nserver=10.64.0.1@10.64.0.9\n") &&
+    str_contains($partial[$combinedPort], "\nserver=/video.example.net/127.0.0.1#{$protectedMulti}\n") &&
+    str_contains($partial[$protectedMulti], "\nserver=/video.example.net/127.0.0.1#{$proxy['proxyDns']}\n") &&
+    str_contains($partial[$combinedPort], "\nlocal=/stopped.example.org/\n") &&
+    str_contains($partial[$protectedMulti], "\nlocal=/stopped.example.org/\n"),
+    'A failed service is kept local while other suffixes and the base still use their assigned DNS.');
+$noServices = $makePlan($settings, savedLists: []);
+checkDnsPlan(str_contains($noServices[$combinedPort], "\nserver=10.64.0.1@10.64.0.9\n") &&
+    !preg_match('/^server=/m', $noServices[$protectedMulti]),
+    'Combined routing with no override lists still uses the selected base DNS.');
+$guardMissing = $makePlan($settings, loaded: array_diff_key($liveRules, [$serviceGuard => true]));
+$scopeMissing = $makePlan($settings, loaded: array_diff_key($liveRules, [$scope => true]));
+$incorrectGateway = $liveRules;
+$incorrectGateway[$serviceRoute]['gateway'] = 'igc0';
+$wrongTable = $liveRules;
+$wrongTable[$serviceGuard]['table'] = 'bvs_stale';
+foreach ([$guardMissing, $scopeMissing, $makePlan($settings, loaded: $incorrectGateway),
+    $makePlan($settings, loaded: $wrongTable)] as $badRules) {
+    checkDnsPlan(str_contains($badRules[$combinedPort], "\nlocal=/video.example.net/\n") &&
+        !str_contains($badRules[$combinedPort], "\nserver=/video.example.net/") &&
+        !str_contains($badRules[$protectedMulti], "\nserver=/video.example.net/"),
+        'Protected service DNS needs a live pass through its selected tunnel with the matching fallback guard.');
+}
+$mixed = $routed;
+$mixed['domains'][] = '198.18.0.3/32';
+$mixedRules = [
+    $scope => $liveRules[$scope],
+    Policy::marker('service_dns', 'video:lan') => $liveRules[$serviceRoute],
+    Policy::marker('service_dns_guard', 'video:lan') => $liveRules[$serviceGuard],
+];
+$mixedPlan = $makePlan($settings, savedLists: ['video' => $mixed], loaded: $mixedRules);
+checkDnsPlan(str_contains($mixedPlan[$combinedPort], "\nserver=/video.example.net/127.0.0.1#{$protectedMulti}\n"),
+    'Mixed service lists use the same live learned-destination protection as domain-only lists.');
 
 $wholeMulti = $makePlan(array_replace($settings, ['networkMode' => 'multi']));
 checkDnsPlan(isset($wholeMulti[$protectedMulti]) && !isset($wholeMulti[SmartRouting::PORT]) &&

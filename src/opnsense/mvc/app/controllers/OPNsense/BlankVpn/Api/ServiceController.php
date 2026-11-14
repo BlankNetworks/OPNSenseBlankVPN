@@ -198,14 +198,17 @@ class ServiceController extends ApiControllerBase
             if ($settings['enabled'] && $settings['coverage'] === 'network') {
                 foreach ($routing['interfaces'] as $interface) {
                     $id = 'network:' . $interface;
-                    $base = $loaded[Policy::marker('device', $id)]['gateway'] ?? null;
+                    $rule = $loaded[Policy::marker('device', $id)] ?? [];
+                    $base = ($rule['action'] ?? '') === 'pass' ? ($rule['gateway'] ?? null) : null;
                     $fallback = ($loaded[Policy::marker('wan_fallback', $id . ':inet')]['action'] ?? '') === 'pass';
                     $settings['networkRouting'][$interface] = [
                         'gateway' => $base,
                         'wanFallback' => $fallback,
+                        'statusKnown' => $loaded !== null,
                         'outage' => ($loaded[Policy::marker('kill_outage', $id . ':inet')]['action'] ?? '') === 'block',
                         'blocked' => ($loaded[Policy::marker('kill', $id)]['action'] ?? null) === 'block'
-                            && $settings['networkMode'] !== 'multi' && $base === null && !$fallback
+                            && $settings['networkMode'] !== 'multi' && $base === null && !$fallback,
+                        'blockedServices' => 0
                     ];
                 }
             }
@@ -240,12 +243,28 @@ class ServiceController extends ApiControllerBase
                 }
                 foreach ($routing['smartInterfaces'] as $interface) {
                     $key = $id . ':' . $interface;
-                    $guard = ($loaded[Policy::marker('service_guard', $key)]['action'] ?? '') === 'block';
+                    $scope = $loaded[Policy::marker('combined_scope', $interface)] ??
+                        $loaded[Policy::marker('smart_scope', $interface)] ?? [];
+                    $baseOutage = $settings['networkRouting'][$interface]['outage'] ?? false;
+                    if (($scope['action'] ?? '') !== 'match' && !$baseOutage) {
+                        continue;
+                    }
+                    $pass = $loaded[Policy::marker('service', $key)] ?? [];
+                    $dnsPass = $loaded[Policy::marker('service_dns', $key)] ?? [];
+                    $gateway = ($pass['action'] ?? '') === 'pass' ? ($pass['gateway'] ?? null) : null;
+                    if (($dnsPass['action'] ?? '') === 'pass') {
+                        $gateway ??= $dnsPass['gateway'] ?? null;
+                    }
+                    $guard = ($loaded[Policy::marker('service_guard', $key)]['action'] ?? '') === 'block' ||
+                        ($loaded[Policy::marker('service_dns_guard', $key)]['action'] ?? '') === 'block';
                     $service['routing'][$interface] = [
-                        'gateway' => $loaded[Policy::marker('service', $key)]['gateway'] ??
-                            $loaded[Policy::marker('service_dns', $key)]['gateway'] ?? null,
-                        'guard' => $guard || ($loaded[Policy::marker('service_dns_guard', $key)]['action'] ?? '') === 'block'
+                        'gateway' => $gateway,
+                        'guard' => $guard,
+                        'baseOutage' => $baseOutage
                     ];
+                    if (!$baseOutage && $guard && $gateway === null && isset($settings['networkRouting'][$interface])) {
+                        $settings['networkRouting'][$interface]['blockedServices']++;
+                    }
                 }
             }
             unset($service);
@@ -1730,7 +1749,9 @@ class ServiceController extends ApiControllerBase
                 $key = 'network:' . $interface;
                 if ($protectedNetwork) {
                     if (($loaded[Policy::marker('kill_outage', $key . ':inet')]['action'] ?? '') === 'block') {
-                        $results[$interface] = 'Kill Switch is blocking internet';
+                        $results[$interface] = $wholeCombined
+                            ? 'Base server unavailable. Kill Switch is blocking internet'
+                            : 'Kill Switch is blocking internet';
                         continue;
                     }
                     $port = $wholeCombined ? Resolver::protectedCombinedPort($base) : Resolver::PROTECTED_MULTI_PORT;
@@ -1740,19 +1761,22 @@ class ServiceController extends ApiControllerBase
                 } elseif (isset($protectedDevices[$interface])) {
                     $port = $protectedDevices[$interface];
                 }
-                if ($wholeCombined || $protectedNetwork) {
-                    if (!Firewall::dnsRedirectLoaded($loaded, $nat, $key, $port, 'inet')) {
-                        $results[$interface] = 'Client DNS redirect missing';
-                        continue;
-                    }
-                }
                 $tag = Policy::marker('smart', $interface);
                 $scope = $loaded[Policy::marker('combined_scope', $interface)] ??
                     $loaded[Policy::marker('smart_scope', $interface)] ?? [];
                 if (($route['action'] ?? '') !== 'pass' || ($route['table'] ?? '') !== $table ||
                     ($route['tagged'] ?? '') !== $tag || ($scope['tag'] ?? '') !== $tag ||
                     ($route['gateway'] ?? '') !== ($profile['interface'] ?? '')) {
-                    $results[$interface] = 'Selected tunnel rule unavailable';
+                    $guard = $loaded[Policy::marker($marker . '_guard', $id . ':' . $interface)] ?? [];
+                    $results[$interface] = ($guard['action'] ?? '') === 'block' && ($guard['tagged'] ?? '') === $tag &&
+                        ($guard['table'] ?? '') === $table && ($scope['tag'] ?? '') === $tag
+                        ? 'Selected server unavailable. Matching traffic is blocked'
+                        : 'Selected tunnel rule unavailable';
+                    continue;
+                }
+                if (($wholeCombined || $protectedNetwork) &&
+                    !Firewall::dnsRedirectLoaded($loaded, $nat, $key, $port, 'inet')) {
+                    $results[$interface] = 'Client DNS redirect missing';
                     continue;
                 }
                 if (!isset($answerChecks[$port])) {

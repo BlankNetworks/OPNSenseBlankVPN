@@ -520,6 +520,23 @@
                 ? [entry.device, entry.name].filter(Boolean).join(' · ') : (entry.device || entry.name || id);
         }
 
+        function networkRouteStatus(route, mode) {
+            if (route.statusKnown === false) {
+                return 'Firewall status unavailable';
+            }
+            if (route.outage) {
+                return (mode === 'full_multi' ? 'Base server unavailable · ' : '') + 'Kill Switch blocking internet';
+            }
+            if (route.wanFallback) {
+                return 'Direct internet fallback';
+            }
+            const server = state.profiles.find((profile) => profile.interface === route.gateway);
+            const status = server?.name || route.gateway || (route.blocked ? 'Internet blocked'
+                : usesBaseServer(mode) ? 'Base route unavailable' : mode === 'multi' ? 'Multi-Path' : 'Regular internet');
+            const count = route.blockedServices || 0;
+            return status + (count > 0 ? ' · ' + count + ' Multi-Path ' + (count === 1 ? 'list blocked' : 'lists blocked') : '');
+        }
+
         function renderDeviceRules() {
             const body = byId('device-list');
             const tailnetBody = byId('tailnet-device-list');
@@ -599,12 +616,12 @@
                 const blocked = assignment?.killSwitchActive === true;
                 const paused = assignment?.paused === true;
                 const bypass = assignment?.networkBypass === true;
-                const networkOutage = wholeNetworkApplies && !tailnet && state.settings.networkRouting?.[interfaceId]?.outage === true;
+                const networkRoute = wholeNetworkApplies && !tailnet ? state.settings.networkRouting?.[interfaceId] : null;
                 const waitingForAddress = bindMac && !effectiveIp;
                 const staleReservation = !!(observedIp && device?.reservationIpv4 && device.reservationIpv4 !== observedIp);
                 let status;
-                if (networkOutage) {
-                    status = 'Kill Switch blocking internet';
+                if (networkRoute?.outage) {
+                    status = networkRouteStatus(networkRoute, state.settings.networkMode);
                 } else if (wholeNetwork && bypass) {
                     status = 'Bypass saved';
                     if (bypassApplies && canUseInterface) {
@@ -621,7 +638,7 @@
                         }
                     }
                 } else if (wholeNetwork && !tailnet && canUseInterface && wholeNetworkApplies) {
-                    status = 'Covered by network rule';
+                    status = networkRoute ? networkRouteStatus(networkRoute, state.settings.networkMode) : 'Covered by network rule';
                 } else if (assignment) {
                     status = assignment.mode === 'default' ? 'No individual rule' : paused ? 'Disabled'
                         : wholeNetwork ? 'Individual rule paused' : !state.settings?.enabled
@@ -675,8 +692,15 @@
                 if (bindMac) {
                     ruleDetail.push('Follows MAC address');
                 }
-                cell(row, assignment ? modes[assignment.mode] || 'No rule' : 'No rule', 'Rule',
-                    ruleDetail.filter(Boolean).join(' · '));
+                const networkRule = wholeNetworkApplies && !tailnet && canUseInterface;
+                const bypassActive = networkRule && bypassApplies && assignment?.networkBypassStatus === 'direct' && !savedKillSwitch;
+                const rule = networkRule ? (bypassActive ? 'Bypass VPN' : (modes[state.settings.networkMode] || 'Whole-Network coverage'))
+                    : wholeNetwork ? (assignment && assignment.mode !== 'default' ? 'Individual rule saved' : 'No rule')
+                        : assignment ? modes[assignment.mode] || 'No rule' : 'No rule';
+                const ruleNote = networkRule && !bypassActive && usesBaseServer(state.settings.networkMode)
+                    ? 'Configured server · ' + profileName(state.settings.networkProfile)
+                    : wholeNetwork ? '' : ruleDetail.filter(Boolean).join(' · ');
+                cell(row, rule, 'Rule', ruleNote);
                 const statusDetail = [];
                 if (!tailnet && !canUseInterface) {
                     statusDetail.push('Select this interface in Routing coverage and save.');
@@ -978,11 +1002,11 @@
                             : ' Traffic uses direct internet if the server goes offline.')
                     : 'Add a VPN or proxy server, then select it here.',
                 multi: 'The selected interfaces use your Multi-Path lists. '
-                    + (killSwitch ? 'Only destinations in lists with a VPN or proxy can use the internet. If any required server goes offline, all internet is blocked. Bypass is unavailable while the Kill Switch is on.'
+                    + (killSwitch ? 'Only destinations with a working VPN or proxy can connect. Bypass is unavailable while the Kill Switch is on.'
                         : 'Other traffic uses regular internet.'),
                 full_multi: exit.value
                     ? 'Default traffic uses ' + profileName(exit.value) + '. Matching destinations use their Multi-Path servers. '
-                        + (killSwitch ? 'If the base server or a required Multi-Path server goes offline, all internet is blocked. Bypass is unavailable while the Kill Switch is on.'
+                        + (killSwitch ? 'If a Multi-Path server goes offline, only its destinations are blocked. If the base server goes offline, internet is blocked. Bypass is unavailable while the Kill Switch is on.'
                             : 'Traffic assigned to the base server uses direct internet if it goes offline. Bypass uses direct internet.')
                     : 'Choose a base server for default traffic. Set destination overrides in Multi-Path.',
                 blocked: 'Internet is blocked on the selected LANs and VLANs.',
@@ -993,12 +1017,8 @@
             const saved = state.settings;
             const ipv6Interfaces = list(saved?.killSwitchIpv6Interfaces).map(networkName);
             const unboundInterfaces = list(saved?.killSwitchUnboundInterfaces).map(networkName);
-            const active = Object.entries(saved?.networkRouting || {}).map(([id, route]) => {
-                const server = state.profiles.find((profile) => profile.interface === route.gateway);
-                return networkName(id) + ' · ' + (route.outage ? 'Kill Switch blocking internet'
-                    : server?.name || route.gateway ||
-                        (route.blocked ? 'Internet blocked' : saved.networkMode === 'multi' ? 'Multi-Path' : 'Regular internet'));
-            });
+            const active = Object.entries(saved?.networkRouting || {}).map(([id, route]) =>
+                networkName(id) + ' · ' + networkRouteStatus(route, saved.networkMode));
             const activeCoverage = saved?.networkMode === 'full_multi' ? 'Whole-Network + Multi-Path' : 'Whole-Network coverage';
             const activeKillSwitch = usesBaseServer(saved?.networkMode) || saved?.networkMode === 'multi'
                 ? ' · Kill Switch ' + ((saved.networkKillSwitch ?? saved.networkMode !== 'multi') ? 'on' : 'off') : '';
@@ -1166,9 +1186,11 @@
                     }
                     const isBypass = saved === bypassDestination;
                     const status = Object.entries(service.routing || {}).map(([id, rule]) =>
-                        networkName(id) + ' · ' + (rule.killSwitch ? (isBypass ? 'Bypass paused by Kill Switch' : 'Kill Switch blocking internet')
-                            : rule.bypass ? 'Direct internet' : rule.gateway ||
-                            (rule.guard ? (isBypass ? 'Direct internet unavailable' : 'Tunnel unavailable') : 'Inactive')));
+                        networkName(id) + ' · ' + (rule.baseOutage ? 'Base server unavailable · Internet blocked'
+                            : rule.bypass ? 'Direct internet'
+                                : rule.gateway ? state.profiles.find((profile) => profile.interface === rule.gateway)?.name || rule.gateway
+                                    : rule.guard ? (isBypass ? 'Direct internet unavailable' : 'Selected server unavailable · Matching traffic blocked')
+                                        : 'Inactive'));
                     const fallbackStatus = isBypass && blocked ? 'Internet blocked'
                         : isBypass && networkKillSwitch ? 'Bypass paused by Kill Switch' : 'Inactive';
                     const installedStatus = isBypass && (blocked || networkKillSwitch) ? '' : status.join(' · ');
@@ -1602,8 +1624,9 @@
                 notes.push('Internet is blocked for the assigned addresses. Approved local access follows your firewall rules.');
             }
             if (killSwitch) {
-                notes.push(full ? 'The Kill Switch blocks all internet for this device if its server goes offline.'
-                    : 'The Kill Switch blocks all internet for this device if a required VPN or proxy goes offline.');
+                notes.push(combined ? 'An offline Multi-Path server blocks only its matching destinations. An offline base server blocks internet.'
+                    : full ? 'The Kill Switch blocks internet for this device if its server goes offline.'
+                        : 'If a Multi-Path server goes offline, its matching destinations are blocked.');
                 notes.push('Bypass is unavailable while the Kill Switch is on.');
             } else if (supportsKillSwitch) {
                 notes.push('Bypass uses direct internet when available.');

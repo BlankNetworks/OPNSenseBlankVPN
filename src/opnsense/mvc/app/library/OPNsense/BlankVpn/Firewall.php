@@ -71,11 +71,9 @@ final class Firewall
         $bypass = SmartRouting::bypassServices($settings, $lists);
         $bypassDomains = $bypass !== [] && SmartRouting::hasDomains(array_merge(...array_column($bypass, 'domains')));
         $wan = WanEgress::gateways($firewall);
-        $multiOutage = self::multiPathOutage($firewall, $services, $profiles, $health);
         $rows = Policy::assignments($model);
         $assignments = $settings['coverage'] === 'device' ? Policy::routingAssignments($rows, $diagnostics) : [];
         $deviceBypass = Policy::networkBypassSources($settings, $rows, $diagnostics);
-        $combinedOutage = $services !== [] && $multiOutage;
         $combinedInterfaces = self::combinedInterfaces($assignments);
         $connected = empty($settings['localNetworks']) ? $localNetworks :
             Policy::localNetworks(array_replace($settings, ['localNetworks' => []]));
@@ -96,12 +94,11 @@ final class Firewall
         }
         if ($settings['coverage'] === 'network') {
             self::registerNetworkPolicy(
-                $firewall, $settings, $interfaces, $profiles, $health, $multiOutage, $wan, $bypassDomains, $combinedOutage
+                $firewall, $settings, $interfaces, $profiles, $health, $wan, $bypassDomains
             );
         } else {
             self::registerAssignments(
-                $firewall, $settings, $interfaces, $assignments, $profiles, $health, $diagnostics, $multiOutage,
-                $bypassDomains, $combinedOutage
+                $firewall, $settings, $interfaces, $assignments, $profiles, $health, $diagnostics, $bypassDomains
             );
         }
 
@@ -197,10 +194,8 @@ final class Firewall
         array $interfaces,
         array $profiles,
         array $health,
-        bool $multiOutage = false,
         array $wan = [],
-        bool $bypassDomains = false,
-        bool $combinedOutage = false
+        bool $bypassDomains = false
     ): void {
         $mode = $settings['networkMode'];
         $killSwitch = $settings['networkKillSwitch'] ?? Policy::usesBase($mode);
@@ -216,7 +211,7 @@ final class Firewall
             $id = 'network:' . $interface;
             $fallback = !$killSwitch && $profile === null ? $wan : [];
             if ($mode === 'full_multi') {
-                if ($killSwitch && ($profile === null || $combinedOutage)) {
+                if ($killSwitch && $profile === null) {
                     self::registerProtectedPolicy($firewall, $id, $interface, 'any', 'any', true);
                 } else {
                     self::registerCombinedPolicy($firewall, $id, $interface, 'any', 'any', $base, $profile,
@@ -225,7 +220,7 @@ final class Firewall
                 continue;
             }
             if ($mode === 'multi') {
-                self::registerProtectedPolicy($firewall, $id, $interface, 'any', 'any', $multiOutage,
+                self::registerProtectedPolicy($firewall, $id, $interface, 'any', 'any', false,
                     Resolver::PROTECTED_MULTI_PORT);
                 continue;
             }
@@ -480,9 +475,7 @@ final class Firewall
         array $profiles,
         array $health,
         Diagnostics $diagnostics,
-        bool $multiOutage = false,
-        bool $bypassDomains = false,
-        bool $combinedOutage = false
+        bool $bypassDomains = false
     ): void {
         foreach ($assignments as $id => $row) {
             $interface = $row['interface'];
@@ -512,7 +505,7 @@ final class Firewall
             if ($mode === 'full_multi') {
                 $base = $profiles[$row['profile']] ?? [];
                 $selected = $reserved ? self::selectProfile($firewall, $base, [], $health) : null;
-                if ($selected === null || $combinedOutage) {
+                if ($selected === null) {
                     self::registerProtectedPolicy($firewall, $id, $interface, $ip, $ipv6, true);
                     continue;
                 }
@@ -524,7 +517,7 @@ final class Firewall
             }
             if ($mode === 'multi') {
                 if ($killSwitch) {
-                    $outage = $multiOutage || !$reserved || !in_array($interface, $settings['smartInterfaces'], true);
+                    $outage = !$reserved || !in_array($interface, $settings['smartInterfaces'], true);
                     self::registerProtectedPolicy($firewall, $id, $interface, $ip, $ipv6, $outage,
                         Resolver::PROTECTED_MULTI_PORT);
                 }
@@ -705,23 +698,6 @@ final class Firewall
         }
     }
 
-    private static function multiPathOutage(Plugin $firewall, array $services, array $profiles, array $health): bool
-    {
-        if ($services === []) {
-            return true;
-        }
-        foreach (array_unique(array_column($services, 'profile')) as $id) {
-            $profile = $profiles[$id] ?? [];
-            $checked = $health[$id] ?? [];
-            $maxAge = ($profile['kind'] ?? '') === 'proxy' ? 300 : 180;
-            if (empty($checked['probeSucceeded']) || time() - ($checked['checkedAt'] ?? 0) > $maxAge ||
-                self::selectProfile($firewall, $profile, [], $health) === null) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static function registerGuard(
         Plugin $firewall,
         string $id,
@@ -769,7 +745,9 @@ final class Firewall
         bool $bypassDomains = false
     ): void {
         $combinedInterfaces = self::combinedInterfaces($assignments);
-        $combinedNetwork = ($settings['coverage'] ?? '') === 'network' && $settings['networkMode'] === 'full_multi';
+        $network = ($settings['coverage'] ?? '') === 'network';
+        $protectedMultiNetwork = $network && $settings['networkMode'] === 'multi' && !empty($settings['networkKillSwitch']);
+        $connectedOnlyNetwork = ($network && $settings['networkMode'] === 'full_multi') || $protectedMultiNetwork;
         $routes = [];
         $hasDomains = $bypassDomains;
         foreach (array_values($services) as $index => $service) {
@@ -800,8 +778,8 @@ final class Firewall
             $assignedOnly = $strict || !empty($settings['smartAssignedOnly']) ||
                 in_array($interface, $settings['deviceMultiInterfaces'] ?? [], true);
             $sources = [];
-            $combinedSources = [];
-            if ($hasDomains && !$assignedOnly && !$combinedNetwork) {
+            $connectedOnlySources = [];
+            if ($hasDomains && !$assignedOnly && !$connectedOnlyNetwork) {
                 foreach (['inet', 'inet6'] as $family) {
                     self::redirectDns($firewall, $interface, 'any', SmartRouting::PORT, $interface, 64, true, $family);
                 }
@@ -814,17 +792,17 @@ final class Firewall
                 $included = Policy::usesMultiPath($mode) && (!$strict || $mode === 'full_multi') &&
                     $row['ip'] !== '' && $diagnostics !== null &&
                     self::hasAssignmentIdentity($settings, $row, $diagnostics);
-                $combined = $mode === 'full_multi';
-                if (!$combined && ($assignedOnly ? !$included : ($included || $mode === 'default'))) {
+                $connectedOnly = $mode === 'full_multi' || ($mode === 'multi' && Policy::killSwitch($row));
+                if (!$connectedOnly && ($assignedOnly ? !$included : ($included || $mode === 'default'))) {
                     continue;
                 }
                 foreach (['inet' => $row['ip'], 'inet6' => $row['ipv6'] ?? ''] as $family => $source) {
                     if (!filter_var($source, FILTER_VALIDATE_IP, $family === 'inet' ? FILTER_FLAG_IPV4 : FILTER_FLAG_IPV6)) {
                         continue;
                     }
-                    if ($combined) {
+                    if ($connectedOnly) {
                         if ($included) {
-                            $combinedSources[] = $source;
+                            $connectedOnlySources[] = $source;
                         }
                         if (!$assignedOnly) {
                             // Keep these sources out of the ordinary Multi-Path destination exceptions.
@@ -833,18 +811,18 @@ final class Firewall
                     } else {
                         $sources[] = $source;
                     }
-                    if ($hasDomains && !$combined && $assignedOnly && $mode === 'multi') {
+                    if ($hasDomains && !$connectedOnly && $assignedOnly && $mode === 'multi') {
                         self::redirectDns($firewall, $interface, $source, SmartRouting::PORT, $id, 64, false, $family);
                     } elseif (Policy::assignmentPaused($row) || ($row['ip'] === '' && $mode === 'disabled')) {
                         self::bypassSmartDns($firewall, $interface, $source, $family);
                     }
                 }
             }
-            if ($routes !== [] && !$combinedNetwork && (!$assignedOnly || $sources !== [])) {
+            if ($routes !== [] && !$connectedOnlyNetwork && (!$assignedOnly || $sources !== [])) {
                 self::registerSmartScope($firewall, $interface, $tag, Policy::LOCAL_TABLE, $sources, !$assignedOnly);
             }
-            if ($routes !== [] && ($combinedNetwork || $combinedSources !== [])) {
-                self::registerSmartScope($firewall, $interface, $tag, Policy::COMBINED_LOCAL_TABLE, $combinedSources, false);
+            if ($routes !== [] && ($connectedOnlyNetwork || $connectedOnlySources !== [])) {
+                self::registerSmartScope($firewall, $interface, $tag, Policy::COMBINED_LOCAL_TABLE, $connectedOnlySources, false);
             }
             foreach ($routes as [$id, $table, $profile, $priority, $marker]) {
                 $id .= ':' . $interface;
@@ -1024,14 +1002,16 @@ final class Firewall
         array $backup,
         array $health
     ): ?array {
-        if (
-            self::gatewayAvailable($firewall, $primary) &&
-            ($health[$primary['id']]['reachable'] ?? true)
-        ) {
-            return $primary;
-        }
-        if (self::gatewayAvailable($firewall, $backup) && ($health[$backup['id']]['reachable'] ?? true)) {
-            return $backup;
+        foreach ([$primary, $backup] as $profile) {
+            if (!self::gatewayAvailable($firewall, $profile)) {
+                continue;
+            }
+            $checked = $health[$profile['id']] ?? [];
+            if (($checked['reachable'] ?? true) ||
+                (($profile['kind'] ?? '') === 'native' && isset($checked['source']) &&
+                    $checked['source'] !== ($profile['address'] ?? ''))) {
+                return $profile;
+            }
         }
         return null;
     }
@@ -1118,7 +1098,8 @@ final class Firewall
             $rules[$match[1]] = [
                 'gateway' => $gateway[1] ?? null, 'action' => $action[1] ?? null, 'source' => $source[1] ?? null,
                 'table' => $table[1] ?? null, 'port' => isset($port[1]) ? (int)$port[1] : null,
-                'tagged' => $tagged[1] ?? null, 'tag' => $tag[1] ?? null
+                'tagged' => $tagged[1] ?? null, 'tag' => $tag[1] ?? null,
+                'quick' => preg_match('/^.+?\bquick\s+(?:on|inet|inet6|proto|from|all)\b/', $line) === 1
             ];
         }
         return $rules;
@@ -1173,6 +1154,30 @@ final class Firewall
             !preg_match('/^(?:wg[0-9]+|ovpnc[0-9]+|tun20[0-7])$/D', $rule['gateway'] ?? '') ||
             ($rule['tag'] ?? '') !== self::VPN_EGRESS_TAG)) {
             throw new \RuntimeException('A protected route is not pinned to a VPN or proxy interface.');
+        }
+    }
+
+    private static function verifyServicePath(
+        array $loaded,
+        array $order,
+        string $kind,
+        string $route,
+        string $scope,
+        string $table
+    ): void
+    {
+        $marker = Policy::marker($kind, $route);
+        $guardMarker = Policy::marker($kind . '_guard', $route);
+        $guard = $loaded[$guardMarker] ?? [];
+        if (($guard['action'] ?? '') !== 'block' || empty($guard['quick']) ||
+            ($guard['tagged'] ?? '') !== $scope || ($guard['table'] ?? '') !== $table) {
+            throw new \RuntimeException('A Multi-Path destination guard is missing or has the wrong scope.');
+        }
+        self::verifyTunnelPass($loaded, $marker);
+        $pass = $loaded[$marker] ?? [];
+        if ($pass !== [] && (empty($pass['quick']) || ($pass['tagged'] ?? '') !== $scope ||
+            ($pass['table'] ?? '') !== $table || $order[$marker] >= $order[$guardMarker])) {
+            throw new \RuntimeException('A Multi-Path tunnel rule does not precede its destination guard.');
         }
     }
 
@@ -1320,24 +1325,24 @@ final class Firewall
         }
 
         $combinedInterfaces = self::combinedInterfaces($assignments);
+        $loadedOrder = array_flip(array_keys($loaded));
         foreach ($services as $id => $service) {
+            $hasDomains = SmartRouting::hasDomains($service['domains']);
+            $hasAddresses = SmartRouting::addressEntries($service['domains']) !== [];
             foreach ($settings['smartInterfaces'] as $interface) {
                 if (in_array($interface, $settings['strictInterfaces'], true) &&
                     !isset($combinedInterfaces[$interface])) {
                     continue;
                 }
                 $rule = $id . ':' . $interface;
-                $marker = Policy::marker('service_guard', $rule);
-                $mixed = SmartRouting::hasDomains($service['domains']) &&
-                    SmartRouting::addressEntries($service['domains']) !== [];
-                $dnsGuard = Policy::marker('service_dns_guard', $rule);
-                self::verifyTunnelPass($loaded, Policy::marker('service', $rule));
-                if ($mixed) {
-                    self::verifyTunnelPass($loaded, Policy::marker('service_dns', $rule));
+                $scope = Policy::marker('smart', $interface);
+                if ($hasAddresses) {
+                    self::verifyServicePath($loaded, $loadedOrder, 'service', $rule,
+                        $scope, SmartRouting::addressTable($service));
                 }
-                if (($loaded[$marker]['action'] ?? '') !== 'block' ||
-                    ($mixed && ($loaded[$dnsGuard]['action'] ?? '') !== 'block')) {
-                    throw new \RuntimeException('A Multi-Path destination guard is missing.');
+                if ($hasDomains) {
+                    self::verifyServicePath($loaded, $loadedOrder, $hasAddresses ? 'service_dns' : 'service', $rule,
+                        $scope, SmartRouting::table($service));
                 }
             }
         }

@@ -50,3 +50,10 @@
 - Enabling protection or detecting an outage invalidates affected PF sessions. Unconfirmed device bindings temporarily block public IPv4 on their LAN or VLAN. LAN device rules with a Kill Switch also block public IPv6 on that interface, including temporary addresses.
 - Background proxy restarts use bounded retry delays. Healthy workers are kept running, unused tunnels are skipped by routine probes, and idle subscription checks avoid loading the catalog. Failed subscription refreshes retain the last good servers.
 - Obsolete firewall table files are cleaned up, and the Mihomo on-disk proxy cache is disabled. Upgrading restarts assigned proxy workers once to apply the cache setting.
+
+## 0.8.22
+
+- Fixed a 0.8.21 regression that blocked Whole-Network + Multi-Path when an override lacked a successful health check. Ordinary traffic and DNS keep using a healthy base. Unavailable overrides block their own destinations. The Kill Switch still blocks direct ISP fallback and closes the protected scope when the base fails.
+- A checked Multi-Path rule without a base routes working service lists independently and blocks unmatched destinations.
+- An unavailable health probe preserves the last confirmed tunnel status. A verified failure still closes the affected path, and a successful probe reopens it.
+- The Network dashboard shows the active Whole-Network route for its devices. Saved individual rules are used when individual coverage is selected.

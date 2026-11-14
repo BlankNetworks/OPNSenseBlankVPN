@@ -284,7 +284,8 @@ final class SmartRouting
         array $profiles,
         array $bypassUpstreams = [],
         ?int $forwardPort = null,
-        bool $forwardOnly = false
+        bool $forwardOnly = false,
+        ?array $availableServices = null
     ): array {
         $lines = [];
         $bypassLists = array_filter($services, static fn (array $service): bool =>
@@ -324,6 +325,11 @@ final class SmartRouting
                     }
                 }
                 if (isset($bypassSuffixes[$domain])) {
+                    continue;
+                }
+                if ($availableServices !== null && !isset($availableServices[$service['id']])) {
+                    // A more general upstream must never classify a failed override through the base tunnel.
+                    $lines[] = "local=/{$domain}/";
                     continue;
                 }
                 if ($forwardPort !== null) {

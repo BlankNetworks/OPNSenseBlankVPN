@@ -77,7 +77,9 @@ window.jQuery.ajax = async (request) => {
         }
     }
     if (action === 'testServiceRoute') {
-        return {ok:true, host:'www.youtube.com', results:{lan:'DNS and firewall match New York'}};
+        return data.id === 'unavailable-demo'
+            ? {ok:true, host:'www.example.net', results:{lan:'Selected server unavailable. Matching traffic is blocked'}}
+            : {ok:true, host:'www.youtube.com', results:{lan:'DNS and firewall match New York'}};
     }
     if (action === 'account') {
         reply.dashboard.mullvadSignedIn = true;
@@ -800,8 +802,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('mode').dispatchEvent(new Event('change'));
     bv('device-kill').click();
     assert(bv('route-note').textContent.includes('Other internet traffic is blocked.') &&
-        bv('route-note').textContent.includes('blocks all internet for this device if a required VPN or proxy goes offline'),
-        'A checked Multi-Path device must explain that unmatched traffic and all internet during an outage are blocked.');
+        bv('route-note').textContent.includes('its matching destinations are blocked'),
+        'A checked Multi-Path device must explain that unmatched traffic and destinations on a failed route are blocked.');
     bv('device-kill').click();
     bv('mode').value = 'full_multi';
     bv('mode').dispatchEvent(new Event('change'));
@@ -985,11 +987,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('network-kill').checked && reply.dashboard.settings.networkKillSwitch === true &&
         bv('current-routing').textContent.includes('Kill Switch on'),
         'Combined network coverage must allow turning the Kill Switch back on.');
+    reply.dashboard.settings.networkRouting = {lan:{gateway:'tun200', outage:false, statusKnown:true, blockedServices:1}};
     const renderedService = bv('service-list').firstElementChild;
     reply.dashboard.services.push({id:'youtube-demo', name:'YouTube', domains:['youtube.com','googlevideo.com'],
-        profile:'vpn1', routing:{lan:{gateway:'wg1'}}});
+        profile:'vpn1', routing:{lan:{gateway:'wg1'}}},
+    {id:'unavailable-demo', name:'Unavailable route', domains:['example.net'], profile:'vpn1',
+        routing:{lan:{guard:true, gateway:null}}});
     bv('refresh').click();
     await wait();
+    const effectiveRow = bv('device-list').querySelector('[aria-label="Edit Renamed LAN device"]').closest('tr');
+    assert(bv('current-routing').textContent.includes('Chicago proxy · 1 Multi-Path list blocked') &&
+        bv('coverage-note').textContent.includes('only its destinations are blocked') &&
+        effectiveRow.cells[3].textContent.includes('Configured server · Chicago proxy') &&
+        !effectiveRow.cells[3].textContent.includes('On Demand') &&
+        !bv('current-routing').textContent.includes('Kill Switch blocking internet'),
+        'A healthy base stays visible and the device row must show the effective network policy while an override is blocked.');
     assert(bv('service-list').firstElementChild === renderedService &&
         !bv('service-list').textContent.includes('YouTube'), 'Refresh must defer rendering the hidden Multi-Path panel.');
     document.querySelector('[data-bv-section="smart"]').click();
@@ -1001,7 +1013,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'testServiceRoute' && x.data.id === 'youtube-demo') &&
         youtubeRow.textContent.includes('www.youtube.com') && youtubeRow.textContent.includes('DNS and firewall match New York'),
         'The Multi-Path test must show its hostname and result in the service row.');
-    reply.dashboard.services.pop();
+    const downRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('Unavailable route'));
+    assert(downRow.cells[2].textContent.includes('Selected server unavailable · Matching traffic blocked') &&
+        !youtubeRow.cells[2].textContent.includes('Matching traffic blocked'),
+        'A failed override should only change the status for its matching service.');
+    downRow.querySelector('[aria-label="Test route for Unavailable route"]').click();
+    await wait();
+    assert(downRow.textContent.includes('Selected server unavailable. Matching traffic is blocked'),
+        'The route test should display service-specific blocking in the failed route row.');
+    reply.dashboard.settings.networkRouting.lan = {gateway:null, outage:true, statusKnown:true, blockedServices:0};
+    reply.dashboard.services.find(service => service.id === 'youtube-demo').routing.lan.baseOutage = true;
+    bv('refresh').click();
+    await wait();
+    assert(bv('current-routing').textContent.includes('Base server unavailable · Kill Switch blocking internet') &&
+        [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('YouTube')).cells[2].textContent
+            .includes('Base server unavailable · Internet blocked'),
+        'A base outage must explain the network-wide Kill Switch even if the override pass is still installed.');
+    delete reply.dashboard.settings.networkRouting;
+    reply.dashboard.services = reply.dashboard.services.filter(service => !['youtube-demo', 'unavailable-demo'].includes(service.id));
     reply.dashboard.services.push({id:'bypass-demo', name:'Direct test', domains:['example.net'], profile:'bypass',
         routing:{lan:{bypass:true}, opt1:{bypass:false, guard:true}}});
     bv('refresh').click();

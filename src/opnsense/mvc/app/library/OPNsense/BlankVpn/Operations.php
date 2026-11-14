@@ -202,17 +202,38 @@ final class Operations
         }
         $assignments = $settings['coverage'] === 'device'
             ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
-        $recovering = ($previous['reachable'] ?? true) === false;
-        $maxAge = ($route['kind'] ?? '') === 'proxy' ? 300 : 180;
-        $services = SmartRouting::forwardServices($settings, SmartRouting::services($model));
-        $clearOutage = in_array($id, self::killSwitchProbeExits($settings, $assignments, $services), true) &&
-            (empty($previous['probeSucceeded']) || time() - ($previous['checkedAt'] ?? 0) > $maxAge);
-        if ($recovering || $clearOutage || self::pathReloadPending()) {
+        if (($previous['reachable'] ?? true) === false || self::pathReloadPending()) {
             $before = Firewall::loadedRules() ?? [];
             self::reloadRoutingPaths($model, $settings, $assignments, $before, health: $health);
         } else {
             Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
         }
+    }
+
+    public static function probeObservation(array $prior, array $profile, ?bool $observed, bool $protected, int $now): array
+    {
+        $source = ($profile['kind'] ?? '') === 'native' ? $profile['address'] : null;
+        $changedSource = $source !== null && ($prior['source'] ?? '') !== $source;
+        if ($changedSource) {
+            $prior = ['source' => $source];
+        }
+        if ($observed === null) {
+            return ['health' => $prior, 'reload' => $changedSource, 'failed' => false];
+        }
+        $wasReachable = $prior['reachable'] ?? true;
+        $failures = $observed ? 0 : min(2, ($prior['failures'] ?? 0) + 1);
+        $reachable = $observed || (!$protected && $wasReachable && $failures < 2);
+        $health = [
+            'reachable' => $reachable, 'failures' => $failures, 'checkedAt' => $now, 'probeSucceeded' => $observed
+        ];
+        if ($source !== null) {
+            $health['source'] = $source;
+        }
+        return [
+            'health' => $health,
+            'reload' => $changedSource || $wasReachable !== $reachable,
+            'failed' => $protected && $wasReachable && !$reachable
+        ];
     }
 
     public static function killSwitchProbeExits(array $settings, array $assignments, array $services): array
