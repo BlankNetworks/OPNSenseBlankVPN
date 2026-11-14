@@ -6,7 +6,7 @@
 | --- | --- |
 | OPNsense 26.7 platform and upstream contracts | Reviewed stable/26.7 native WireGuard, gateways, firewall plugin API, configuration locking, diagnostics, ACLs and resolver integration. |
 | Mullvad integration references | Reviewed Mullvad’s published WireGuard tools and device API source. |
-| Dashboard browser fixture | Passed at 390 × 844 and 1280 × 900 with controlled API responses. Covered input escaping, assignment and retarget requests, read-only controls, connections, counters, account and relay rendering, the Netflix preset, service submission, Multi-Path settings, and the proxy import and individual exit controls. |
+| Dashboard browser fixture | Passed at 390 × 844 and 1280 × 900 with controlled API responses. Covered input escaping, assignment and retarget requests, read-only controls, connections, counters, account and relay rendering, the Netflix preset, service submission, Multi-Path settings, the proxy import and individual exit controls, MAC and On Demand options, signed-update controls, and routing backup and restore. |
 | PHP and XML source | PHP parsed with Tree-sitter. The repository checks workflow runs the PHP fixtures on an Ubuntu runner. MVC, menu and ACL XML parsed. JavaScript syntax checked with Node. |
 | Package archives | The release workflow checks the ABI and checksums for both FreeBSD architectures, opens each package with native pkg in a FreeBSD 15.1 guest, and runs the bundled core version commands. |
 | Router access | Read-only SSH was blocked by the development environment. No router changes or Mullvad account changes were made. |
@@ -30,9 +30,13 @@ A passing lab should confirm all of the following on the exact CE 26.7 build. Us
 | Failure and recovery | Test tunnel unavailable at startup, loss after use, no egress with a recent handshake, an explicit backup, explicit WAN fallback, reboot, and stopped discovery. Observe the WAN for unexpected client traffic. |
 | Identity and state handling | Change or remove the reservation and confirm the old assignment cannot reclassify a new client. Test apply-to-new and Switch now during simultaneous local and internet sessions. |
 | Configuration lifecycle | Force apply failure and confirm rollback. Test concurrent administration changes, reboot, upgrade, disable, and guarded removal. |
+| On Demand LAN and Tailscale | Create one-server rules with On Demand and Kill Switch together. Send the first request after idle and reboot. Verify egress through the assigned server, including when the Tailscale peer was offline. Stop the tunnel and check that no WAN traffic escapes. Test a shared exit and an existing Multi-Path rule. |
+| MAC reservation movement | Change the OPNsense DHCP reservation, renew the test client, and verify routing at the new IPv4 and removal of states at the old one. Assign the original IP to another device, then test conflicting DHCP and ARP claims. |
+| Signed package upgrade | Enable the signed repository in System Settings. Confirm Blank VPN appears in OPNsense Firmware and can upgrade from the previous release without modifying other packages. Exercise WebGUI reconnection, retained credentials and package-lock refusal. |
+| Routing backup and restore | Export routing settings, change a rule, disable routing, preview the file and restore. Confirm the saved rules return, existing tunnels remain present and routing stays disabled. Reject an edited or different-router file. |
 | Provider behavior | Test a real Mullvad exit, cache expiry or API outage, account expiry and full slots. Confirm that changing an unassigned profile preserves its registered device. |
 
-There was no matching OPNsense guest or FreeBSD pkg executable on the development host. Installation and data-plane behavior on physical OPNsense routers, including the NanoPi, still need lab verification. Test real Netflix playback separately because service-side VPN restrictions are independent of correct routing.
+There was no matching OPNsense guest on the development host. Installation and data-plane behavior on physical OPNsense routers, including the NanoPi, still need lab verification. Test real Netflix playback separately because service-side VPN restrictions are independent of correct routing.
 
 ## Provider and subscription checks
 

@@ -69,7 +69,7 @@ final class Firewall
                 $bypass && $services !== [] ? SmartRouting::bypassTable($services) : ''
             );
         } else {
-            $assignments = Policy::assignments($model);
+            $assignments = Policy::routingAssignments(Policy::assignments($model), $diagnostics);
             self::registerAssignments(
                 $firewall, $settings, $interfaces, $assignments, $profiles, $health, $diagnostics, $multiOutage
             );
@@ -175,7 +175,7 @@ final class Firewall
             $ip = $row['ip'];
             if (
                 Policy::assignmentPaused($row) || !in_array($interface, $settings['interfaces'], true) ||
-                empty($interfaces[$interface]['if']) || !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+                empty($interfaces[$interface]['if'])
             ) {
                 continue;
             }
@@ -183,11 +183,19 @@ final class Firewall
             $strict = in_array($interface, $settings['strictInterfaces'], true);
             $mode = Policy::mode($row);
             $ipv6 = filter_var($row['ipv6'] ?? '', FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ?: '';
+            $killSwitch = Policy::killSwitch($row);
+            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                $blockIpv6 = $killSwitch || $mode === 'blocked' ||
+                    ($mode === 'full' && $row['profile'] !== '' && $row['failure'] !== 'wan');
+                if (Policy::bindsMac($row) && $blockIpv6) {
+                    self::registerOutageGuard($firewall, $id, $interface, '', $ipv6);
+                }
+                continue;
+            }
             $reserved = self::hasAssignmentIdentity($settings, $row, $diagnostics);
             if ($reserved && $interface === Policy::TAILSCALE_DEVICE && $mode !== 'blocked') {
                 self::registerTailnetInternet($firewall, $id, $ip, $ipv6);
             }
-            $killSwitch = Policy::killSwitch($row);
             if ($mode === 'multi') {
                 if ($killSwitch && ($multiOutage || !$reserved ||
                     !in_array($interface, $settings['smartInterfaces'], true))) {
@@ -383,7 +391,7 @@ final class Firewall
                     continue;
                 }
                 $mode = Policy::assignmentPaused($row) ? 'disabled' : Policy::mode($row);
-                $included = $mode === 'multi' && $diagnostics !== null &&
+                $included = $mode === 'multi' && $row['ip'] !== '' && $diagnostics !== null &&
                     self::hasAssignmentIdentity($settings, $row, $diagnostics);
                 if ($assignedOnly ? !$included : ($included || $mode === 'default')) {
                     continue;
@@ -395,7 +403,7 @@ final class Firewall
                     $sources[] = $source;
                     if ($assignedOnly) {
                         self::redirectDns($firewall, $interface, $source, SmartRouting::PORT, $id, 64, false, $family);
-                    } elseif (Policy::assignmentPaused($row)) {
+                    } elseif (Policy::assignmentPaused($row) || ($row['ip'] === '' && $mode === 'disabled')) {
                         self::bypassSmartDns($firewall, $interface, $source, $family);
                     }
                 }
@@ -657,12 +665,22 @@ final class Firewall
         if (!$settings['enabled']) {
             return;
         }
-        $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model, true) : [];
+        $assignments = $settings['coverage'] === 'device'
+            ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
         foreach ($assignments as $id => $row) {
             $mode = Policy::mode($row);
-            if (($mode === 'blocked' || ($mode === 'full' && $row['failure'] !== 'wan')) &&
-                (($loaded[Policy::marker('kill', $id)]['action'] ?? '') !== 'block' ||
-                (!empty($row['ipv6']) && ($loaded[Policy::marker('kill_v6', $id)]['action'] ?? '') !== 'block'))) {
+            $guard = $loaded[Policy::marker('kill', $id)] ?? [];
+            $ipv6Guard = $loaded[Policy::marker('kill_v6', $id)] ?? [];
+            $pass = $loaded[Policy::marker('device', $id)] ?? [];
+            if (Policy::bindsMac($row) &&
+                (($pass !== [] && ($pass['source'] ?? '') !== $row['ip']) ||
+                    ($guard !== [] && ($guard['source'] ?? '') !== $row['ip']))) {
+                throw new \RuntimeException('A MAC-bound rule still uses its previous IPv4 address.');
+            }
+            $failClosed = $mode === 'blocked' || ($mode === 'full' && $row['failure'] !== 'wan');
+            $expectIpv6 = $failClosed || ($row['ip'] === '' && Policy::bindsMac($row) && Policy::killSwitch($row));
+            if (($row['ip'] !== '' && $failClosed && ($guard['action'] ?? '') !== 'block') ||
+                (!empty($row['ipv6']) && $expectIpv6 && ($ipv6Guard['action'] ?? '') !== 'block')) {
                 throw new \RuntimeException('A per-IP fail-closed firewall guard is missing.');
             }
         }

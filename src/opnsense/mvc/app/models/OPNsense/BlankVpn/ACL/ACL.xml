@@ -21,4 +21,16 @@
             <pattern>api/blankvpn/core/*</pattern>
         </patterns>
     </page-blankvpn-cores>
+    <page-blankvpn-backup>
+        <name>VPN: Blank VPN: Back up and restore routing settings</name>
+        <patterns>
+            <pattern>api/blankvpn/backup/*</pattern>
+        </patterns>
+    </page-blankvpn-backup>
+    <page-blankvpn-update>
+        <name>VPN: Blank VPN: Read package update status</name>
+        <patterns>
+            <pattern>api/blankvpn/update/status</pattern>
+        </patterns>
+    </page-blankvpn-update>
 </acl>

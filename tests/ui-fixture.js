@@ -1,6 +1,10 @@
 const requests = [];
 let settingsError = null;
 let exitTestError = null;
+const updateStatus = {ok:true, supported:true, enabled:false, running:false, installed:'0.1.39',
+    available:'', message:'Signed updates are disabled.'};
+const routingBackup = {schema:1, version:1, routing:{enabled:false}, assignments:[], services:[]};
+let updatePolls = 0;
 const reply = {
     dashboard: {
         devices: [{ipv4: '10.0.0.20', ipv4Addresses: ['10.0.0.20', '10.0.0.21'], ipv6: ['fd00::20'], mac:'02:00:00:00:00:20', interface:'lan', interfaceName:'LAN', name:'<b>Device</b>', lastSeen:'2026-11-12T13:30:00Z', stable:true}],
@@ -43,9 +47,37 @@ const reply = {
 window.confirm = () => true;
 window.jQuery = (ready) => document.addEventListener('DOMContentLoaded', ready);
 window.jQuery.ajax = async (request) => {
-    const action = request.url.split('/')[4];
+    const [, , , controller, action] = request.url.split('/');
     const data = request.data ? JSON.parse(request.data) : null;
-    requests.push({action, method:request.method, data});
+    requests.push({controller, action, method:request.method, data});
+    if (controller === 'update') {
+        if (action === 'enable') {
+            Object.assign(updateStatus, {enabled:true, message:'Signed updates enabled.'});
+        }
+        if (action === 'check') {
+            Object.assign(updateStatus, {available:'0.1.40', message:'An update is available.'});
+        }
+        if (action === 'apply') {
+            Object.assign(updateStatus, {running:true, phase:'installing', message:'Installing package.'});
+        }
+        if (action === 'status' && updateStatus.running && ++updatePolls === 2) {
+            Object.assign(updateStatus, {running:false, phase:'done', installed:'0.1.40',
+                available:'', message:'Update installed.'});
+        }
+        return structuredClone(updateStatus);
+    }
+    if (controller === 'backup') {
+        if (action === 'export') {
+            return {ok:true, backup:structuredClone(routingBackup)};
+        }
+        if (action === 'preview') {
+            return {ok:true, confirmation:'fixture-confirmation', preview:{assignments:0, services:0,
+                existingAssignments:2, existingServices:1}};
+        }
+        if (action === 'restore') {
+            return {ok:true};
+        }
+    }
     if (action === 'account') {
         reply.dashboard.mullvadSignedIn = true;
         reply.dashboard.mullvadLoginSaved = data.saveLogin;
@@ -117,6 +149,12 @@ window.jQuery.ajax = async (request) => {
         if (existing) Object.assign(existing, fields);
         else reply.dashboard.assignments.push({id:'tailnet1', ...fields});
     }
+    if (action === 'assign' && data.kind === 'lan' && data.mac === '02:00:00:00:00:31') {
+        const existing = reply.dashboard.assignments.find(row => row.id === 'mac-device');
+        const fields = {...data, effectiveIp:data.ip};
+        if (existing) Object.assign(existing, fields);
+        else reply.dashboard.assignments.push({id:'mac-device', ...fields});
+    }
     if (action === 'setTailnetRuleEnabled') {
         reply.dashboard.assignments.find(row => row.id === data.id).paused = !data.enabled;
     }
@@ -149,6 +187,8 @@ window.jQuery.ajax = async (request) => {
         if (!reply.dashboard.devices.some(device => device.ipv4 === '10.0.0.30')) {
             reply.dashboard.devices.push({ipv4:'10.0.0.30', interface:'lan',
                 name:'New console', mac:'02:00:00:00:00:30', stable:false, leaseProvider:'Dnsmasq DHCP'});
+            reply.dashboard.devices.push({ipv4:'10.0.0.31', currentIpv4:'10.0.0.31', interface:'lan',
+                name:'Laptop', mac:'02:00:00:00:00:31', stable:false, leaseProvider:'Kea DHCPv4', macBindingSupported:true});
         }
     }
     return structuredClone(reply[action] || {ok:true});
@@ -160,6 +200,9 @@ const assert = (value, message) => { if (!value) throw Error(message); };
 document.addEventListener('DOMContentLoaded', async () => {
   try {
     await wait();
+    assert(bv('system-page').contains(bv('appearance')) &&
+        !document.querySelector('.bv-hero').contains(bv('appearance')) && bv('system-page').hidden,
+        'Appearance must be located in System Settings.');
     assert(bv('device-list').textContent.includes('<b>Device rule</b>'), 'device name should remain literal text');
     assert(!bv('device-list').querySelector('b'), 'device name injected HTML');
     assert(bv('device-list').textContent.includes('10.0.0.21') &&
@@ -206,7 +249,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('profile').dispatchEvent(new Event('change'));
     bv('assign-form').requestSubmit(bv('assign-form').querySelector('button[type=submit]'));
     await wait();
-    assert(requests.some(x => x.action === 'assign' && x.method === 'POST' && x.data.profile === 'vpn1' && x.data.failure === 'block' && x.data.killSwitch === true), 'incorrect assignment payload');
+    assert(requests.some(x => x.action === 'assign' && x.method === 'POST' && x.data.profile === 'vpn1' &&
+        x.data.failure === 'block' && x.data.killSwitch === true && x.data.onDemand === true && x.data.bindMac === false),
+        'Legacy reservation rules must keep their identity and default to On Demand.');
     assert(bv('assignment').hidden, 'successful assignment did not close');
     bv('add-device').click();
     bv('device-kind').value = 'tailnet';
@@ -483,7 +528,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         'Manual refresh must discover and display LAN devices.');
     bv('device-list').querySelector('[aria-label="Select New console"]').click();
     assert(bv('ip').value === '10.0.0.30' && bv('mac').value === '02:00:00:00:00:30' &&
-        bv('interface').value === 'lan' && bv('device-kill').checked, 'Selecting a LAN device must fill the rule.');
+        bv('interface').value === 'lan' && bv('device-kill').checked && bv('device-on-demand').checked &&
+        bv('device-bind-mac-field').hidden, 'Selecting a LAN device must fill the reservation fallback rule.');
     bv('mode').value = 'full';
     bv('mode').dispatchEvent(new Event('change'));
     bv('profile').value = 'proxy-proxy-1';
@@ -493,7 +539,50 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('assign-form').requestSubmit(bv('save-device'));
     await wait();
     assert(requests.some(x => x.action === 'assign' && x.data.ip === '10.0.0.30' &&
-        x.data.reserveIp && x.data.profile === 'proxy-proxy-1' && x.data.killSwitch), 'New proxies must be ready to assign without a separate enable action.');
+        x.data.reserveIp && x.data.profile === 'proxy-proxy-1' && x.data.killSwitch && x.data.onDemand && !x.data.bindMac),
+        'New proxies must be ready to assign without a separate enable action.');
+    bv('device-list').querySelector('[aria-label="Select Laptop"]').click();
+    assert(bv('device-bind-mac').checked && !bv('device-bind-mac-field').hidden &&
+        bv('device-on-demand').checked && bv('device-kill').checked &&
+        bv('save-device').textContent === 'Reserve IP and save rule' && bv('identity').textContent.includes('Saving reserves the current address'),
+        'Supported LAN devices must default to MAC binding and explain the initial DHCP reservation.');
+    bv('device-bind-mac').click();
+    assert(bv('save-device').textContent === 'Reserve IP and save rule',
+        'Turning off MAC binding must offer DHCP reservation for a verified current lease.');
+    bv('device-bind-mac').click();
+    bv('device-on-demand').click();
+    assert(bv('device-on-demand-note').textContent === 'Keep the tunnel ready while this rule is enabled.' &&
+        bv('device-kill').checked, 'On Demand must be independent of Kill Switch.');
+    bv('profile').value = 'vpn1';
+    bv('profile').dispatchEvent(new Event('change'));
+    bv('assign-form').requestSubmit(bv('save-device'));
+    await wait();
+    assert(requests.some(x => x.action === 'assign' && x.data.ip === '10.0.0.31' && x.data.bindMac === true &&
+        x.data.onDemand === false && x.data.reserveIp === true && x.data.killSwitch === true),
+        'MAC binding must save the initial DHCP reservation and persist the explicit On Demand setting.');
+    const laptop = reply.dashboard.devices.find(device => device.mac === '02:00:00:00:00:31');
+    const macRule = reply.dashboard.assignments.find(row => row.id === 'mac-device');
+    laptop.ipv4 = laptop.currentIpv4 = laptop.reservationIpv4 = macRule.effectiveIp = '10.0.0.32';
+    laptop.stable = true;
+    bv('refresh').click();
+    await wait();
+    const laptopRow = bv('device-list').querySelector('[aria-label="Edit Laptop"]').closest('tr');
+    assert(laptopRow.textContent.includes('10.0.0.32') && laptopRow.textContent.includes('Follows MAC address') &&
+        !laptopRow.textContent.includes('On Demand'), 'The saved MAC rule must follow the address and show its saved On Demand setting.');
+    laptopRow.querySelector('[aria-label="Edit Laptop"]').click();
+    assert(bv('ip').value === '10.0.0.32' && bv('device-bind-mac').checked && !bv('device-on-demand').checked,
+        'Editing a MAC-bound rule must use the effective address and preserve the saved controls.');
+    bv('close-assignment').click();
+    macRule.effectiveIp = '';
+    bv('refresh').click();
+    await wait();
+    const waitingLaptop = bv('device-list').querySelector('[aria-label="Edit Laptop"]').closest('tr');
+    assert(waitingLaptop.textContent.includes('Waiting for DHCP') && !waitingLaptop.textContent.includes('10.0.0.31'),
+        'A MAC rule with no effective lease must distinguish its state from an active address.');
+    waitingLaptop.querySelector('[aria-label="Edit Laptop"]').click();
+    assert(bv('ip').value === '10.0.0.31' && !bv('device-on-demand').disabled,
+        'A MAC rule waiting for DHCP must remain editable.');
+    bv('close-assignment').click();
     assert(bv('tailnet-devices').tagName === 'DETAILS' && !bv('tailnet-devices').open &&
         bv('tailnet-count').textContent.includes('1 online') &&
         getComputedStyle(bv('tailnet-devices').querySelector('.bv-disclosure-link')).textDecorationLine === 'underline',
@@ -520,14 +609,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
     assert(bv('assignment-interface-field').hidden && !bv('interface').required &&
-        bv('interface').value === 'tailscale0' && !bv('switch-now'),
+        bv('interface').value === 'tailscale0' && !bv('switch-now') &&
+        bv('device-on-demand').checked && bv('device-bind-mac-field').hidden,
         'Native peer rules must select the Tailscale interface automatically without a reconnect toggle.');
     bv('profile').value = 'vpn1';
     bv('assign-form').requestSubmit(bv('save-device'));
     await wait();
     assert(requests.some(x => x.action === 'assign' && x.data.kind === 'tailnet' && x.data.interface === 'tailscale0' &&
-        x.data.ip === '100.101.102.104' && x.data.profile === 'vpn1' && !Object.hasOwn(x.data, 'switchNow')),
+        x.data.ip === '100.101.102.104' && x.data.profile === 'vpn1' && x.data.onDemand === true &&
+        !Object.hasOwn(x.data, 'bindMac') && !Object.hasOwn(x.data, 'switchNow')),
         'Selecting a native exit peer must submit both the interface and the chosen VPN server.');
+    reply.dashboard.tailnetDevices[0].online = false;
+    bv('refresh').click();
+    await wait();
+    const offlinePeer = bv('tailnet-device-list').querySelector('[aria-label="Edit Remote iPad"]').closest('tr');
+    assert(offlinePeer.textContent.includes('Offline') && offlinePeer.textContent.includes('On Demand'),
+        'An offline Tailscale device must keep its On Demand rule.');
+    offlinePeer.querySelector('[aria-label="Edit Remote iPad"]').click();
+    assert(bv('device-on-demand').checked && !bv('device-on-demand').disabled,
+        'On Demand must remain editable for an offline Tailscale peer.');
+    bv('close-assignment').click();
     reply.dashboard.tailnetDevices = [];
     bv('refresh').click();
     await wait();
@@ -716,9 +817,131 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelector('[data-bv-section="network"]').click();
     const expected = window.innerWidth < 768 ? 'block' : 'table';
     assert(getComputedStyle(bv('device-list').closest('table')).display === expected, 'incorrect device layout for viewport');
+    const system = document.querySelector('[data-bv-section="system"]');
+    assert(system.textContent === 'System Settings' && !requests.some(x => x.controller === 'update'),
+        'System Settings must be visible and update status must wait until the page is opened.');
+    system.click();
+    assert(!bv('system-page').hidden && bv('network-page').hidden && bv('appearance').labels[0].textContent.includes('Appearance') &&
+        bv('system-updates').hidden && bv('system-backups').hidden && system.getAttribute('aria-pressed') === 'true',
+        'The System tab must preserve appearance controls and hide unprivileged update and backup controls.');
+    bv('appearance').value = 'night';
+    bv('appearance').dispatchEvent(new Event('change'));
+    assert(localStorage.getItem('blankvpn-appearance') === 'night' &&
+        getComputedStyle(document.getElementById('blankvpn')).colorScheme === 'dark',
+        'Changing appearance in System Settings must apply and persist the theme.');
+    bv('appearance').value = 'day';
+    bv('appearance').dispatchEvent(new Event('change'));
+    reply.dashboard.canManageUpdates = true;
+    reply.dashboard.canWriteUpdates = true;
+    reply.dashboard.canManageBackups = true;
+    bv('refresh').click();
+    await wait();
+    assert(!bv('system-updates').hidden && !bv('system-backups').hidden,
+        'System update and backup privileges must expose their separate sections.');
+    system.click();
+    await wait();
+    assert(requests.some(x => x.controller === 'update' && x.action === 'status' && x.method === 'GET') &&
+        !bv('update-enable').hidden && bv('update-check').disabled && bv('update-apply').hidden &&
+        bv('update-status').textContent.includes('Installed 0.1.39'),
+        'Signed updates must start disabled and report the installed release.');
+    const nativeTimeout = window.setTimeout;
+    window.setTimeout = (callback, milliseconds, ...args) => nativeTimeout(callback,
+        milliseconds === 4000 ? 50 : milliseconds, ...args);
+    try {
+        bv('update-enable').click();
+        await wait();
+        assert(requests.some(x => x.controller === 'update' && x.action === 'enable' && x.method === 'POST') &&
+            bv('update-enable').hidden && !bv('update-check').disabled, 'Enabling the signed repo must unlock update checks.');
+        bv('update-check').click();
+        await wait();
+        assert(requests.some(x => x.controller === 'update' && x.action === 'check' && x.method === 'POST') &&
+            bv('update-status').textContent.includes('Available 0.1.40') && !bv('update-apply').hidden,
+            'Checking for an update must reveal the available version and apply control.');
+        bv('update-apply').click();
+        await wait();
+        assert(requests.some(x => x.controller === 'update' && x.action === 'apply' && x.method === 'POST' &&
+                x.data.version === '0.1.40') && bv('update-apply').hidden && bv('update-check').disabled &&
+            bv('update-status').textContent.includes('Installing package'), 'Apply must request only the displayed version.');
+        await new Promise(resolve => nativeTimeout(resolve, 150));
+        assert(updatePolls === 2 && bv('update-status').textContent.includes('Installed 0.1.40') &&
+            bv('message-detail').textContent === 'Update installed.' && !bv('update-check').disabled,
+            'Update completion must refresh the installed version and restore check availability.');
+    } finally {
+        window.setTimeout = nativeTimeout;
+    }
+    let backupDownload = '';
+    let downloadedBlob;
+    const nativeCreateObjectURL = URL.createObjectURL;
+    const nativeClick = HTMLAnchorElement.prototype.click;
+    try {
+        URL.createObjectURL = function (blob) {
+            downloadedBlob = blob;
+            return nativeCreateObjectURL.call(this, blob);
+        };
+        HTMLAnchorElement.prototype.click = function () { backupDownload = this.download; };
+        bv('backup-download').click();
+        await wait();
+    } finally {
+        URL.createObjectURL = nativeCreateObjectURL;
+        HTMLAnchorElement.prototype.click = nativeClick;
+    }
+    assert(requests.some(x => x.controller === 'backup' && x.action === 'export' && x.method === 'POST') &&
+        backupDownload === 'blank-vpn-routing-settings.json' && downloadedBlob?.type === 'application/json',
+        'Authorized backup export must download a JSON file.');
+    const backupFile = bv('backup-file');
+    const backupText = JSON.stringify(routingBackup);
+    const selectBackup = (name) => {
+        const clipboard = new DataTransfer();
+        clipboard.items.add(new File([backupText], name, {type:'application/json'}));
+        backupFile.files = clipboard.files;
+        backupFile.dispatchEvent(new Event('change'));
+    };
+    reply.dashboard.settings.enabled = true;
+    bv('refresh').click();
+    await wait();
+    selectBackup('routing-backup.json');
+    assert(bv('backup-check').disabled && bv('backup-restore').disabled &&
+        bv('backup-preview').textContent.includes('Disable VPN routing'),
+        'The restore workflow must require disabled routing.');
+    reply.dashboard.settings.enabled = false;
+    bv('refresh').click();
+    await wait();
+    assert(!bv('backup-check').disabled && bv('backup-restore').disabled,
+        'A new backup must be previewed before restoration.');
+    const readBackup = File.prototype.text;
+    File.prototype.text = async () => backupText;
+    try {
+        bv('backup-check').click();
+        await wait();
+        assert(requests.some(x => x.controller === 'backup' && x.action === 'preview' && x.method === 'POST' &&
+            x.data.backup === backupText) && !bv('backup-restore').disabled &&
+            bv('backup-preview').textContent.includes('replacing 2 rules and 1 lists'),
+            'A preview must show the replacement counts and enable the confirmed restore.');
+        selectBackup('new-backup.json');
+        assert(bv('backup-restore').disabled, 'Selecting another file must invalidate the preview.');
+        bv('backup-check').click();
+        await wait();
+        bv('backup-restore').click();
+        await wait();
+    } finally {
+        File.prototype.text = readBackup;
+    }
+    assert(requests.some(x => x.controller === 'backup' && x.action === 'restore' && x.method === 'POST' &&
+            x.data.backup === backupText && x.data.confirmation === 'fixture-confirmation') &&
+        backupFile.files.length === 0 && bv('backup-restore').disabled && reply.dashboard.settings.enabled === false,
+        'Restore must send the reviewed backup and confirmation, clear the file and leave routing off.');
+    reply.dashboard.canManageUpdates = false;
+    bv('refresh').click();
+    await wait();
+    assert(bv('system-updates').hidden && !bv('system-backups').hidden,
+        'Backup visibility must be independent from package update privileges.');
+    reply.dashboard.canManageBackups = false;
     reply.dashboard.canManage = false;
     bv('refresh').click();
     await wait();
+    assert(!bv('system-page').hidden && bv('system-updates').hidden && bv('system-backups').hidden,
+        'Read-only users must retain System Settings appearance access.');
+    document.querySelector('[data-bv-section="network"]').click();
     assert(getComputedStyle(bv('service-form')).display === 'none', 'service management visible to read-only user');
     assert(getComputedStyle(bv('add-device')).display === 'none', 'management controls were visible to read-only user');
     assert(!bv('device-list').querySelector('button') && !bv('tailnet-device-list').querySelector('button'),

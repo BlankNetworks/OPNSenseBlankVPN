@@ -370,6 +370,16 @@ namespace {
     checkRouting(Policy::killSwitch($assignment) && !Policy::killSwitch(array_replace($assignment, ['mode' => 'multi'])) &&
         !Policy::killSwitch(array_replace($assignment, ['failure' => 'backup'])),
         'Existing one-exit, backup and Multi-Path policies keep their settings during an upgrade.');
+    $unbound = new Plugin();
+    $compileDevice->invoke(null, $unbound, $settings, $interfaces, [
+        'unbound' => array_replace($assignment, [
+            'ip' => '', 'ipv6' => '2001:db8::23', 'bindMac' => '1', 'failure' => 'backup'
+        ])
+    ], $profiles, [], $diag);
+    checkRouting(!isset($unbound->rules[Policy::marker('kill', 'unbound')]) &&
+        !isset($unbound->rules[Policy::marker('device', 'unbound')]) &&
+        $unbound->rules[Policy::marker('kill_v6', 'unbound')]['from'] === '2001:db8::23' &&
+        $unbound->nat === [], 'An unresolved MAC binding drops its IPv4 match and retains its stable IPv6 guard.');
     $native = array_replace($profiles['jp'], [
         'kind' => 'native', 'interface' => 'ovpnc1', 'gateway' => 'NORD', 'address' => '198.51.100.20'
     ]);

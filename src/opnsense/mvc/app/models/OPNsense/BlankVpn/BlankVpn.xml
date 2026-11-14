@@ -1,6 +1,6 @@
 <model>
     <mount>//OPNsense/BlankVpn</mount>
-    <version>1.10.0</version>
+    <version>1.11.0</version>
     <description>Blank VPN configuration and native object ownership</description>
     <items>
         <settings>
@@ -65,6 +65,8 @@
                 <profile type="TextField"/>
                 <backup type="TextField"/>
                 <killSwitch type="TextField"/>
+                <onDemand type="BooleanField"><Default>1</Default></onDemand>
+                <bindMac type="BooleanField"><Default>0</Default></bindMac>
                 <failure type="OptionField">
                     <Default>block</Default>
                     <OptionValues>

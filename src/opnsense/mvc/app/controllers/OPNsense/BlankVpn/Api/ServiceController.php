@@ -6,6 +6,7 @@ use OPNsense\Base\ApiControllerBase;
 use OPNsense\Core\ACL;
 use OPNsense\Core\Config;
 use OPNsense\BlankVpn\BlankVpn;
+use OPNsense\BlankVpn\DeviceIdentity;
 use OPNsense\BlankVpn\Diagnostics;
 use OPNsense\BlankVpn\Firewall;
 use OPNsense\BlankVpn\Ivpn;
@@ -48,6 +49,14 @@ class ServiceController extends ApiControllerBase
             $lanInterfaces = array_diff($settings['interfaces'] ?: ['lan'], $settings['tailscaleInterfaces']);
             $discovery['devices'] = array_values(array_filter($discovery['devices'],
                 static fn (array $device): bool => in_array($device['interface'], $lanInterfaces, true)));
+            $reservations = $diagnostics->reservations();
+            foreach ($discovery['devices'] as &$device) {
+                $reserved = DeviceIdentity::reservation($device['interface'], $device['mac'], $reservations);
+                $device['macBindingSupported'] = empty($device['addressConflict']) &&
+                    ($reserved === $device['ipv4'] || !empty($device['leaseProvider']));
+            }
+            unset($device);
+            $effectiveAssignments = Policy::routingAssignments($assignments, $diagnostics);
             $tailnet = $settings['tailscaleInstalled'] ? $diagnostics->tailnetStatus() : [];
             $settings['dashboardMagicDns'] = Resolver::magicDnsFromStatus($tailnet);
             $settings['tailscaleSetup'] = $diagnostics->nativeTailnetSetup($tailnet);
@@ -128,13 +137,23 @@ class ServiceController extends ApiControllerBase
                     });
                 $row['mode'] = $mode;
                 $row['killSwitch'] = Policy::killSwitch($row);
+                $row['onDemand'] = Policy::onDemand($row);
+                $row['bindMac'] = Policy::bindsMac($row);
+                $row['effectiveIp'] = $effectiveAssignments[$id]['ip'];
                 $row['paused'] = Policy::assignmentPaused($row);
                 $assignments[$id] = $row + [
                     'device' => $row['interface'] . '/' . (($row['kind'] ?? '') === 'tailnet' ? $row['ip'] : $row['mac']),
                     'verified' => false,
-                    'killSwitchActive' => $guard && $rule === null && $row['killSwitch'],
-                    'appliedRoute' => $row['interface'] === Policy::TAILSCALE_DEVICE && !$settings['tailscaleSetup']['ready']
-                        ? 'Exit node setup needed' : ($loaded === null ? 'Firewall status unavailable' : $applied)
+                    'killSwitchActive' => $guard && $rule === null && $row['killSwitch'] && $row['effectiveIp'] !== '',
+                    'appliedRoute' => match (true) {
+                        $row['effectiveIp'] === '' => 'Waiting for DHCP reservation',
+                        $row['interface'] === Policy::TAILSCALE_DEVICE && !$settings['tailscaleSetup']['ready'] =>
+                            'Exit node setup needed',
+                        $loaded === null => 'Firewall status unavailable',
+                        $rule !== null && $row['bindMac'] && ($rule['source'] ?? '') !== $row['effectiveIp'] =>
+                            'Waiting for firewall update',
+                        default => $applied
+                    }
                 ];
             }
             $settings['networkRouting'] = [];
@@ -183,7 +202,8 @@ class ServiceController extends ApiControllerBase
             $acl = new ACL();
             $canManage = self::nativeWritesAvailable() && is_string($username) &&
                 $acl->isPageAccessible($username, '/api/blankvpn/service/assign');
-            $accountUser = $canManage ? $this->accountUser() : null;
+            $systemUser = self::nativeWritesAvailable() ? $this->accountUser() : null;
+            $accountUser = $canManage ? $systemUser : null;
             $providers = new VpnProviders();
             $savedProviders = [];
             foreach (VpnProviders::LOGIN_PROVIDERS as $provider) {
@@ -210,6 +230,13 @@ class ServiceController extends ApiControllerBase
                 'proxyCores' => ProxyRuntime::capabilities(),
                 'canManageCores' => self::nativeWritesAvailable() && is_string($username) &&
                     $acl->isPageAccessible($username, '/api/blankvpn/core/status'),
+                'canManageUpdates' => $systemUser !== null &&
+                    $acl->isPageAccessible($username, '/api/blankvpn/update/status'),
+                'canWriteUpdates' => $systemUser !== null && $acl->hasPrivilege($username, 'page-all') &&
+                    !$acl->hasPrivilege($username, 'user-config-readonly'),
+                'canManageBackups' => $systemUser !== null &&
+                    $acl->isPageAccessible($username, '/api/blankvpn/backup/export') &&
+                    !$acl->hasPrivilege($username, 'user-config-readonly'),
                 'mullvadSignedIn' => $this->mullvadToken() !== null,
                 'mullvadLoginSaved' => $accountUser !== null && (new Mullvad())->hasSavedAccount($accountUser),
                 'vpnProviders' => VpnProviders::CATALOG,
@@ -275,9 +302,9 @@ class ServiceController extends ApiControllerBase
             $model = new BlankVpn();
             $settings = Policy::settings($model);
             $id = $this->input('id', 64);
-            $assignment = Policy::assignments($model, true)[$id] ?? null;
+            $assignment = Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics())[$id] ?? null;
             if (!$settings['enabled'] || $settings['coverage'] !== 'device' || $assignment === null ||
-                Policy::mode($assignment) !== 'full') {
+                $assignment['ip'] === '' || Policy::mode($assignment) !== 'full') {
                 throw new \DomainException('Enable a one-server device rule to test its route.');
             }
             $routes = Policy::routes($model);
@@ -1243,10 +1270,17 @@ class ServiceController extends ApiControllerBase
                 $label = $label !== '' ? $label : ($peer['name'] ?? '');
             }
             $provider = '';
+            $bindMac = $kind === 'lan' && $this->request->hasPost('bindMac')
+                ? ($this->flag('bindMac') ? '1' : '0') : null;
+            $onDemand = $this->request->hasPost('onDemand')
+                ? ($this->flag('onDemand') ? '1' : '0') : null;
             if ($kind === 'lan') {
                 $diagnostics = new Diagnostics();
+                if ($bindMac === '1') {
+                    $ip = DeviceIdentity::reservation($interface, $mac, $diagnostics->reservations()) ?? $ip;
+                }
                 if (!$diagnostics->hasReservation($interface, $ip, $mac)) {
-                    if ($this->flag('reserveIp')) {
+                    if ($this->flag('reserveIp') || $bindMac === '1') {
                         $provider = $diagnostics->reservationProvider($interface, $ip, $mac);
                     }
                     if ($provider === '') {
@@ -1255,7 +1289,7 @@ class ServiceController extends ApiControllerBase
                 }
             }
             $result = Operations::change(function (BlankVpn $model) use (
-                $ip, $ipv6, $mac, $kind, $mode, $interface, $label, $profile, $backup, $failure, $killSwitch, $provider, $nativeTailnet
+                $ip, $ipv6, $mac, $kind, $mode, $interface, $label, $profile, $backup, $failure, $killSwitch, $provider, $nativeTailnet, $bindMac, $onDemand
             ) {
                 $settings = Policy::settings($model);
                 if (!$nativeTailnet && !in_array($interface, $settings['interfaces'], true)) {
@@ -1279,7 +1313,9 @@ class ServiceController extends ApiControllerBase
                 }
                 $node = null;
                 $prior = [];
-                foreach (Policy::assignments($model) as $id => $row) {
+                $configuredAssignments = Policy::assignments($model);
+                $effectiveAssignments = Policy::routingAssignments($configuredAssignments, new Diagnostics());
+                foreach ($configuredAssignments as $id => $row) {
                     if ($row['interface'] !== $interface) {
                         continue;
                     }
@@ -1287,8 +1323,8 @@ class ServiceController extends ApiControllerBase
                     if ($kind === 'tailnet' && $tailnet && $row['ip'] === $ip ||
                         $kind === 'lan' && !$tailnet && $row['mac'] === $mac) {
                         $node = $model->assignments->assignment->getChild($id);
-                        $prior = $row;
-                    } elseif ($row['ip'] === $ip || ($ipv6 !== '' && ($row['ipv6'] ?? '') === $ipv6)) {
+                        $prior = $effectiveAssignments[$id];
+                    } elseif ($effectiveAssignments[$id]['ip'] === $ip || ($ipv6 !== '' && ($row['ipv6'] ?? '') === $ipv6)) {
                         throw new \DomainException('This address already has an assignment on the selected interface.');
                     }
                 }
@@ -1308,13 +1344,16 @@ class ServiceController extends ApiControllerBase
                 $node->profile = $profile;
                 $node->backup = $failure === 'backup' ? $backup : '';
                 $node->failure = $failure;
+                $node->bindMac = $kind === 'lan' ? $bindMac ?? ($prior['bindMac'] ?? '0') : '0';
+                $node->onDemand = $onDemand ?? ($prior['onDemand'] ?? '1');
                 // Older clients express the one-exit policy through failure instead of a checkbox.
                 $node->killSwitch = $killSwitch ?? ($mode === 'multi' ? ($prior['killSwitch'] ?? '') : '');
                 $changed = ($prior['ip'] ?? '') !== $ip || ($prior['ipv6'] ?? '') !== $ipv6 ||
                     Policy::mode($prior) !== $mode || ($prior['profile'] ?? '') !== $profile ||
                     ($prior['backup'] ?? '') !== ($failure === 'backup' ? $backup : '') ||
                     ($prior['failure'] ?? '') !== $failure ||
-                    Policy::killSwitch($prior) !== Policy::killSwitch(Policy::fields($node));
+                    Policy::killSwitch($prior) !== Policy::killSwitch(Policy::fields($node)) ||
+                    Policy::bindsMac($prior) !== Policy::bindsMac(Policy::fields($node));
                 $live = $settings['enabled'] && !Policy::assignmentPaused($prior);
                 return [
                     'settings' => $settings, 'reload' => $live, 'dhcpProvider' => $provider,
@@ -1378,7 +1417,7 @@ class ServiceController extends ApiControllerBase
         return $this->respond(fn () => Operations::exclusive(function () {
             $id = $this->input('id', 64);
             $result = Operations::change(function (BlankVpn $model) use ($id) {
-                $row = Policy::assignments($model)[$id] ?? null;
+                $row = Policy::routingAssignments(Policy::assignments($model), new Diagnostics())[$id] ?? null;
                 if ($row === null) {
                     throw new \DomainException('This device policy no longer exists.');
                 }
@@ -1394,7 +1433,7 @@ class ServiceController extends ApiControllerBase
             if ($result['killSwitchReset'] !== []) {
                 return ['killSwitchReset' => true];
             }
-            if ($result['reload']) {
+            if ($result['reload'] && $result['ip'] !== '') {
                 try {
                     return ['reconnected' => Operations::switchDevice($result['ip'], Policy::settings(new BlankVpn()))];
                 } catch (\Throwable) {

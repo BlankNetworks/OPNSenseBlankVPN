@@ -13,6 +13,10 @@ def install_instructions(directory, repository):
     commands = [
         "## Install or upgrade",
         "",
+        f"If your Blank VPN dashboard already has **System Settings → Package updates**, "
+        f"[update from the WebGUI](https://github.com/{repository}/blob/v{VERSION}/README.md#update-from-the-webgui). "
+        "The standalone packages below are also available for first installs and manual upgrades.",
+        "",
         "Use an OPNsense root shell over SSH or select **8) Shell** on the console.",
         f"Confirm `opnsense-version -n` reports `opnsense` and "
         f"`opnsense-version -a` reports `{SERIES}`. Run `pkg config ABI` and use the matching section below.",

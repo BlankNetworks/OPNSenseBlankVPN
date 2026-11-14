@@ -3,9 +3,12 @@
 require_once('/usr/local/etc/inc/config.inc');
 
 use OPNsense\BlankVpn\BlankVpn;
+use OPNsense\BlankVpn\DeviceBindings;
+use OPNsense\BlankVpn\Diagnostics;
 use OPNsense\BlankVpn\Firewall;
 use OPNsense\BlankVpn\Mullvad;
 use OPNsense\BlankVpn\NativeVpn;
+use OPNsense\BlankVpn\OnDemand;
 use OPNsense\BlankVpn\Operations;
 use OPNsense\BlankVpn\Policy;
 use OPNsense\BlankVpn\ProxyCatalog;
@@ -33,7 +36,23 @@ try {
             echo json_encode((object)$rules, JSON_THROW_ON_ERROR), "\n";
             break;
         case 'proxies':
-            ProxyRuntime::reconcile(new BlankVpn());
+            $model = new BlankVpn();
+            $activeProxies = array_fill_keys(ProxyRuntime::reconcile($model)['active'], true);
+            $onDemand = OnDemand::exits($model);
+            OnDemand::reconcileWireGuard($model, $onDemand);
+            if ($onDemand !== []) {
+                $proxies = ProxyRuntime::routes($model);
+                $old = Firewall::health();
+                $health = $old;
+                foreach (array_keys($onDemand) as $id) {
+                    if (!isset($proxies[$id]) || isset($activeProxies[$id])) {
+                        $health[$id] = ['onDemand' => true];
+                    }
+                }
+                if ($health !== $old) {
+                    Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
+                }
+            }
             echo "ok\n";
             break;
         case 'resolver':
@@ -88,18 +107,28 @@ try {
         case 'maintain':
             Operations::exclusive(function () {
                 $model = new BlankVpn();
-                ProxyCores::recover($model);
                 $settings = Policy::effectiveRouting($model);
+                $loaded = Firewall::loadedRules();
+                Policy::refreshMacConflicts($model);
+                $bindings = DeviceBindings::pending($model, $loaded);
+                if ($bindings['reset'] !== [] || $bindings['changed']) {
+                    Firewall::reload($model);
+                    DeviceBindings::finish($bindings);
+                    $loaded = Firewall::loadedRules();
+                }
+                ProxyCores::recover($model);
                 $proxyRoutes = ProxyRuntime::routes($model);
                 ProxyCatalog::refreshDue(array_column($proxyRoutes, 'node'));
                 $previousProxies = ProxyRuntime::lastStatus()['active'];
                 $runningProxies = ProxyRuntime::reconcile($model)['active'];
+                $onDemand = OnDemand::exits($model);
+                OnDemand::reconcileWireGuard($model, $onDemand);
                 if (!$settings['enabled']) {
                     return;
                 }
                 Resolver::reconcile($model);
+                $services = SmartRouting::services($model);
                 if (gmdate('i') === '00') {
-                    $services = SmartRouting::services($model);
                     SmartRouting::expire($settings, $services);
                     try {
                         (new Mullvad())->relays();
@@ -107,11 +136,12 @@ try {
                         syslog(LOG_WARNING, 'Blank VPN could not refresh the Mullvad catalog.');
                     }
                 }
-                $loaded = Firewall::loadedRules();
-                $assignments = $settings['coverage'] === 'device' ? Policy::assignments($model, true) : [];
+                $assignments = $settings['coverage'] === 'device'
+                    ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
+                $runningProxySet = array_fill_keys($runningProxies, true);
                 $watchOutages = Operations::watchMultiPathOutages($settings, $assignments);
                 $watchedExits = $watchOutages
-                    ? array_fill_keys(array_column(SmartRouting::boundServices(SmartRouting::services($model)), 'profile'), true)
+                    ? array_fill_keys(array_column(SmartRouting::boundServices($services), 'profile'), true)
                     : [];
                 $observedOutage = false;
                 $old = Firewall::health();
@@ -122,12 +152,27 @@ try {
                         implode("\n", Policy::localNetworks($settings)) . "\n";
                 $assignedProxies = ProxyRuntime::assignedRoutes($model);
                 foreach ($routes as $id => $profile) {
+                    if (isset($onDemand[$id]) &&
+                        (($profile['kind'] ?? '') !== 'proxy' || isset($runningProxySet[$id]))) {
+                        // A routed first packet starts the tunnel. An old probe failure
+                        // must not prevent the client from reaching an idle exit again.
+                        $changed = $changed || (($health[$id]['reachable'] ?? true) === false);
+                        if (($profile['kind'] ?? '') === 'native' && ($health[$id]['source'] ?? null) !== $profile['address']) {
+                            $changed = true;
+                        }
+                        $health[$id] = ['onDemand' => true];
+                        if (($profile['kind'] ?? '') === 'native') {
+                            $health[$id]['source'] = $profile['address'];
+                        }
+                        continue;
+                    }
                     if (($profile['kind'] ?? '') === 'proxy') {
                         if (!isset($assignedProxies[$id])) {
                             unset($health[$id]);
                             continue;
                         }
-                        if ($profile['slot'] % 4 !== (int)gmdate('i') % 4 && in_array($id, $runningProxies, true)) {
+                        if ($profile['slot'] % 4 !== (int)gmdate('i') % 4 && isset($runningProxySet[$id]) &&
+                            empty($old[$id]['onDemand'])) {
                             continue;
                         }
                         $probe = ProxyRuntime::probe($profile);
@@ -202,9 +247,11 @@ try {
                             try {
                                 if (Policy::killSwitch($row)) {
                                     foreach (array_filter([$row['ip'], $row['ipv6'] ?? '']) as $ip) {
-                                        Operations::resetKillSwitch($ip);
+                                        if (!in_array($ip, $bindings['reset'], true)) {
+                                            Operations::resetKillSwitch($ip);
+                                        }
                                     }
-                                } else {
+                                } elseif ($row['ip'] !== '' && !in_array($row['ip'], $bindings['reset'], true)) {
                                     Operations::switchDevice($row['ip'], $settings);
                                 }
                             } catch (Throwable) {

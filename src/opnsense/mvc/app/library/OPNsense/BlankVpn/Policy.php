@@ -116,6 +116,60 @@ final class Policy
         return ($assignment['mode'] ?? '') ?: (($assignment['profile'] ?? '') !== '' ? 'full' : 'default');
     }
 
+    public static function onDemand(array $assignment): bool
+    {
+        return in_array(self::mode($assignment), ['full', 'multi'], true) &&
+            !in_array($assignment['onDemand'] ?? '1', ['0', 0, false], true);
+    }
+
+    public static function bindsMac(array $assignment): bool
+    {
+        return ($assignment['kind'] ?? 'lan') !== 'tailnet' &&
+            in_array($assignment['bindMac'] ?? '0', ['1', 1, true], true);
+    }
+
+    public static function refreshMacConflicts(BlankVpn $model): void
+    {
+        $rules = array_filter(self::assignments($model, true), self::bindsMac(...));
+        if ($rules === []) {
+            return;
+        }
+        $diagnostics = new Diagnostics();
+        $reservations = $diagnostics->reservations();
+        $index = DeviceIdentity::index($reservations);
+        $targets = DeviceIdentity::lanBindings($rules, $index);
+        $confirmed = array_filter($targets, 'is_string');
+        $addresses = array_fill_keys(array_values($confirmed), true);
+        $rows = array_filter($reservations, static fn (array $row): bool => isset($addresses[$row['ip']]));
+        $previous = self::macState();
+        $observations = $diagnostics->reservationClaims($rows, $previous['observations'] ?? []);
+        self::writeState('mac-claims.json', json_encode(compact('confirmed', 'observations'), JSON_THROW_ON_ERROR));
+    }
+
+    private static function macState(): array
+    {
+        $raw = @file_get_contents(self::STATE_DIR . '/mac-claims.json');
+        $state = is_string($raw) ? json_decode($raw, true) : null;
+        return is_array($state) ? $state : [];
+    }
+
+    public static function routingAssignments(array $assignments, Diagnostics $diagnostics): array
+    {
+        $macRules = array_filter($assignments, self::bindsMac(...));
+        if ($macRules === []) {
+            return $assignments;
+        }
+        $state = self::macState();
+        $claims = DeviceIdentity::combineClaims($state['observations'] ?? []);
+        $reservations = DeviceIdentity::filterReservations($diagnostics->reservations(), $claims);
+        $bindings = DeviceIdentity::lanBindings($macRules, DeviceIdentity::index($reservations));
+        foreach ($bindings as $id => $ip) {
+            // Wait for the next refresh before using a new configured address on a native reload.
+            $assignments[$id]['ip'] = $ip === ($state['confirmed'][$id] ?? null) ? ($ip ?? '') : '';
+        }
+        return $assignments;
+    }
+
     public static function killSwitch(array $assignment): bool
     {
         $mode = self::mode($assignment);

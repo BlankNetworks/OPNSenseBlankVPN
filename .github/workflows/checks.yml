@@ -14,6 +14,11 @@ jobs:
       version: ${{ steps.package_version.outputs.version }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: "8.5"
+          extensions: curl, simplexml
+          coverage: none
       - name: Read the package version
         id: package_version
         run: echo "version=$(python3 build/package.py --version)" >> "$GITHUB_OUTPUT"
@@ -132,3 +137,86 @@ jobs:
             sh build/publish-sing-box.sh 1.14.4 "dist/sing-box-$arch" \
               c005f35300ce76427dc285481ec5695f5b179cd2 "$arch"
           done
+
+  package-repository:
+    needs: [checks, publish]
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: blankvpn-package-repository
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    env:
+      PACKAGE_VERSION: ${{ needs.checks.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          pattern: blank-vpn-release-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+        id: pages
+      - name: Prepare the FreeBSD repository builder
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
+        with:
+          release: "15.1"
+          arch: x86_64
+          copyback: false
+          prepare: |
+            env ASSUME_ALWAYS_YES=yes pkg bootstrap
+            pkg install -y python313 ca_root_nss curl
+          run: |
+            pwd > "$HOME/.blankvpn-repository-workdir"
+            test -f build/sign-pkg-repo.sh
+      - name: Sign and verify the FreeBSD repository
+        env:
+          BLANKVPN_REPO_SIGNING_KEY: ${{ secrets.BLANKVPN_REPO_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          [[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test -n "$BLANKVPN_REPO_SIGNING_KEY"
+          sign_command=$(cat <<'REMOTE'
+          exec sh -c 'exec sh "$(cat "$HOME/.blankvpn-repository-workdir")/build/sign-pkg-repo.sh" "$1"' sh
+          REMOTE
+          )
+          printf '%s\n' "$BLANKVPN_REPO_SIGNING_KEY" | env -u BLANKVPN_REPO_SIGNING_KEY \
+            ssh -T freebsd "$sign_command" "$PACKAGE_VERSION"
+          unset BLANKVPN_REPO_SIGNING_KEY
+          mkdir _site
+          archive_command=$(cat <<'REMOTE'
+          exec sh -c 'exec tar -C "$(cat "$HOME/.blankvpn-repository-workdir")/_site" -cf - .'
+          REMOTE
+          )
+          ssh -T freebsd "$archive_command" | tar -xf - -C _site
+      - name: Preserve previous package files and prevent an older catalog from replacing a newer one
+        env:
+          BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: sh build/preserve-pkg-repo.sh _site "$BASE_URL" "$PACKAGE_VERSION"
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: _site
+      - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+        id: deploy
+      - name: Verify that FreeBSD pkg can authenticate and fetch the published packages
+        env:
+          BASE_URL: ${{ steps.deploy.outputs.page_url }}
+        shell: freebsd {0}
+        run: |
+          set -eu
+          for attempt in 1 2 3 4 5 6; do
+            if [ "$(curl -fsS --max-time 10 "${BASE_URL%/}/pkg/26.7/version.txt" 2>/dev/null || :)" = "$PACKAGE_VERSION" ]; then
+              break
+            fi
+            sleep 5
+          done
+          sh build/verify-pkg-repo.sh - "${BASE_URL%/}" "$PACKAGE_VERSION"

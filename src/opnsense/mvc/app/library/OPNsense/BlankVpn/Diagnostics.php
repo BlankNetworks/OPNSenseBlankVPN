@@ -152,6 +152,68 @@ final class Diagnostics
         return $snapshot;
     }
 
+    public function reservationClaims(array $reservations, array $previous): array
+    {
+        if ($reservations === []) {
+            return [];
+        }
+        $targets = [];
+        foreach ($reservations as $row) {
+            $targets[$row['interface'] . '/' . $row['ip']] = true;
+        }
+        $claims = [];
+        $warnings = [];
+        $interfaces = $this->localInterfaces($warnings, false);
+        $record = static function (array $row, string $deviceKey, string $ipKey, string $macKey) use (
+            $interfaces, $targets, &$claims
+        ): void {
+            $interface = $interfaces[$row[$deviceKey] ?? '']['id'] ?? '';
+            $key = $interface . '/' . (string)($row[$ipKey] ?? '');
+            if (isset($targets[$key])) {
+                $mac = self::mac((string)($row[$macKey] ?? ''));
+                if ($mac !== null) {
+                    $claims[$key][$mac] = true;
+                }
+            }
+        };
+        $observations = [];
+        $neighbors = $this->read('interface list arp', ['json']);
+        foreach ($neighbors ?? [] as $row) {
+            if (is_array($row) && empty($row['expired']) && empty($row['permanent']) &&
+                !in_array($row['type'] ?? '', ['published', 'proxy'], true)) {
+                $record($row, 'intf', 'ip', 'mac');
+            }
+        }
+        $observations['arp'] = $neighbors === null
+            ? array_intersect_key((array)($previous['arp'] ?? []), $targets) : array_map('array_keys', $claims);
+        $kea = $this->config->OPNsense->Kea->dhcp4 ?? null;
+        $sources = [];
+        if ((string)($kea->general->enabled ?? '') === '1') {
+            $sources[] = 'kea list leases4';
+        }
+        if ((string)($this->config->dnsmasq->enable ?? '') === '1') {
+            $sources[] = 'dnsmasq list leases';
+        }
+        $now = time();
+        foreach ($sources as $source) {
+            $leases = $this->read($source);
+            if (!is_array($leases['records'] ?? null)) {
+                // Keep contradictory observations when configd cannot confirm their removal.
+                $observations[$source] = array_intersect_key((array)($previous[$source] ?? []), $targets);
+                continue;
+            }
+            $claims = [];
+            foreach ($leases['records'] as $row) {
+                if (is_array($row) && (int)($row['state'] ?? 0) === 0 &&
+                    ((int)($row['expire'] ?? 0) === 0 || (int)$row['expire'] > $now)) {
+                    $record($row, 'if', 'address', 'hwaddr');
+                }
+            }
+            $observations[$source] = array_map('array_keys', $claims);
+        }
+        return $observations;
+    }
+
     public function tailnetStatus(): array
     {
         $output = Resolver::command(['/bin/timeout', '3', '/usr/local/bin/tailscale', 'status', '--json', '--peers=true'], false);

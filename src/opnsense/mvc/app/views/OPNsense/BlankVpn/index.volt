@@ -4,14 +4,6 @@
 <div id="blankvpn" class="blankvpn">
     <header class="bv-heading bv-hero">
         <h1>Blank VPN</h1>
-        <div class="bv-actions bv-utilities">
-            <label for="bv-appearance" class="sr-only">Appearance</label>
-            <select id="bv-appearance" class="form-control" aria-label="Appearance">
-                <option value="system">System theme</option>
-                <option value="day">Day</option>
-                <option value="night">Night</option>
-            </select>
-        </div>
     </header>
 
     <nav class="bv-navigation" aria-label="Blank VPN pages">
@@ -20,6 +12,7 @@
         <button type="button" data-bv-section="network" aria-controls="bv-network-page" aria-pressed="false">Network Settings</button>
         <button type="button" data-bv-section="smart" aria-controls="bv-smart-page" aria-pressed="false">Multi-Path Settings</button>
         <button type="button" data-bv-section="tailscale" aria-controls="bv-tailscale-page" aria-pressed="false">Tailscale Settings</button>
+        <button type="button" data-bv-section="system" aria-controls="bv-system-page" aria-pressed="false">System Settings</button>
     </nav>
 
     <div id="bv-message" hidden>
@@ -422,7 +415,7 @@
                     <label>Device label <input id="bv-device-label" type="text" class="form-control" maxlength="80"></label>
                     <label>Address source
                         <select id="bv-device-kind" class="form-control">
-                            <option value="lan">LAN DHCP reservation</option>
+                            <option value="lan">LAN device</option>
                             <option value="tailnet">Tailscale peer</option>
                         </select>
                     </label>
@@ -449,6 +442,14 @@
                     </label>
                     <label id="bv-backup-field" hidden>Backup server <select id="bv-backup" class="form-control"></select></label>
                 </div>
+                <label class="bv-check" id="bv-device-bind-mac-field" hidden>
+                    <input type="checkbox" id="bv-device-bind-mac" aria-describedby="bv-identity" checked>
+                    Follow DHCP reservation by MAC
+                </label>
+                <label class="bv-check" id="bv-device-on-demand-field">
+                    <input type="checkbox" id="bv-device-on-demand" aria-describedby="bv-device-on-demand-note" checked> On Demand
+                </label>
+                <p id="bv-device-on-demand-note" class="text-muted">Automatically uses this rule when the device connects.</p>
                 <label class="bv-check" id="bv-device-kill-field">
                     <input type="checkbox" id="bv-device-kill" checked> Kill Switch
                 </label>
@@ -573,4 +574,45 @@
             </form>
         </section>
     </div>
+    <section id="bv-system-page" data-bv-panel="system" aria-labelledby="bv-system-title" hidden>
+        <section class="bv-panel">
+            <h2 id="bv-system-title">System Settings</h2>
+            <div class="bv-fields">
+                <label for="bv-appearance">Appearance
+                    <select id="bv-appearance" class="form-control">
+                        <option value="system">System theme</option>
+                        <option value="day">Day</option>
+                        <option value="night">Night</option>
+                    </select>
+                </label>
+            </div>
+        </section>
+        <section id="bv-system-updates" class="bv-panel" aria-labelledby="bv-update-title" hidden>
+            <h2 id="bv-update-title">Package updates</h2>
+            <p id="bv-update-status" role="status"></p>
+            <div class="bv-actions">
+                <button type="button" id="bv-update-enable" class="btn btn-primary" hidden>Enable signed updates</button>
+                <button type="button" id="bv-update-check" class="btn btn-default" disabled>Check for updates</button>
+                <button type="button" id="bv-update-apply" class="btn btn-primary" hidden>Apply update</button>
+                <a href="/ui/core/firmware">Open OPNsense Firmware</a>
+            </div>
+        </section>
+        <section id="bv-system-backups" class="bv-panel" aria-labelledby="bv-backup-title" hidden>
+            <h2 id="bv-backup-title">Backup and restore</h2>
+            <p class="text-muted">Back up routing settings, device rules and domain lists. Restore on this router using its existing tunnels.</p>
+            <div class="bv-actions">
+                <button type="button" id="bv-backup-download" class="btn btn-default">Download settings backup</button>
+            </div>
+            <div class="bv-fields">
+                <label>Settings backup file
+                    <input type="file" id="bv-backup-file" class="form-control" accept=".json,application/json">
+                </label>
+            </div>
+            <p id="bv-backup-preview" role="status"></p>
+            <div class="bv-actions">
+                <button type="button" id="bv-backup-check" class="btn btn-default" disabled>Preview restore</button>
+                <button type="button" id="bv-backup-restore" class="btn btn-primary" disabled>Restore settings</button>
+            </div>
+        </section>
+    </section>
 </div>

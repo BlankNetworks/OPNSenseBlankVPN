@@ -17,6 +17,8 @@ OPNsense officially distributes x86-64 images. For NanoPi R4S/R4SE and R5S, star
 
 ## Install or upgrade
 
+If Blank VPN already has **System Settings → Package updates**, follow [Update from the WebGUI](#update-from-the-webgui). For a first install or an upgrade from 0.8.14 or earlier, install one release package. You can upgrade over your existing Blank VPN installation.
+
 Use an existing SSH connection or choose **8) Shell** on the local console. For SSH, run `ssh USER@ROUTER` from your computer using your configured SSH account and the router’s LAN address or hostname. Run the install commands from a root shell on the router. Check the edition, version series, and package ABI first. [OPNsense console and SSH](https://docs.opnsense.org/manual/install.html)
 
 ```sh
@@ -42,6 +44,14 @@ For an upgrade, follow either path over the existing installation. Verify with `
 
 For delegated access, assign **VPN: Blank VPN: View devices and connections** or **VPN: Blank VPN: Manage tunnels and policy routing** in the OPNsense user manager.
 
+### Update from the WebGUI
+
+1. Open **VPN → Blank VPN → Dashboard → System Settings** over HTTPS. Under **Package updates**, click **Enable signed updates** once. This adds the Blank Networks repository for your package ABI using its bundled public key.
+2. Click **Check for updates**, then **Apply update** when a version is available. Wait for the installed version to appear. The WebGUI and VPN connections may briefly reconnect.
+3. You can also update from **System → Firmware → Updates** after enabling the repository. Use **Check for updates** to refresh the package list. On compatible systems with the repository already enabled, **System → Firmware → Plugins** can install Blank VPN with community plug-ins visible.
+
+The in-plugin update installs the signed Blank VPN package for OPNsense Community Edition 26.7.x. The OPNsense Firmware page manages system updates. [OPNsense firmware management](https://docs.opnsense.org/manual/firmware.html)
+
 ## Build
 
 Run the following from the source directory on a matching OPNsense lab host to build with FreeBSD `pkg create` and verify with `pkg info -F`.
@@ -59,7 +69,7 @@ python3 build/package.py --cross --arch aarch64
 
 The package and SHA-256 file are written to `dist/`. To reproduce the bundled release on a Linux development host with Go, run `sh build/prepare-release.sh /tmp/blankvpn-runtime amd64`, followed by `python3 build/package.py --cross --arch amd64 --runtime-dir /tmp/blankvpn-runtime`. For ARM64, use `aarch64` for both commands.
 
-To publish a new version, update `VERSION` in [build/package.py](build/package.py) and record the changes in [RELEASE_NOTES.md](RELEASE_NOTES.md). A push to `main` with `[publish release]` in the head commit message builds and verifies both packages. The workflow uses that version and the verified asset checksums to generate the install commands on the release page.
+To publish a new version, update `VERSION` in [build/package.py](build/package.py) and record the changes in [RELEASE_NOTES.md](RELEASE_NOTES.md). A push to `main` with `[publish release]` in the head commit message builds and verifies both packages. The workflow uses that version and the verified asset checksums to generate the install commands on the release page. After publication it verifies and deploys the signed firmware repository for both architectures.
 
 ## Open the dashboard
 
@@ -141,6 +151,10 @@ Open **Network Settings**, check the Ethernet ports or VLANs under **Interface**
 
 In **Network Settings**, choose **Only Devices I choose** and press **Refresh** to see LAN devices and Tailscale peers. **Select** fills the addresses and MAC where available. The LAN list shows IPv4 neighbors from OPNsense’s current ARP table. Saved rules stay visible for devices that go offline. For a matching active Kea or Dnsmasq lease, **Reserve IP and save rule** adds a DHCP reservation and applies the rule. For other devices, create a unique reservation in OPNsense first. Selecting Multi-Path for a device uses the domain lists assigned in **Multi-Path Settings**. Add the device’s stable IPv6 address to cover that address as well. On shared LANs, other IPv6 addresses follow the native policy. Use a dedicated strict interface for network-wide internet IPv6 blocking.
 
+**On Demand** is checked by default for new and existing LAN and Tailscale rules that use one server or Multi-Path. With routing enabled, a device’s first matching traffic uses its saved rule. Dedicated WireGuard tunnels with a Kill Switch can idle between uses. Shared tunnels and exits that require monitoring can stay ready. You can use **Kill Switch** with **On Demand**. On Demand leaves Blocked and Off rules as selected.
+
+Check **Follow DHCP reservation by MAC** on a LAN rule to use the device’s unique IPv4 reservation on that Ethernet port or VLAN. If you change the reservation, renew the device’s lease. Blank VPN follows the new address during its next maintenance check and resets affected connections. A missing or conflicting reservation pauses the MAC rule for IPv4. On a shared LAN, IPv4 traffic without a valid binding follows the remaining firewall policy. Use a strict managed interface to block unmatched internet traffic. Keep the client on OPNsense-managed DHCP with a stable MAC address. A manually entered stable IPv6 address remains tied to that address.
+
 You can run multiple provider exits together, with up to 32 VPN profiles and eight active proxy exits. A phone can use Mullvad, a TV ExpressVPN, a tablet a proxy, and a Mac NordVPN. With Multi-Path, select a different exit for each service, such as a Japan exit for Netflix, a USA exit for Hulu, and a China exit for WeChat. Each service uses the domains you enter. Presets are starting lists that you can edit.
 
 Use **Ping** beside an active one-server rule for a LAN or Tailscale device. It runs an HTTPS probe from OPNsense through the assigned server and looks for packets in both directions on a firewall state belonging to the device's route. Open a fresh page on the device before running the check.
@@ -173,9 +187,15 @@ Multi-Path forwards matching DNS through the chosen tunnel and uses the regular 
 
 Tunnel health is polled. Multi-Path blocks regular internet once the outage is detected and the firewall rules are applied. VPN exits are probed every minute and active proxy exits are checked on a four-minute rotation. A state reset can interrupt existing local sessions on the protected address or network. Shared-LAN device rules cover only the saved IPs, so additional IPv6 addresses require Whole-Network coverage or a dedicated strict interface.
 
+## Back up and restore routing settings
+
+Open **System Settings → Backup and restore** and choose **Download settings backup**. It saves the Blank VPN routing settings, device rules, Multi-Path lists, and Mullvad server-selection preferences. To restore, disable VPN routing, select the backup made on this router, click **Preview restore**, then confirm **Restore settings**. Existing tunnels are required. Routing stays disabled so you can review the settings before enabling it.
+
+The backup excludes provider credentials, subscription secrets, WireGuard keys, and the native OPNsense configuration. Use **System → Configuration → Backups** for an OPNsense configuration backup. The **Appearance** control under System Settings saves your theme in the browser.
+
 ## Upgrade, rollback and removal
 
-- **Upgrade** in a validated lab first. Export the OPNsense configuration, retain the previous package, and verify the new checksum. Use the verified upgrade commands in [Install or upgrade](#install-or-upgrade). Confirm ACLs, the active PF rules, DNS, and both tested exit paths after the upgrade.
+- **Upgrade** in a validated lab first. Export the OPNsense configuration, retain the previous package, and verify the new checksum. Use [Update from the WebGUI](#update-from-the-webgui) once signed updates are enabled. Confirm ACLs, the active PF rules, DNS, and both tested exit paths after the upgrade.
 - **Roll back routing** by disabling Blank VPN from the independent management connection. Review native policy after reload. Existing traffic states can remain until expiry or a targeted state reset. Use the console and OPNsense configuration history if the dashboard is inaccessible.
 - **Restore a prior build** with the corresponding configuration backup and previous package. Test the backup restoration and confirm that the plug-in and native object versions agree before enabling routing again.
 - **Remove** service rules, device assignments, and profiles after disabling routing. Use `pkg -o DEVELOPER_MODE=true delete os-blank-vpn` so the package checks for remaining managed state. Verify that ordinary firewall routing works and remove manually created DNS, alternate-hostname, and landing-page entries if they are no longer needed. Mullvad devices remain registered until you remove them from your account.

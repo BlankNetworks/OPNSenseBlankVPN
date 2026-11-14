@@ -25,6 +25,13 @@
             proxyFeeds: [],
             proxyCores: {},
             canManageCores: false,
+            canManageUpdates: false,
+            canWriteUpdates: false,
+            canManageBackups: false,
+            update: null,
+            updateTimer: null,
+            updateBusy: false,
+            backup: null,
             section: 'vpns',
             provider: 'mullvad',
             vpnProviders: {},
@@ -47,7 +54,7 @@
             availableInterfaces: [],
             canManage: true,
             editing: null,
-            reserveIp: false,
+            assignmentDevice: null,
             busy: false,
             dashboardRequest: null,
             settingsDirty: false,
@@ -102,7 +109,7 @@
                 method,
                 dataType: 'json',
                 cache: false,
-                timeout: controller === 'core' ? 240000 : 45000
+                timeout: controller === 'core' ? 240000 : controller === 'update' ? 90000 : 45000
             };
             if (payload instanceof FormData) {
                 request.contentType = false;
@@ -377,6 +384,65 @@
             }
         }
 
+        function renderUpdate(data) {
+            state.update = {...data, pollUntil: data.pollUntil || state.update?.pollUntil ||
+                (data.running ? Date.now() + 600000 : 0)};
+            const status = byId('update-status');
+            const summary = [data.installed ? 'Installed ' + data.installed : '',
+                data.available ? 'Available ' + data.available : '', data.message];
+            status.textContent = summary.filter(Boolean).join(' · ');
+            byId('update-enable').hidden = !state.canWriteUpdates || data.enabled || !data.supported || data.running;
+            byId('update-enable').disabled = state.updateBusy;
+            byId('update-check').hidden = !state.canWriteUpdates;
+            byId('update-check').disabled = !data.enabled || !data.supported || data.running || state.updateBusy;
+            byId('update-apply').hidden = !state.canWriteUpdates || !data.enabled || !data.available || data.running;
+            byId('update-apply').disabled = state.updateBusy;
+            clearTimeout(state.updateTimer);
+            if (data.running) {
+                state.updateTimer = window.setTimeout(() => void refreshUpdate(true), 4000);
+            }
+        }
+
+        async function refreshUpdate(retry = false) {
+            try {
+                const result = await api('status', undefined, '', 'update');
+                if (state.updateBusy) {
+                    return;
+                }
+                const previous = state.update;
+                renderUpdate(result);
+                if (previous?.running && !result.running) {
+                    const installed = previous.installed && previous.installed !== result.installed;
+                    notice(result.message || (installed ? 'Update installed.' : 'Update ended. Check package status.'),
+                        result.phase === 'failed' ? 'danger' : 'success');
+                }
+            } catch (error) {
+                if (retry && Date.now() < (state.update?.pollUntil || 0)) {
+                    state.updateTimer = window.setTimeout(() => void refreshUpdate(true), 4000);
+                    return;
+                }
+                notice(errorMessage(error, 'Could not read package update status.'), 'danger');
+            }
+        }
+
+        function restoreAvailability() {
+            const selected = Boolean(byId('backup-file').files[0]);
+            const enabled = state.settings?.enabled === true;
+            byId('backup-check').disabled = !selected || enabled || state.busy;
+            byId('backup-restore').disabled = !state.backup || enabled || state.busy;
+            if (enabled) {
+                byId('backup-preview').textContent = 'Disable VPN routing in Network Settings before restoring a backup.';
+            } else if (!state.backup) {
+                byId('backup-preview').textContent = '';
+            }
+        }
+
+        function renderSystem() {
+            byId('system-updates').hidden = !state.canManageUpdates;
+            byId('system-backups').hidden = !state.canManageBackups;
+            restoreAvailability();
+        }
+
         function showSection(section) {
             state.section = section;
             for (const button of root.querySelectorAll('[data-bv-section]')) {
@@ -391,6 +457,12 @@
             }
             if (section === 'vpns') {
                 restoreSavedLogin();
+            }
+            if (section === 'system') {
+                renderSystem();
+                if (state.canManageUpdates) {
+                    void refreshUpdate();
+                }
             }
             if (section === 'network') {
                 renderDeviceRules();
@@ -454,7 +526,11 @@
                 const tailnet = (device?.kind || assignment?.kind) === 'tailnet';
                 const row = (tailnet ? tailnetBody : body).insertRow();
                 const name = assignment?.label || device?.name || device?.ipv4 || assignment?.ip || 'Unnamed device';
-                const ip = device?.reservationIpv4 || device?.ipv4 || assignment?.ip || '';
+                const bindMac = assignment?.bindMac === true;
+                const macBindingSupported = device?.macBindingSupported === true;
+                const effectiveIp = assignment?.effectiveIp ?? device?.currentIpv4;
+                const reserveAddress = device?.reservationIpv4 || device?.ipv4;
+                const ip = effectiveIp || reserveAddress || assignment?.ip || '';
                 const ipv6 = list(device?.ipv6 || assignment?.ipv6);
                 const routableV6 = ipv6.filter(address => !address.toLowerCase().startsWith('fe80:'));
                 const interfaceId = assignment?.interface || device?.interface ||
@@ -464,13 +540,16 @@
                 const canUseInterface = tailnet ? nativeTailnet || transit.length > 0 : managed.includes(interfaceId);
                 const blocked = assignment?.killSwitchActive === true;
                 const paused = assignment?.paused === true;
+                const waitingForAddress = bindMac && !effectiveIp;
                 const status = assignment
                     ? (paused ? 'Disabled' : wholeNetwork ? 'Paused by Whole-Network coverage' : !state.settings?.enabled
-                        ? 'Saved · Routing off' : assignment.appliedRoute || 'Rule saved')
+                        ? 'Saved · Routing off' : waitingForAddress ? 'Waiting for DHCP' : assignment.appliedRoute || 'Rule saved')
                     : !canUseInterface ? (tailnet ? 'Exit node setup needed' : 'Interface outside coverage')
-                        : !reserved && !reserveIp ? (tailnet ? 'Both Tailscale addresses needed' : 'DHCP reservation needed')
+                        : macBindingSupported && reserved ? 'Ready to follow MAC'
+                            : !reserved && !reserveIp ? (tailnet ? 'Both Tailscale addresses needed' : 'DHCP reservation needed')
                             : reserveIp ? 'Current lease can be reserved' : 'Ready to assign';
-                const addresses = [...new Set([ip, ...list(device?.ipv4Addresses), ...ipv6].filter(Boolean))];
+                const addresses = [...new Set([waitingForAddress ? '' : ip,
+                    ...list(waitingForAddress ? [] : device?.ipv4Addresses), ...ipv6].filter(Boolean))];
                 cell(row, name, 'Device', tailnet ? 'Tailscale' : (device?.mac || assignment?.mac));
                 cell(row, addresses[0], 'Addresses', addresses.slice(1).join(' · '));
                 if (tailnet) {
@@ -478,15 +557,26 @@
                 } else {
                     cell(row, interfaceId ? networkName(interfaceId) : '—', 'Interface');
                 }
+                const onDemand = assignment && ['full', 'multi'].includes(assignment.mode) && assignment.onDemand !== false;
+                const ruleDetail = [assignment?.profile ? profileName(assignment.profile) : '', onDemand ? 'On Demand' : ''];
+                if (bindMac) {
+                    ruleDetail.push('Follows MAC address');
+                }
                 cell(row, assignment ? modes[assignment.mode] || 'Regular internet' : 'No rule', 'Rule',
-                    assignment?.profile ? profileName(assignment.profile) : '');
+                    ruleDetail.filter(Boolean).join(' · '));
                 cell(row, status, 'Status', wholeNetwork || paused ? '' : blocked ? 'Kill Switch blocking internet'
                     : assignment?.killSwitch ? 'Kill Switch on' : '');
                 const actions = row.insertCell();
                 actions.setAttribute('role', 'cell');
                 if (state.canManage && !wholeNetwork) {
+                    const discovered = device ? {
+                        ip: waitingForAddress ? assignment.ip : ip, reserveAddress, effectiveIp,
+                        ipv6: tailnet || routableV6.length === 1 ? routableV6[0] : '',
+                        interface: interfaceId, mac: device.mac, label: (device.name || '').replace(/[<>]/g, '').slice(0, 80),
+                        reserved, reserveIp, canUseInterface, macBindingSupported
+                    } : null;
                     if (assignment) {
-                        actions.append(button('Edit', () => openAssignment(assignment), 'Edit ' + name));
+                        actions.append(button('Edit', () => openAssignment(assignment, tailnet ? 'tailnet' : 'lan', discovered), 'Edit ' + name));
                         if (state.settings?.enabled && !paused && assignment.mode === 'full' && assignment.profile) {
                             appendConnectionTest(actions, 'testDeviceRoute', assignment.id, name, '', false, 'Ping');
                         }
@@ -504,11 +594,7 @@
                             }, action + ' ' + name));
                         }
                     } else {
-                        actions.append(button('Select', () => openAssignment(null, tailnet ? 'tailnet' : 'lan', {
-                            ip, ipv6: tailnet || routableV6.length === 1 ? routableV6[0] : '',
-                            interface: interfaceId, mac: device.mac, label: (device.name || '').replace(/[<>]/g, '').slice(0, 80),
-                            reserved, reserveIp, canUseInterface
-                        }), 'Select ' + name));
+                        actions.append(button('Select', () => openAssignment(null, tailnet ? 'tailnet' : 'lan', discovered), 'Select ' + name));
                     }
                 }
             }
@@ -1151,6 +1237,9 @@
                 state.services = array(data.services);
                 state.proxyCores = data.proxyCores || {};
                 state.canManageCores = data.canManageCores === true;
+                state.canManageUpdates = data.canManageUpdates === true && !insecureWebGui;
+                state.canWriteUpdates = data.canWriteUpdates === true && state.canManageUpdates;
+                state.canManageBackups = data.canManageBackups === true && !insecureWebGui;
                 byId('core-manager').hidden = !state.canManageCores;
                 state.presets = data.servicePresets || {};
                 state.vpnProviders = data.vpnProviders || {mullvad: {name: 'Mullvad'}};
@@ -1163,6 +1252,7 @@
                 options(byId('provider'), providers, 'Choose a VPN service', byId('provider').value || state.provider);
                 renderProvider();
                 state.settings = data.settings;
+                renderSystem();
                 state.canManage = data.canManage !== false;
                 state.activeSmartInterfaces = list(data.activeSmartInterfaces || data.settings?.smartInterfaces);
                 if (!state.signingIn && loginRevision === state.loginRevision) {
@@ -1241,6 +1331,12 @@
             const supportsKillSwitch = full || mode === 'multi';
             byId('device-kill-field').hidden = !supportsKillSwitch;
             kill.disabled = !supportsKillSwitch;
+            byId('device-on-demand-field').hidden = !supportsKillSwitch;
+            byId('device-on-demand-note').hidden = !supportsKillSwitch;
+            byId('device-on-demand').disabled = !supportsKillSwitch;
+            byId('device-on-demand-note').textContent = byId('device-on-demand').checked
+                ? 'Automatically uses this rule when the device connects. Shared tunnels may stay ready.'
+                : 'Keep the tunnel ready while this rule is enabled.';
             const killSwitch = supportsKillSwitch && kill.checked;
             byId('failure-field').hidden = !primary || killSwitch;
             const showBackup = primary && !killSwitch && failover.value === 'backup';
@@ -1279,6 +1375,55 @@
             byId('route-note').textContent = notes.join(' ');
         }
 
+        function deviceMacBinding() {
+            return !byId('device-bind-mac').disabled && byId('device-bind-mac').checked;
+        }
+
+        function reserveDeviceAddress() {
+            const observed = state.assignmentDevice;
+            return byId('device-kind').value === 'lan' &&
+                Boolean(observed?.reserveIp && observed.canUseInterface) &&
+                (!state.editing || state.editing.bindMac === true);
+        }
+
+        function updateDeviceIdentity() {
+            const observed = state.assignmentDevice;
+            const saved = state.editing;
+            const tailnet = byId('device-kind').value === 'tailnet';
+            const supportsMac = !tailnet && (observed?.macBindingSupported === true || saved?.bindMac === true);
+            byId('device-bind-mac-field').hidden = !supportsMac;
+            byId('device-bind-mac').disabled = !supportsMac;
+            const bindMac = deviceMacBinding();
+            const reserve = reserveDeviceAddress();
+            if (!tailnet && (observed || saved)) {
+                const observedAddress = observed?.reserveAddress || observed?.ip || saved?.ip || '';
+                byId('ip').value = bindMac ? (observed?.effectiveIp || saved?.effectiveIp || observed?.ip || saved?.ip || '')
+                    : (saved && !saved.bindMac ? saved.ip : observedAddress);
+            }
+            byId('save-device').textContent = reserve ? 'Reserve IP and save rule' : 'Save device rule';
+            let note = '';
+            if (observed && !observed.canUseInterface && !tailnet) {
+                note = 'Select this interface under Routing coverage and save, then refresh.';
+            } else if (bindMac) {
+                note = 'The rule follows changes to the DHCP reservation for this MAC on the selected interface.';
+                if (reserve) {
+                    note += ' Saving reserves the current address.';
+                }
+                if (saved && !saved.effectiveIp && !observed?.effectiveIp) {
+                    note += ' Waiting for DHCP. IPv4 follows the remaining firewall policy until the reservation is available.';
+                }
+            } else if (reserve) {
+                note = 'Save this device’s current address as a DHCP reservation and apply the rule.';
+            } else if (tailnet && observed && !observed.reserved) {
+                note = 'This peer needs both Tailscale addresses.';
+            } else if (tailnet && !observed && !saved) {
+                note = 'Use the device’s IPv4 address from the Tailscale app. OPNsense verifies the peer when you save.';
+            } else if (!tailnet && !observed?.reserved && (!saved || saved.bindMac === true)) {
+                note = 'Use the device’s reserved DHCP address and MAC.';
+            }
+            byId('identity').textContent = note;
+        }
+
         function renderAssignmentInterfaces(previous = byId('interface').value) {
             const managed = list(state.settings?.interfaces);
             const tailnet = list(state.settings?.tailscaleInterfaces);
@@ -1299,12 +1444,9 @@
 
         function openAssignment(assignment = null, kind = 'lan', discovered = null) {
             state.editing = assignment;
+            state.assignmentDevice = discovered;
             const device = assignment || discovered;
             const locked = Boolean(device);
-            state.reserveIp = Boolean(discovered?.reserveIp && discovered.canUseInterface);
-            const save = byId('save-device');
-            save.disabled = false;
-            save.textContent = state.reserveIp ? 'Reserve IP and save rule' : 'Save device rule';
             byId('assignment').hidden = false;
             byId('assignment-title').textContent = assignment ? 'Edit device rule' : 'Add device rule';
             byId('ip').value = device?.ip || '';
@@ -1328,17 +1470,12 @@
             byId('failure').value = assignment?.failure === 'backup' ? 'backup' : 'wan';
             byId('device-kill').checked = ['full', 'multi'].includes(assignment?.mode)
                 ? (assignment.killSwitch ?? assignment.failure === 'block') : true;
+            byId('device-on-demand').checked = assignment?.onDemand !== false;
+            byId('device-bind-mac').checked = assignment ? assignment.bindMac === true
+                : discovered?.macBindingSupported === true;
+            updateDeviceIdentity();
             updateFailure();
             byId('backup').value = assignment?.backup || '';
-            byId('identity').textContent = discovered && !discovered.canUseInterface && kind !== 'tailnet'
-                ? 'Select this interface under Routing coverage and save, then refresh.'
-                : state.reserveIp ? 'Save this device’s current address as a DHCP reservation and apply the rule.'
-                : discovered && !discovered.reserved
-                    ? (kind === 'tailnet' ? 'This peer needs both Tailscale addresses.'
-                        : 'Create a DHCP reservation for this address and MAC in OPNsense, then refresh.')
-                    : discovered ? '' : byId('device-kind').value === 'tailnet'
-                        ? 'Use the device’s IPv4 address from the Tailscale app. OPNsense verifies the peer when you save.'
-                        : 'Use the device’s reserved DHCP address and MAC.';
             byId('remove-assignment').hidden = !assignment;
             byId('assignment-title').focus();
         }
@@ -1735,25 +1872,27 @@
         byId('mode').addEventListener('change', updateFailure);
         byId('device-kind').addEventListener('change', () => {
             renderAssignmentInterfaces();
-            byId('identity').textContent = byId('device-kind').value === 'tailnet' ? ''
-                : 'Use the device’s reserved DHCP address and MAC.';
+            updateDeviceIdentity();
             updateFailure();
         });
         byId('ipv6').addEventListener('input', updateFailure);
         byId('profile').addEventListener('change', updateFailure);
         byId('failure').addEventListener('change', updateFailure);
         byId('device-kill').addEventListener('change', updateFailure);
+        byId('device-on-demand').addEventListener('change', updateFailure);
+        byId('device-bind-mac').addEventListener('change', updateDeviceIdentity);
         byId('interface').addEventListener('change', updateFailure);
         byId('assign-form').addEventListener('submit', (event) => {
             event.preventDefault();
             if (byId('save-device').disabled) {
                 return;
             }
-            if (state.reserveIp && !window.confirm('Reserve this IP address and save the rule? OPNsense will reload the DHCP service.')) {
+            const reserveIp = reserveDeviceAddress();
+            if (reserveIp && !window.confirm('Reserve this IP address and save the rule? OPNsense will reload the DHCP service.')) {
                 return;
             }
             const payload = {
-                reserveIp: state.reserveIp,
+                reserveIp,
                 ip: byId('ip').value.trim(),
                 interface: byId('interface').value.trim(),
                 mac: byId('mac').value.trim(),
@@ -1764,8 +1903,12 @@
                 profile: byId('profile').value,
                 backup: byId('backup').required ? byId('backup').value : '',
                 killSwitch: !byId('device-kill').disabled && byId('device-kill').checked,
+                onDemand: !byId('device-on-demand').disabled && byId('device-on-demand').checked,
                 failure: byId('device-kill').checked || byId('mode').value !== 'full' ? 'block' : byId('failure').value
             };
+            if (payload.kind === 'lan') {
+                payload.bindMac = deviceMacBinding();
+            }
             void mutate(event.submitter, () => api('assign', payload), 'Device assignment saved.', () => {
                 if (state.editing) {
                     state.tests.delete('device:' + state.editing.id);
@@ -2261,6 +2404,96 @@
             byId('subscription-url').value = '';
             byId('manual-secret').value = '';
             byId('manual-parameters').value = '';
+        });
+
+        async function runUpdate(action, payload = {}) {
+            if (state.updateBusy || !state.update || state.update.running) {
+                return;
+            }
+            state.updateBusy = true;
+            renderUpdate(state.update);
+            try {
+                const result = await api(action, payload, '', 'update');
+                renderUpdate({...result, pollUntil: Date.now() + 600000});
+            } catch (error) {
+                notice(errorMessage(error, 'The package update operation failed.'), 'danger');
+            } finally {
+                state.updateBusy = false;
+                renderUpdate(state.update);
+            }
+        }
+
+        byId('update-enable').addEventListener('click', () => {
+            if (window.confirm('Enable the signed Blank Networks package repository on this router?')) {
+                void runUpdate('enable');
+            }
+        });
+        byId('update-check').addEventListener('click', () => void runUpdate('check'));
+        byId('update-apply').addEventListener('click', () => {
+            const version = state.update?.available;
+            if (version && window.confirm('Apply Blank VPN ' + version + '? The WebGUI and tunnels may reconnect.')) {
+                void runUpdate('apply', {version});
+            }
+        });
+        byId('backup-download').addEventListener('click', async (event) => {
+            const control = event.currentTarget;
+            control.disabled = true;
+            try {
+                const data = await api('export', {}, '', 'backup');
+                const url = URL.createObjectURL(new Blob([JSON.stringify(data.backup, null, 2) + '\n'],
+                    {type: 'application/json'}));
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'blank-vpn-routing-settings.json';
+                link.click();
+                window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+            } catch (error) {
+                notice(errorMessage(error, 'The settings backup could not be downloaded.'), 'danger');
+            } finally {
+                control.disabled = false;
+            }
+        });
+        byId('backup-file').addEventListener('change', () => {
+            state.backup = null;
+            restoreAvailability();
+        });
+        byId('backup-check').addEventListener('click', async (event) => {
+            const control = event.currentTarget;
+            const file = byId('backup-file').files[0];
+            if (!file || file.size > 2097152) {
+                notice('Choose a settings backup file up to 2 MiB.', 'danger');
+                return;
+            }
+            state.backup = null;
+            control.disabled = true;
+            byId('backup-restore').disabled = true;
+            try {
+                const backup = await file.text();
+                const result = await api('preview', {backup}, '', 'backup');
+                if (byId('backup-file').files[0] !== file) {
+                    return;
+                }
+                state.backup = {backup, confirmation: result.confirmation};
+                const preview = result.preview;
+                byId('backup-preview').textContent = 'Restore ' + preview.assignments + ' device rules and '
+                    + preview.services + ' domain lists, replacing ' + preview.existingAssignments + ' rules and '
+                    + preview.existingServices + ' lists. VPN routing remains disabled.';
+            } catch (error) {
+                notice(errorMessage(error, 'The settings backup could not be previewed.'), 'danger');
+            } finally {
+                restoreAvailability();
+            }
+        });
+        byId('backup-restore').addEventListener('click', (event) => {
+            if (!state.backup || !window.confirm('Replace the router’s saved Blank VPN routing settings with this backup?')) {
+                return;
+            }
+            void mutate(event.currentTarget, () => api('restore', state.backup, '', 'backup'),
+                'Settings restored. VPN routing remains disabled.', () => {
+                    state.backup = null;
+                    state.settingsDirty = false;
+                    byId('backup-file').value = '';
+                }).then(restoreAvailability);
         });
 
         const appearance = byId('appearance');

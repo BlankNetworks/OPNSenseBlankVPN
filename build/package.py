@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "os-blank-vpn"
-VERSION = "0.8.14"
+VERSION = "0.8.15"
 SERIES = "26.7"
 LEGACY_ARCHES = {"amd64": "x86:64", "aarch64": "aarch64:64"}
 CORE_INSTALLER = ROOT / "src/opnsense/scripts/OPNsense/BlankVpn/install_proxy_cores.py"
@@ -58,6 +58,7 @@ def payload(arch, runtime_dir=None):
         files[f"{PREFIX}/{relative.as_posix()}"] = (path.read_bytes(), mode)
     if not files:
         raise ValueError("No plugin files found under src/")
+    files[f"{PREFIX}/share/blankvpn/repo.pub"] = ((ROOT / "build/repo.pub").read_bytes(), 0o644)
     if runtime_dir is not None:
         check_binary = runpy.run_path(str(CORE_INSTALLER))["is_freebsd_binary"]
         for core in ("mihomo", "tun2socks", "xray", "sing-box"):
