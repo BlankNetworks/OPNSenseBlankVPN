@@ -1,4 +1,4 @@
-# Blank VPN validation
+# Blank VPN & Proxy validation
 
 ## Completed
 
@@ -35,7 +35,7 @@ A passing lab should confirm all of the following on the exact CE 26.7 build. Us
 | Configuration lifecycle | Force apply failure and confirm rollback. Test concurrent administration changes, reboot, upgrade, disable, and guarded removal. |
 | On Demand LAN and Tailscale | Create one-server rules with On Demand and Kill Switch together. Send the first request after idle and reboot. Verify egress through the assigned server, including when the Tailscale peer was offline. Stop the tunnel and check that no WAN traffic escapes. Test a shared exit and an existing Multi-Path rule. |
 | MAC reservation movement | Change the OPNsense DHCP reservation, renew the test client, and verify routing at the new IPv4 and removal of states at the old one. Assign the original IP to another device, then test conflicting DHCP and ARP claims. |
-| Signed package upgrade | Enable the signed repository in System Settings. Confirm Blank VPN appears in OPNsense Firmware and can upgrade from the previous release without modifying other packages. Exercise WebGUI reconnection, retained credentials and package-lock refusal. |
+| Signed package upgrade | Enable the signed repository in System Settings. Confirm Blank VPN & Proxy appears in OPNsense Firmware and can upgrade from the previous release without modifying other packages. Exercise WebGUI reconnection, retained credentials and package-lock refusal. |
 | Routing backup and restore | Export routing settings, change a rule, disable routing, preview the file and restore. Confirm the saved rules return, existing tunnels remain present and routing stays disabled. Reject an edited or different-router file. |
 | Provider behavior | Test a real Mullvad exit, cache expiry or API outage, account expiry and full slots. Confirm that changing an unassigned profile preserves its registered device. |
 

@@ -1,4 +1,4 @@
-Blank VPN assigns reserved IPv4 devices and domain-based services to VPN or
+Blank VPN & Proxy assigns reserved IPv4 devices and domain-based services to VPN or
 proxy exits on OPNsense. It supports Mullvad account onboarding, compatible
 native WireGuard and OpenVPN tunnels, and individually selected proxy servers
 from manual entries, links, and subscriptions.

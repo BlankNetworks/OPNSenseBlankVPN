@@ -173,7 +173,7 @@ class Mullvad
             $key = !is_link($path) && $mode !== false && ($mode & 0077) === 0
                 ? ($this->readJson($path)['key'] ?? '') : '';
             if (!is_string($key) || !preg_match('/^[a-f0-9]{64}$/D', $key)) {
-                throw new RuntimeException('Blank VPN could not read its account binding key.');
+                throw new RuntimeException('Blank VPN & Proxy could not read its account binding key.');
             }
             return hash_hmac('sha256', $id, hex2bin($key));
         } finally {
@@ -767,11 +767,11 @@ class Mullvad
     private function lock(string $name)
     {
         if (!is_dir($this->dataDirectory) && !@mkdir($this->dataDirectory, 0700, true) && !is_dir($this->dataDirectory)) {
-            throw new RuntimeException('Could not create the Blank VPN data directory.');
+            throw new RuntimeException('Could not create the Blank VPN & Proxy data directory.');
         }
         $permissions = @fileperms($this->dataDirectory);
         if ($permissions === false || ($permissions & 0077) !== 0 || is_link($this->dataDirectory)) {
-            throw new RuntimeException('The Blank VPN data directory must be private.');
+            throw new RuntimeException('The Blank VPN & Proxy data directory must be private.');
         }
         $path = $this->dataDirectory . '/' . $name . '.lock';
         $lock = is_link($path) ? false : @fopen($path, 'c');
@@ -779,7 +779,7 @@ class Mullvad
             if (is_resource($lock)) {
                 fclose($lock);
             }
-            throw new RuntimeException('Could not open the Blank VPN data lock.');
+            throw new RuntimeException('Could not open the Blank VPN & Proxy data lock.');
         }
         return $lock;
     }
@@ -793,7 +793,7 @@ class Mullvad
         $key = !is_link($path) && $permissions !== false && ($permissions & 0077) === 0
             ? $this->readJson($path)['privateKey'] ?? null : null;
         if (!$this->validKey($key)) {
-            throw new RuntimeException('The pending WireGuard key could not be read. Check the Blank VPN data directory.');
+            throw new RuntimeException('The pending WireGuard key could not be read. Check the Blank VPN & Proxy data directory.');
         }
         return $key;
     }
@@ -813,18 +813,18 @@ class Mullvad
         try {
             $bytes = json_encode($data, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
         } catch (JsonException) {
-            throw new RuntimeException('Could not encode Blank VPN data.');
+            throw new RuntimeException('Could not encode Blank VPN & Proxy data.');
         }
         $temporary = @tempnam($this->dataDirectory, '.mullvad-');
         if ($temporary === false) {
-            throw new RuntimeException('Could not create the Blank VPN data file.');
+            throw new RuntimeException('Could not create the Blank VPN & Proxy data file.');
         }
         try {
             if (
                 realpath(dirname($temporary)) !== realpath($this->dataDirectory) || !@chmod($temporary, 0600)
                 || @file_put_contents($temporary, $bytes) !== strlen($bytes) || !@rename($temporary, $path)
             ) {
-                throw new RuntimeException('Could not save Blank VPN data.');
+                throw new RuntimeException('Could not save Blank VPN & Proxy data.');
             }
         } finally {
             if (file_exists($temporary)) {

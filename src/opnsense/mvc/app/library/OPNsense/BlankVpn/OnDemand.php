@@ -10,7 +10,7 @@ final class OnDemand
     {
         $settings = Policy::effectiveRouting($model);
         $assignments = Policy::assignments($model, true);
-        $services = SmartRouting::activeServices($settings, SmartRouting::services($model));
+        $services = SmartRouting::forwardServices($settings, SmartRouting::services($model));
         return self::selectExits($settings, $assignments, $services);
     }
 

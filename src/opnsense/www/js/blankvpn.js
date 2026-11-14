@@ -35,6 +35,8 @@
             assignments: [],
             devices: [],
             tailnetDevices: [],
+            tailnetStatusAvailable: false,
+            discoveryTruncated: false,
             proxyPage: 0,
             proxyCatalogLoaded: false,
             proxyCatalogRequest: null,
@@ -496,7 +498,7 @@
             const profile = state.profiles.find((item) => item.id === id);
             const proxy = typeof id === 'string' && id.startsWith('proxy-')
                 ? state.proxyNodes.find((item) => 'proxy-' + item.id === id) : null;
-            return id === bypassDestination ? 'Bypass (regular internet)'
+            return id === bypassDestination ? 'Bypass (direct internet)'
                 : profile?.name || profile?.relay || proxy?.name || (id ? 'Unavailable server' : 'Normal internet');
         }
 
@@ -570,8 +572,12 @@
                 const macBindingSupported = device?.macBindingSupported === true;
                 const observedIp = device?.currentIpv4 || device?.ipv4 || '';
                 const effectiveIp = assignment?.effectiveIp ?? observedIp;
+                const reservationIp = assignment?.reservationIp || device?.reservationIpv4 || '';
                 const reserveAddress = device?.stable === true ? device.reservationIpv4 || observedIp : observedIp;
                 const ip = observedIp || effectiveIp || assignment?.ip || '';
+                const offline = Boolean(assignment && (!tailnet
+                    ? device ? device.online === false : !state.discoveryTruncated
+                    : device ? device.online === false : state.tailnetStatusAvailable));
                 const ipv6 = list(device?.ipv6 || assignment?.ipv6);
                 const routableV6 = ipv6.filter(address => !address.toLowerCase().startsWith('fe80:'));
                 const interfaceId = assignment?.interface || device?.interface ||
@@ -600,14 +606,35 @@
                 } else {
                     status = reserveIp ? 'Current lease can be reserved' : 'Ready to assign';
                 }
-                const hideOldAddress = waitingForAddress && (!observedIp || observedIp === assignment.ip);
-                const addresses = [...new Set([hideOldAddress ? '' : ip,
-                    ...list(hideOldAddress ? [] : device?.ipv4Addresses), ...ipv6].filter(Boolean))];
+                const addresses = [...new Set([(bindMac ? effectiveIp || observedIp || reservationIp || assignment.ip : ip),
+                    ...list(device?.ipv4Addresses), ...ipv6].filter(Boolean))];
                 const identity = [device?.mac || assignment?.mac, device?.arpConfirmed === false ? 'DHCP lease' : ''];
-                cell(row, name, 'Device', tailnet ? 'Tailscale' : identity.filter(Boolean).join(' · '));
-                cell(row, addresses[0], 'Addresses', addresses.slice(1).join(' · '));
+                const deviceCell = cell(row, name, 'Device', tailnet ? 'Tailscale' : identity.filter(Boolean).join(' · '));
+                if (offline) {
+                    const badge = document.createElement('span');
+                    badge.className = 'bv-offline';
+                    badge.textContent = 'Offline';
+                    if (!tailnet) {
+                        badge.title = 'No recent LAN activity detected';
+                    }
+                    deviceCell.insertBefore(badge, deviceCell.firstElementChild);
+                }
+                const addressDetail = addresses.slice(1);
+                if (waitingForAddress) {
+                    if (observedIp) {
+                        addressDetail.push(device.online === false ? 'Last reported lease' : 'Discovered IP');
+                    }
+                    const addAddressDetail = (label, address) => {
+                        if (address && address !== observedIp) {
+                            addressDetail.push(addresses[0] === address ? label : label + ' ' + address);
+                        }
+                    };
+                    addAddressDetail('DHCP reservation', reservationIp !== assignment.ip ? reservationIp : '');
+                    addAddressDetail('Saved IP', assignment.ip);
+                }
+                cell(row, addresses[0], 'Addresses', addressDetail.join(' · '));
                 if (tailnet) {
-                    cell(row, device ? (device.online ? 'Online' : 'Offline') : 'Unknown', 'Availability');
+                    cell(row, device?.online ? 'Online' : device || offline ? 'Offline' : 'Unknown', 'Availability');
                 } else {
                     cell(row, interfaceId ? networkName(interfaceId) : '—', 'Interface');
                 }
@@ -639,7 +666,7 @@
                         ip: waitingForAddress ? assignment.ip : ip, reserveAddress, effectiveIp,
                         ipv6: tailnet || routableV6.length === 1 ? routableV6[0] : '',
                         interface: interfaceId, mac: device.mac, label: (device.name || '').replace(/[<>]/g, '').slice(0, 80),
-                        reserved, reserveIp, canUseInterface, macBindingSupported,
+                        reserved, reserveIp: reserveIp && !offline, canUseInterface, macBindingSupported,
                         addressConflict: device.addressConflict === true
                     } : null;
                     if (assignment) {
@@ -841,7 +868,6 @@
             if (settings && !state.settingsDirty) {
                 byId('coverage').value = settings.coverage || 'device';
                 byId('network-mode').value = settings.networkMode || 'disabled';
-                requireKillSwitch(byId('network-kill'), false);
                 byId('network-kill').checked = settings.networkKillSwitch ?? settings.networkMode !== 'multi';
                 const ports = availablePorts();
                 renderInterfaceChoices('managed', ports, list(settings.interfaces), 'No assigned home Ethernet or VLAN interfaces.');
@@ -881,8 +907,7 @@
             }
             byId('network-fields').hidden = !network;
             byId('network-kill-field').hidden = !network;
-            kill.disabled = !network || combined || (!baseServer && mode !== 'multi');
-            requireKillSwitch(kill, network && combined);
+            kill.disabled = !network || (!baseServer && mode !== 'multi');
             const killSwitch = kill.checked;
             byId('network-profile-label').textContent = combined ? 'Base server' : 'Saved server';
             byId('network-profile-field').hidden = !network || !baseServer;
@@ -890,14 +915,17 @@
             const summary = {
                 full: exit.value
                     ? 'All selected interfaces use ' + profileName(exit.value) + '.'
-                        + (killSwitch ? ' Internet is blocked if the server goes offline.' : '')
+                        + (killSwitch ? ' The Kill Switch blocks VPN traffic if the server goes offline.'
+                            : ' Traffic uses direct internet if the server goes offline.')
                     : 'Add a VPN or proxy server, then select it here.',
                 multi: 'The selected interfaces use your Multi-Path lists. '
-                    + (killSwitch ? 'All internet is blocked if a list’s server goes offline or no list has a server.'
+                    + (killSwitch ? 'The Kill Switch blocks internet when a list’s server goes offline or no list has a server. Bypass can still use direct internet.'
                         : 'Other traffic uses regular internet.'),
                 full_multi: exit.value
                     ? 'Default traffic uses ' + profileName(exit.value) + '. Matching destinations use their Multi-Path servers. '
-                        + 'The Kill Switch blocks traffic when its assigned server is unavailable. Bypass lists use the base server.'
+                        + (killSwitch ? 'The Kill Switch blocks traffic assigned to the base server if it goes offline. '
+                            : 'Traffic assigned to the base server uses direct internet if it goes offline. ')
+                        + 'Bypass uses direct internet.'
                     : 'Choose a base server for default traffic. Set destination overrides in Multi-Path.',
                 blocked: 'Internet is blocked on the selected LANs and VLANs.',
                 disabled: 'Devices use your normal OPNsense routing.'
@@ -911,8 +939,11 @@
                     (route.blocked ? 'Internet blocked' : saved.networkMode === 'multi' ? 'Multi-Path' : 'Regular internet'));
             });
             const activeCoverage = saved?.networkMode === 'full_multi' ? 'Whole-Network + Multi-Path' : 'Whole-Network coverage';
+            const activeKillSwitch = usesBaseServer(saved?.networkMode) || saved?.networkMode === 'multi'
+                ? ' · Kill Switch ' + ((saved.networkKillSwitch ?? saved.networkMode !== 'multi') ? 'on' : 'off') : '';
             byId('current-routing').textContent = !saved?.enabled ? 'Active routing · Off'
-                : saved.coverage === 'network' ? 'Active routing · ' + activeCoverage + (active.length ? ' · ' + active.join(' / ') : '')
+                : saved.coverage === 'network' ? 'Active routing · ' + activeCoverage + activeKillSwitch
+                    + (active.length ? ' · ' + active.join(' / ') : '')
                     : 'Active routing · Only Devices I choose';
         }
 
@@ -979,12 +1010,12 @@
                         : 'MagicDNS is unavailable. Open the dashboard using its Tailscale IP.';
             byId('bonjour').hidden = !localName || !home || !address;
             byId('bonjour-command').textContent = byId('bonjour').hidden ? ''
-                : 'dns-sd -P "Blank VPN" _https._tcp local ' + port + ' blankvpn.local ' + address;
+                : 'dns-sd -P "Blank VPN & Proxy" _https._tcp local ' + port + ' blankvpn.local ' + address;
         }
 
         function domainDestinations(current) {
             const choices = [
-                {value: bypassDestination, label: 'Bypass (regular internet)'},
+                {value: bypassDestination, label: 'Bypass (direct internet)'},
                 ...routingServers().map((profile) => {
                     const choice = exitChoice(profile);
                     return hasVpnDns(profile) ? choice : {...choice, label: choice.label + ' (IP entries only)'};
@@ -999,17 +1030,18 @@
         function renderServices() {
             const interfaces = state.activeSmartInterfaces;
             const settings = state.settings;
-            const bypass = settings?.coverage === 'network' && settings.networkMode === 'full';
-            const combined = settings?.coverage === 'network' ? settings.networkMode === 'full_multi'
-                : state.assignments.some((assignment) => assignment.mode === 'full_multi' && !assignment.paused);
+            const networkMode = settings?.coverage === 'network' ? settings.networkMode : '';
+            const blocked = settings?.enabled && networkMode === 'blocked';
             const active = settings?.enabled && interfaces.length
                 && state.services.some((service) => service.profile && service.profile !== bypassDestination);
-            byId('smart-status').textContent = bypass
-                ? 'Bypass lists use regular internet under Whole-Network coverage. The Kill Switch still applies if the server goes offline.'
-                : combined ? 'Matching destinations use their Multi-Path servers. Bypass lists use the base server for VPN + Multi-Path rules.'
-                    : active ? 'Routing matching destinations on ' + interfaces.map(networkName).join(', ') + '.'
-                        : 'Choose a server and enable Multi-Path to use these lists. Use Bypass with Whole-Network coverage through one VPN or proxy.';
-            byId('use-lan').hidden = bypass || (combined && settings?.coverage === 'network') ||
+            const bypassNote = 'Bypass uses direct internet when available, including while the Kill Switch is on.';
+            byId('smart-status').textContent = blocked ? 'Whole-Network coverage is set to Blocked. Internet access stays blocked.'
+                : networkMode === 'full' ? bypassNote
+                    : networkMode === 'full_multi' && settings?.enabled
+                        ? 'Matching destinations use their Multi-Path servers. ' + bypassNote
+                        : active ? 'Routing matching destinations on ' + interfaces.map(networkName).join(', ') + '. ' + bypassNote
+                            : 'Choose a server and enable Multi-Path to use these lists. ' + bypassNote;
+            byId('use-lan').hidden = usesBaseServer(networkMode) ||
                 !state.availableInterfaces.some((item) => item.id === 'lan')
                 || interfaces.includes('lan') || list(settings?.strictInterfaces).includes('lan');
             const body = byId('service-list');
@@ -1062,10 +1094,12 @@
                     } else {
                         destination.textContent = saved ? profileName(saved) : 'Unassigned';
                     }
+                    const isBypass = saved === bypassDestination;
                     const status = Object.entries(service.routing || {}).map(([id, rule]) =>
-                        networkName(id) + ' · ' + (rule.bypass ? 'Regular internet' : rule.gateway ||
-                            (rule.guard ? 'Tunnel unavailable' : 'Inactive')));
-                    cell(row, saved ? (status.join(' · ') || 'Inactive') : 'Saved', '',
+                        networkName(id) + ' · ' + (rule.bypass ? 'Direct internet' : rule.gateway ||
+                            (rule.guard ? (isBypass ? 'Direct internet unavailable' : 'Tunnel unavailable') : 'Inactive')));
+                    const fallbackStatus = blocked && isBypass ? 'Internet blocked' : 'Inactive';
+                    cell(row, saved ? (status.join(' · ') || fallbackStatus) : 'Saved', '',
                         Number.isInteger(service.learned) ? service.learned + ' learned addresses' : '');
                     const actions = row.insertCell();
                     if (state.canManage) {
@@ -1330,6 +1364,8 @@
                 state.assignments = array(data.assignments);
                 state.devices = array(data.devices);
                 state.tailnetDevices = array(data.tailnetDevices);
+                state.tailnetStatusAvailable = data.tailnetStatusAvailable === true;
+                state.discoveryTruncated = data.truncated === true;
                 state.services = array(data.services);
                 state.proxyCores = data.proxyCores || {};
                 state.canManageCores = data.canManageCores === true;
@@ -1418,7 +1454,7 @@
                 list(state.settings?.tailscaleInterfaces).length === 0);
             byId('assignment-interface-field').hidden = automatic;
             interfaceField.required = !automatic;
-            byId('save-device').disabled = (automatic && !state.settings?.tailscaleSetup?.ready)
+            byId('save-device').disabled = (automatic && !state.settings?.tailscaleSetup?.ready && !state.editing)
                 || (!tailnet && state.assignmentDevice?.addressConflict === true);
             byId('mac-field').hidden = tailnet;
             byId('mac').required = !tailnet;
@@ -1458,7 +1494,7 @@
             }
             if (mode === 'multi' || combined) {
                 notes.push('Matching destinations use their Multi-Path servers.');
-                notes.push(combined ? 'Default traffic and Bypass lists use the base server.' : 'Other traffic uses regular internet.');
+                notes.push(combined ? 'Default traffic uses the base server.' : 'Other traffic uses regular internet.');
                 if (!state.services.some((service) => service.profile && service.profile !== bypassDestination)) {
                     notes.push('Assign a server to a list in Multi-Path Settings.');
                 }
@@ -1468,8 +1504,11 @@
             }
             if (killSwitch) {
                 notes.push(combined ? 'The Kill Switch blocks traffic when its assigned server is unavailable.'
-                    : full ? 'Internet is blocked if this server goes offline.'
-                        : 'All internet is blocked if a list’s server goes offline or no list has a server.');
+                    : full ? 'The Kill Switch blocks VPN traffic if this server goes offline.'
+                        : 'The Kill Switch blocks internet if a list’s server goes offline or no list has a server.');
+            }
+            if (supportsKillSwitch) {
+                notes.push('Bypass uses direct internet when available.');
             }
             const strict = list(state.settings?.strictInterfaces).includes(interfaceId);
             if (combined && !tailnet && !strict) {
@@ -1501,9 +1540,11 @@
             byId('device-bind-mac').disabled = !supportsMac;
             const bindMac = deviceMacBinding();
             const reserve = reserveDeviceAddress();
+            const waitingForAddress = saved?.bindMac && bindMac && !saved.effectiveIp;
             if (!tailnet && (observed || saved)) {
                 const observedAddress = observed?.reserveAddress || observed?.ip || saved?.ip || '';
-                byId('ip').value = bindMac ? (observed?.effectiveIp || saved?.effectiveIp || observed?.ip || saved?.ip || '')
+                byId('ip').value = bindMac ? (observed?.effectiveIp || saved?.effectiveIp ||
+                    (waitingForAddress && reserve ? observed.reserveAddress : observed?.ip) || saved?.ip || '')
                     : (saved && !saved.bindMac ? saved.ip : observedAddress);
             }
             byId('save-device').textContent = reserve ? 'Reserve IP and save rule' : 'Save device rule';
@@ -1517,8 +1558,8 @@
                 if (reserve) {
                     note += ' Saving reserves the current address.';
                 }
-                if (saved && !saved.effectiveIp && !observed?.effectiveIp) {
-                    note += ' Waiting for DHCP. IPv4 follows the remaining firewall policy until the reservation is available.';
+                if (waitingForAddress) {
+                    note += ' Waiting for DHCP. The rule can be edited now and will follow the next confirmed reservation.';
                 }
             } else if (reserve) {
                 note = 'Save this device’s current address as a DHCP reservation and apply the rule.';
@@ -1526,6 +1567,8 @@
                 note = 'This peer needs both Tailscale addresses.';
             } else if (tailnet && !observed && !saved) {
                 note = 'Use the device’s IPv4 address from the Tailscale app. OPNsense verifies the peer when you save.';
+            } else if (tailnet && saved && !state.settings?.tailscaleSetup?.ready) {
+                note = 'Changes are saved for the next time the Tailscale exit node is ready.';
             } else if (!tailnet && !observed?.reserved && (!saved || saved.bindMac === true)) {
                 note = 'Use the device’s reserved DHCP address and MAC.';
             }
@@ -1992,7 +2035,7 @@
         byId('failure').addEventListener('change', updateFailure);
         byId('device-kill').addEventListener('change', updateFailure);
         byId('device-on-demand').addEventListener('change', updateFailure);
-        byId('device-bind-mac').addEventListener('change', updateDeviceIdentity);
+            byId('device-bind-mac').addEventListener('change', updateDeviceIdentity);
         byId('interface').addEventListener('change', updateFailure);
         byId('assign-form').addEventListener('submit', (event) => {
             event.preventDefault();
@@ -2005,6 +2048,7 @@
             }
             const mode = byId('mode').value;
             const payload = {
+                ...(state.editing ? {id: state.editing.id} : {}),
                 reserveIp,
                 ip: byId('ip').value.trim(),
                 interface: byId('interface').value.trim(),
@@ -2458,7 +2502,7 @@
             openAssignment(null, 'tailnet');
         });
         byId('disable-routing').addEventListener('click', (event) => {
-            if (window.confirm('Disable Blank VPN routing and its kill switches?')) {
+            if (window.confirm('Disable Blank VPN & Proxy routing and its kill switches?')) {
                 void mutate(event.currentTarget, () => api('disable', {}), 'VPN routing disabled.', () => {
                     state.settingsDirty = false;
                 });
@@ -2482,7 +2526,7 @@
             const networkMode = byId('network-mode').value;
             const payload = {
                 enabled: true,
-                networkKillSwitch: networkMode === 'full_multi' || byId('network-kill').checked,
+                networkKillSwitch: byId('network-kill').checked,
                 coverage: byId('coverage').value,
                 networkMode,
                 networkProfile: byId('network-profile').required ? byId('network-profile').value : '',
@@ -2594,7 +2638,7 @@
             }
         });
         byId('backup-restore').addEventListener('click', (event) => {
-            if (!state.backup || !window.confirm('Replace the router’s saved Blank VPN routing settings with this backup?')) {
+            if (!state.backup || !window.confirm('Replace the router’s saved Blank VPN & Proxy routing settings with this backup?')) {
                 return;
             }
             void mutate(event.currentTarget, () => api('restore', state.backup, '', 'backup'),

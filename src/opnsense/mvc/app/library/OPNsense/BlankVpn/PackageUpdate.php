@@ -55,7 +55,7 @@ final class PackageUpdate
         $available = self::validVersion($checkedVersion) && $installed !== null && self::newer($checkedVersion, $installed)
             ? $checkedVersion : null;
 
-        $message = $state['message'] ?? 'Check for a Blank VPN update.';
+        $message = $state['message'] ?? 'Check for a Blank VPN & Proxy update.';
         if (!$supported) {
             $message = 'Updates require OPNsense Community Edition 26.7 on FreeBSD 15 amd64 or aarch64.';
         } elseif ($running && self::interrupted($state)) {
@@ -68,7 +68,7 @@ final class PackageUpdate
             $message = 'The update worker stopped. Check the installed package before trying again.';
         } elseif (!$running && $available === null && self::validVersion($checkedVersion) && $installed !== null) {
             $phase = 'idle';
-            $message = 'Blank VPN is up to date.';
+            $message = 'Blank VPN & Proxy is up to date.';
         }
 
         return [
@@ -138,7 +138,7 @@ final class PackageUpdate
             $update = self::newer($available, $installed);
             self::writeState([
                 'phase' => 'idle', 'checkedAt' => time(), 'available' => $update ? $available : null,
-                'message' => $update ? 'An update is ready to install.' : 'Blank VPN is up to date.',
+                'message' => $update ? 'An update is ready to install.' : 'Blank VPN & Proxy is up to date.',
             ]);
         } catch (DomainException | RuntimeException $error) {
             self::writeState(['phase' => 'failed', 'message' => $error->getMessage()]);
@@ -151,7 +151,7 @@ final class PackageUpdate
     public static function enqueue(mixed $version): array
     {
         if (!self::validVersion($version)) {
-            throw new DomainException('Choose an available Blank VPN version.');
+            throw new DomainException('Choose an available Blank VPN & Proxy version.');
         }
         $abi = self::requireEnabled();
         return self::withQueueLock(static function () use ($version, $abi): array {
@@ -184,7 +184,7 @@ final class PackageUpdate
         }
         try {
             self::command([self::LAUNCHER, '-s', self::WORKER, 'install', $job], 0,
-                'The firmware service is busy or the Blank VPN update worker stopped.');
+                'The firmware service is busy or the Blank VPN & Proxy update worker stopped.');
         } catch (RuntimeException $error) {
             self::withQueueLock(static function () use ($job, $error): void {
                 $state = self::readState();
@@ -205,7 +205,7 @@ final class PackageUpdate
                 return [];
             }
             $state = array_replace(self::readState(), [
-                'phase' => 'running', 'pid' => getmypid(), 'message' => 'Verifying and installing the signed Blank VPN package.',
+                'phase' => 'running', 'pid' => getmypid(), 'message' => 'Verifying and installing the signed Blank VPN & Proxy package.',
             ]);
             self::writeState($state);
             return $state;
@@ -232,16 +232,16 @@ final class PackageUpdate
             $arguments = ['-R', $work . '/repos', '-o', 'PKG_ENABLE_PLUGINS=false',
                 '-o', 'PKG_CACHEDIR=' . $work . '/cache', '-o', 'ASSUME_ALWAYS_YES=false',
                 '-o', 'DEFAULT_ALWAYS_YES=false', '-o', 'PERMISSIVE=false', 'install'];
-            $plan = self::pkg([...$arguments, '-lUny', $package], 25, 'The Blank VPN package upgrade could not be planned.');
+            $plan = self::pkg([...$arguments, '-lUny', $package], 25, 'The Blank VPN & Proxy package upgrade could not be planned.');
             if (!self::singleUpgrade($plan, $installed, $version)) {
                 throw new DomainException('The update would affect other packages or requires package changes in OPNsense Firmware first.');
             }
             self::runInstaller([...$arguments, '-lU', $package], $installed, $version);
             if (self::installed($abi) !== $version) {
-                throw new RuntimeException('The package manager did not confirm the requested Blank VPN version.');
+                throw new RuntimeException('The package manager did not confirm the requested Blank VPN & Proxy version.');
             }
             self::writeState(array_replace($state, ['installed' => $version, 'available' => null, 'phase' => 'succeeded',
-                'message' => 'Blank VPN ' . $version . ' installed. Reload the WebGUI to use the updated dashboard.']));
+                'message' => 'Blank VPN & Proxy ' . $version . ' installed. Reload the WebGUI to use the updated dashboard.']));
         } catch (DomainException | RuntimeException $error) {
             self::writeState(array_replace($state, ['phase' => 'failed', 'message' => $error->getMessage()]));
         } finally {
@@ -324,7 +324,7 @@ final class PackageUpdate
         }
         try {
             return self::versionFromQuery(self::pkg(['query', '%n %v %o %q', self::PACKAGE], 4,
-                'The installed Blank VPN package could not be queried.'), $abi);
+                'The installed Blank VPN & Proxy package could not be queried.'), $abi);
         } catch (RuntimeException) {
             return null;
         }
@@ -332,7 +332,7 @@ final class PackageUpdate
 
     private static function requireInstalled(string $abi): string
     {
-        return self::installed($abi) ?? throw new DomainException('A compatible Blank VPN package must already be installed.');
+        return self::installed($abi) ?? throw new DomainException('A compatible Blank VPN & Proxy package must already be installed.');
     }
 
     private static function versionFromQuery(string $output, string $abi): ?string
@@ -373,20 +373,20 @@ final class PackageUpdate
         $output = self::pkg([...$options, 'rquery', '-U', '-r', self::REPO, '-a', '%n %v %o %q'], 4,
             'No verified package catalog is available for this router.');
         return self::versionFromQuery($output, $abi) ??
-            throw new DomainException('The signed repository did not contain exactly one compatible Blank VPN package.');
+            throw new DomainException('The signed repository did not contain exactly one compatible Blank VPN & Proxy package.');
     }
 
     private static function fetchPackage(string $work, string $abi, string $version): string
     {
         self::pkg([...self::remoteArguments($work), 'fetch', '-Uy', '-r', self::REPO,
             '-o', $work . '/fetched', self::PACKAGE . '-' . $version], 65,
-            'The verified Blank VPN package could not be downloaded.');
+            'The verified Blank VPN & Proxy package could not be downloaded.');
 
         $package = $work . '/fetched/All/' . self::PACKAGE . '-' . $version . '.pkg';
         if (!is_file($package) || is_link($package) ||
             self::versionFromQuery(self::pkg(['query', '-F', $package, '%n %v %o %q'], 8,
                 'The downloaded package manifest could not be read.'), $abi) !== $version) {
-            throw new DomainException('The downloaded package did not match the requested Blank VPN release and ABI.');
+            throw new DomainException('The downloaded package did not match the requested Blank VPN & Proxy release and ABI.');
         }
         return $package;
     }
@@ -421,41 +421,41 @@ final class PackageUpdate
         if (!is_array($deps) || array_diff_key($deps, self::DEPENDENCIES) !== [] ||
             array_diff_key(self::DEPENDENCIES, $deps) !== [] || !empty($metadata['conflicts']) ||
             !empty($metadata['shlibs_required']) || !is_array($metadata['files'] ?? null)) {
-            throw new DomainException('This release requires a dependency or package change outside Blank VPN. Use OPNsense Firmware.');
+            throw new DomainException('This release requires a dependency or package change outside Blank VPN & Proxy. Use OPNsense Firmware.');
         }
         foreach (self::DEPENDENCIES as $name => $origin) {
             $minimum = $deps[$name]['version'] ?? '';
             $row = self::pkg(['query', '%n %v %o %q', $name], 3,
-                'Install the required OPNsense dependencies before updating Blank VPN.');
+                'Install the required OPNsense dependencies before updating Blank VPN & Proxy.');
             $fields = preg_split('/[ \t]+/', trim($row));
             if (($deps[$name]['origin'] ?? null) !== $origin || !is_string($minimum) ||
                 preg_match('/^[A-Za-z0-9.,_+-]{1,48}$/D', $minimum) !== 1 || count($fields) !== 4 ||
                 $fields[0] !== $name || $fields[2] !== $origin || $fields[3] !== $abi ||
                 trim(self::pkg(['version', '-t', $fields[1], $minimum], 3, 'Could not compare package dependency versions.')) === '<') {
-                throw new DomainException('Install the required OPNsense dependencies before updating Blank VPN.');
+                throw new DomainException('Install the required OPNsense dependencies before updating Blank VPN & Proxy.');
             }
         }
 
         $locked = self::pkg(['query', '%k', self::PACKAGE], 3, 'Could not read the installed package lock.');
         if (trim($locked) !== '0' || self::installed($abi) !== $installed || !self::newer($version, $installed)) {
-            throw new DomainException('Blank VPN is locked or its installed version changed. Check OPNsense Firmware first.');
+            throw new DomainException('Blank VPN & Proxy is locked or its installed version changed. Check OPNsense Firmware first.');
         }
 
         $files = $metadata['files'];
         if ($files === [] || count($files) > 4096) {
-            throw new DomainException('The signed Blank VPN archive contains an unexpected file list.');
+            throw new DomainException('The signed Blank VPN & Proxy archive contains an unexpected file list.');
         }
         foreach ($files as $path => $value) {
             if (!is_string($path) || preg_match('#^/usr/local/(?:etc|libexec|opnsense|sbin|share)/[A-Za-z0-9/_.-]+$#D', $path) !== 1 ||
                 preg_match('#(?:^|/)\.{1,2}(?:/|$)#', $path) === 1) {
-                throw new DomainException('The signed Blank VPN archive contains an unexpected file path.');
+                throw new DomainException('The signed Blank VPN & Proxy archive contains an unexpected file path.');
             }
         }
         $ownership = self::pkg(['query', '-a', '%n %Fp'], 20, 'Could not verify package file ownership.', 16777216);
         foreach (explode("\n", $ownership) as $row) {
             [$owner, $path] = array_pad(explode(' ', $row, 2), 2, '');
             if ($owner !== self::PACKAGE && isset($files[$path])) {
-                throw new DomainException('A different installed package owns a file in this Blank VPN release.');
+                throw new DomainException('A different installed package owns a file in this Blank VPN & Proxy release.');
             }
         }
     }
@@ -486,7 +486,7 @@ final class PackageUpdate
     {
         $state = self::readState();
         if (in_array($state['phase'] ?? '', ['queued', 'running'], true) && !self::interrupted($state)) {
-            throw new DomainException('A Blank VPN package update is already running.');
+            throw new DomainException('A Blank VPN & Proxy package update is already running.');
         }
     }
 
@@ -501,7 +501,7 @@ final class PackageUpdate
             [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes, '/',
             self::commandEnvironment());
         if (!is_resource($process)) {
-            throw new RuntimeException('The Blank VPN package installer could not be started.');
+            throw new RuntimeException('The Blank VPN & Proxy package installer could not be started.');
         }
 
         $plan = '';
@@ -541,7 +541,7 @@ final class PackageUpdate
         fclose($pipes[1]);
         $status = proc_close($process);
         if (!$approved || $status !== 0) {
-            throw new RuntimeException('The package manager did not complete the isolated Blank VPN upgrade.');
+            throw new RuntimeException('The package manager did not complete the isolated Blank VPN & Proxy upgrade.');
         }
     }
 
@@ -558,12 +558,12 @@ final class PackageUpdate
             return [];
         }
         if (!self::trustedFile($path) || ((@fileperms($path) ?: 0) & 0077) !== 0) {
-            throw new RuntimeException('The private Blank VPN update status file is unsafe.');
+            throw new RuntimeException('The private Blank VPN & Proxy update status file is unsafe.');
         }
         $data = @file_get_contents($path, false, null, 0, 8192);
         $state = is_string($data) ? json_decode($data, true) : null;
         if (!is_array($state)) {
-            throw new RuntimeException('The private Blank VPN update status file is invalid.');
+            throw new RuntimeException('The private Blank VPN & Proxy update status file is invalid.');
         }
         return $state;
     }
@@ -577,16 +577,16 @@ final class PackageUpdate
     {
         $path = Policy::stateDirectory() . '/package-update.lock';
         if (is_link($path)) {
-            throw new RuntimeException('The private Blank VPN update lock is unsafe.');
+            throw new RuntimeException('The private Blank VPN & Proxy update lock is unsafe.');
         }
         $file = @fopen($path, 'ce');
         if ($file === false) {
-            throw new RuntimeException('The Blank VPN update lock could not be opened.');
+            throw new RuntimeException('The Blank VPN & Proxy update lock could not be opened.');
         }
         try {
             chmod($path, 0600);
             if (!flock($file, LOCK_EX | LOCK_NB)) {
-                throw new DomainException('A Blank VPN package operation is starting. Try again shortly.');
+                throw new DomainException('A Blank VPN & Proxy package operation is starting. Try again shortly.');
             }
             return $callback();
         } finally {
@@ -643,7 +643,7 @@ final class PackageUpdate
         $stdio = [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
         $process = @proc_open(['/usr/sbin/daemon', '-f', self::WORKER, 'dispatch', $job], $stdio, $pipes, '/', self::commandEnvironment());
         if (!is_resource($process) || proc_close($process) !== 0) {
-            throw new RuntimeException('The Blank VPN update worker could not be started.');
+            throw new RuntimeException('The Blank VPN & Proxy update worker could not be started.');
         }
     }
 

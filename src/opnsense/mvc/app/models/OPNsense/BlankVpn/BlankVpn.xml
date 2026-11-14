@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/BlankVpn</mount>
     <version>1.11.0</version>
-    <description>Blank VPN configuration and native object ownership</description>
+    <description>Blank VPN &amp; Proxy configuration and native object ownership</description>
     <items>
         <settings>
             <enabled type="BooleanField"><Default>0</Default></enabled>

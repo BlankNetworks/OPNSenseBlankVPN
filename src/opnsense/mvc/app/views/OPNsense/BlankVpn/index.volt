@@ -3,10 +3,10 @@
 
 <div id="blankvpn" class="blankvpn">
     <header class="bv-heading bv-hero">
-        <h1>Blank VPN</h1>
+        <h1>Blank VPN &amp; Proxy</h1>
     </header>
 
-    <nav class="bv-navigation" aria-label="Blank VPN pages">
+    <nav class="bv-navigation" aria-label="Blank VPN &amp; Proxy pages">
         <button type="button" data-bv-section="vpns" aria-controls="bv-tunnels" aria-pressed="true">VPN Login</button>
         <button type="button" data-bv-section="proxies" aria-controls="bv-proxies" aria-pressed="false" data-manage-only>Proxy Login</button>
         <button type="button" data-bv-section="network" aria-controls="bv-network-page" aria-pressed="false">Network Settings</button>
@@ -559,7 +559,7 @@
                     <p><code id="bv-bonjour-command"></code></p>
                 </details>
                 <section class="bv-advanced" aria-labelledby="bv-tailnet-routing-title">
-                    <h3 id="bv-tailnet-routing-title">Route Tailscale devices through Blank VPN</h3>
+                    <h3 id="bv-tailnet-routing-title">Route Tailscale devices through Blank VPN &amp; Proxy</h3>
                     <p id="bv-native-snat-status" hidden></p>
                     <p id="bv-native-tailnet-status" role="status"></p>
                     <p>In OPNsense Tailscale settings, enable <strong>Advertise Exit Node</strong> and the advanced <strong>Disable SNAT</strong> option. Apply from a local connection because Tailscale will restart. Approve the exit node in Tailscale, then select OPNsense as the exit node on each device.</p>

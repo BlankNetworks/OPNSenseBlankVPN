@@ -602,7 +602,7 @@ final class ProxyImport
         fclose($pipes[1]);
         $status = proc_close($process);
         if ($status === 2) {
-            throw new DomainException('The Clash YAML parser is missing. Install the full Blank VPN release package.');
+            throw new DomainException('The Clash YAML parser is missing. Install the full Blank VPN & Proxy release package.');
         }
         $config = is_string($output) ? json_decode($output, true, 32) : null;
         if ($status !== 0 || $written !== strlen($body) || !is_array($config)) {

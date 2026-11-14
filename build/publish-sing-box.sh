@@ -30,7 +30,7 @@ if gh release view "$tag" >/dev/null 2>&1; then
     test "$(gh release view "$tag" --json targetCommitish --jq '.targetCommitish')" = "$GITHUB_SHA"
 else
     gh release create "$tag" --draft --latest=false --target "$GITHUB_SHA" --title "sing-box $version for FreeBSD $arch" \
-        --notes "FreeBSD $arch build for Blank VPN. Upstream source and license: https://github.com/SagerNet/sing-box/tree/$commit"
+        --notes "FreeBSD $arch build for Blank VPN & Proxy. Upstream source and license: https://github.com/SagerNet/sing-box/tree/$commit"
 fi
 gh release upload "$tag" "$stage/$artifact" "$stage/$artifact.sha256" --clobber
 gh release edit "$tag" --draft=false --latest=false

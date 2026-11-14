@@ -58,7 +58,7 @@ check(RoutingBackup::decode($json, $key) === $policy, 'Routing settings must rou
 check($backup['assignments'][0]['onDemand'] === '0' && $backup['assignments'][0]['bindMac'] === '1',
     'New policy controls must retain their original values.');
 check(!str_contains($json, $key) && !isset($backup['ownership']), 'The backup must not expose local authentication material.');
-expectFail(fn () => RoutingBackup::decode($json, str_repeat('e', 64)), 'original Blank VPN installation');
+expectFail(fn () => RoutingBackup::decode($json, str_repeat('e', 64)), 'original Blank VPN & Proxy installation');
 expectFail(fn () => RoutingBackup::decode(substr($json, 0, -1), $key), 'not valid');
 expectFail(fn () => RoutingBackup::decode(str_repeat('x', RoutingBackup::MAX_BYTES + 1), $key), 'up to 2 MiB');
 expectFail(fn () => RoutingBackup::decode(str_replace('Office iPad', 'Different device', $json), $key), 'has changed');

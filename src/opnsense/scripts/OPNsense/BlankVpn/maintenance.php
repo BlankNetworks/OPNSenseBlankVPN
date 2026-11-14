@@ -21,18 +21,7 @@ use OPNsense\BlankVpn\WireGuard;
 try {
     switch ($argv[1] ?? '') {
         case 'loaded':
-            $rules = [];
-            $output = Resolver::command(['/sbin/pfctl', '-sr']);
-            foreach (explode("\n", $output) as $line) {
-                if (preg_match('/\blabel "(blankvpn_[a-z0-9_]+)"/', $line, $match)) {
-                    preg_match('/\broute-to\s+[({\s]*(wg[0-9]+|ovpnc[0-9]+|tun20[0-7])\b/', $line, $gateway);
-                    preg_match('/^(?:@\d+\s+)?(pass|block|match)\b/', ltrim($line), $action);
-                    preg_match('/\bfrom\s+([0-9.]+)(?:\/32)?\s/', $line, $source);
-                    $rules[$match[1]] = [
-                        'gateway' => $gateway[1] ?? null, 'action' => $action[1] ?? null, 'source' => $source[1] ?? null
-                    ];
-                }
-            }
+            $rules = Firewall::parseLoadedRules(Resolver::command(['/sbin/pfctl', '-sr']));
             echo json_encode((object)$rules, JSON_THROW_ON_ERROR), "\n";
             break;
         case 'proxies':
@@ -91,7 +80,7 @@ try {
                         $config->lock();
                         try {
                             if (Resolver::allowDashboardHostname($config->object(), $hostname)) {
-                                $config->save(['description' => 'Allow the Blank VPN Tailscale dashboard hostname']);
+                                $config->save(['description' => 'Allow the Blank VPN & Proxy Tailscale dashboard hostname']);
                             }
                         } finally {
                             $config->unlock();
@@ -141,7 +130,7 @@ try {
                 $runningProxySet = array_fill_keys($runningProxies, true);
                 $watchOutages = Operations::watchMultiPathOutages($settings, $assignments);
                 $watchedExits = $watchOutages
-                    ? array_fill_keys(array_column(SmartRouting::boundServices($services), 'profile'), true)
+                    ? array_fill_keys(array_column(SmartRouting::forwardServices($settings, $services), 'profile'), true)
                     : [];
                 $observedOutage = false;
                 $old = Firewall::health();
@@ -218,14 +207,8 @@ try {
                     if ($combined !== []) {
                         $changedPath = $retry;
                         foreach ($settings['smartInterfaces'] as $interface) {
-                            foreach (SmartRouting::activeServices($settings, $services) as $service) {
+                            foreach (SmartRouting::forwardServices($settings, $services) as $service) {
                                 $marker = Policy::marker('service', $service['id'] . ':' . $interface);
-                                $changedPath = $changedPath || ($loaded[$marker] ?? null) !== ($after[$marker] ?? null);
-                            }
-                        }
-                        if ($settings['coverage'] === 'network') {
-                            foreach ($settings['interfaces'] as $interface) {
-                                $marker = Policy::marker('device', 'network:' . $interface);
                                 $changedPath = $changedPath || ($loaded[$marker] ?? null) !== ($after[$marker] ?? null);
                             }
                         }
@@ -235,28 +218,9 @@ try {
                             }
                         }
                     }
-                    $segments = [];
-                    $bypassOutages = [];
-                    if (SmartRouting::usesBypass($settings)) {
-                        foreach ($settings['interfaces'] as $interface) {
-                            $marker = Policy::marker('device', 'network:' . $interface);
-                            $bypassMarker = Policy::marker('bypass', 'network:' . $interface);
-                            $hadBypass = ($loaded[$bypassMarker]['action'] ?? '') === 'match';
-                            if ($settings['networkKillSwitch'] && $hadBypass && empty($after[$marker]['gateway'])) {
-                                $bypassOutages[] = $interface;
-                            } elseif (($loaded[$marker] ?? null) !== ($after[$marker] ?? null)) {
-                                $segments[] = $interface;
-                            }
-                        }
-                    }
-                    foreach (Policy::segmentNetworks($bypassOutages) as $network) {
-                        Operations::resetKillSwitch($network);
-                    }
-                    if ($segments !== []) {
-                        try {
-                            Operations::resetSegments($segments, $settings);
-                        } catch (\Throwable) {
-                            syslog(LOG_WARNING, 'Blank VPN could not reset old sessions under Whole-Network coverage.');
+                    if ($after !== null) {
+                        foreach (Policy::segmentNetworks(Operations::networkPathChanges($settings, $loaded ?? [], $after)) as $network) {
+                            Operations::resetKillSwitch($network);
                         }
                     }
                     foreach ($assignments as $id => $row) {

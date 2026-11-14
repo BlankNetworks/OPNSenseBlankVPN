@@ -1,4 +1,4 @@
-name: Check Blank VPN
+name: Check Blank VPN & Proxy
 on:
   push:
   pull_request:
@@ -125,7 +125,7 @@ jobs:
             gh release edit "$tag" --notes-file "$notes"
           else
             gh release create "$tag" --draft --prerelease --target "$GITHUB_SHA" \
-              --title "Blank VPN $PACKAGE_VERSION" --notes-file "$notes"
+              --title "Blank VPN & Proxy $PACKAGE_VERSION" --notes-file "$notes"
           fi
           gh release upload "$tag" dist/*.pkg dist/*.pkg.sha256 --clobber
           gh release edit "$tag" --draft=false

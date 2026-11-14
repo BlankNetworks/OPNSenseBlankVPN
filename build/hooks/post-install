@@ -8,19 +8,19 @@ fi
 /usr/local/etc/rc.d/configd restart
 /usr/local/etc/rc.configure_plugins POST_INSTALL
 
-# Load the bundled proxy runtime's device driver where needed. Blank VPN retries
+# Load the bundled proxy runtime's device driver where needed. Blank VPN & Proxy retries
 # when an exit starts, since the kernel module may be unloaded after reboot.
 if [ ! -c /dev/tun ]; then
     /sbin/kldload -n if_tuntap 2>/dev/null || true
 fi
 if [ ! -c /dev/tun ]; then
-    echo "Blank VPN: routed proxy exits need the FreeBSD TUN device (/dev/tun)." >&2
+    echo "Blank VPN & Proxy: routed proxy exits need the FreeBSD TUN device (/dev/tun)." >&2
 fi
 
 if ! /usr/local/bin/php -r 'exit(extension_loaded("curl") ? 0 : 1);'; then
-    echo "Blank VPN: the OPNsense PHP cURL extension is required for subscriptions and connection tests." >&2
+    echo "Blank VPN & Proxy: the OPNsense PHP cURL extension is required for subscriptions and connection tests." >&2
 fi
 
 if ! /usr/local/bin/php /usr/local/opnsense/scripts/OPNsense/BlankVpn/maintenance.php post_install; then
-    echo "Blank VPN: existing exits could not be reconciled during installation. Check Blank VPN status in the WebGUI." >&2
+    echo "Blank VPN & Proxy: existing exits could not be reconciled during installation. Check Blank VPN & Proxy status in the WebGUI." >&2
 fi

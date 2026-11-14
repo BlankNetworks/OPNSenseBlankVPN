@@ -101,6 +101,7 @@ namespace OPNsense\Firewall {
             return match ($name) {
                 'VPN' => ['interface' => 'wg0', 'proto' => 'inet', 'logic' => 'route-to wg0'],
                 'NORD' => ['interface' => 'ovpnc1', 'proto' => 'inet', 'logic' => 'route-to ovpnc1'],
+                'WAN_DHCP' => ['interface' => 'igb1', 'proto' => 'inet', 'logic' => 'route-to (igb1 203.0.113.1)'],
                 default => []
             };
         }
@@ -116,7 +117,7 @@ namespace {
     use OPNsense\BlankVpn\SmartRouting;
     use OPNsense\Firewall\Plugin;
 
-    foreach (['Policy', 'NativeVpn', 'Resolver', 'SmartRouting', 'ProxyRuntime', 'Firewall'] as $file) {
+    foreach (['Policy', 'NativeVpn', 'Resolver', 'SmartRouting', 'ProxyRuntime', 'WanEgress', 'Firewall'] as $file) {
         require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/' . $file . '.php';
     }
 
@@ -322,42 +323,75 @@ namespace {
     $bypassList = ['china' => array_replace($chinaService['china'], ['profile' => SmartRouting::BYPASS])];
     $bypassTable = SmartRouting::bypassTable($bypassList);
     checkRouting(SmartRouting::activeServices($networkSettings, $bypassList + $services) === $bypassList &&
-        SmartRouting::activeServices($settings, $bypassList + $services) === $services,
-        'Only bypass lists are active under one-server network coverage.');
-    checkRouting(SmartRouting::dnsDirectives($bypassList, $profiles) === [
-        'ipset=/cn/' . $bypassTable, 'server=/cn/127.0.0.1#53'
-    ], 'Learn bypass destinations from the native resolver.');
+        SmartRouting::activeServices($settings, $bypassList + $services) === $services + $bypassList,
+        'A single-tunnel network uses Bypass, and device coverage can use Bypass with other Multi-Path lists.');
+    checkRouting(SmartRouting::dnsDirectives($bypassList, $profiles, ['9.9.9.9@203.0.113.11']) === [
+        'ipset=/cn/' . $bypassTable, 'server=/cn/9.9.9.9@203.0.113.11'
+    ] && SmartRouting::dnsDirectives($bypassList, $profiles) === [
+        'ipset=/cn/' . $bypassTable, 'local=/cn/'
+    ], 'Resolve Bypass suffixes over explicit WAN DNS or suppress them if WAN DNS cannot be reached.');
+    $nested = array_replace($service, ['id' => 'nested', 'domains' => ['youtube.com.cn', '.cn', 'cn.com']]);
+    $nestedDirectives = SmartRouting::dnsDirectives(['nested' => $nested] + $bypassList,
+        $profiles, ['9.9.9.9@203.0.113.11']);
+    checkRouting($nestedDirectives === [
+        'ipset=/cn.com/' . SmartRouting::table($nested), 'server=/cn.com/10.64.0.1@10.64.0.9',
+        'ipset=/cn/' . $bypassTable, 'server=/cn/9.9.9.9@203.0.113.11'
+    ], 'An equal or broader Bypass suffix overrides the VPN DNS list on DNS label boundaries.');
+    $wan = [
+        'inet' => ['gateway' => 'WAN_DHCP', 'address' => '203.0.113.11', 'logicalInterface' => 'wan', 'interface' => 'igb1'],
+        'inet6' => ['gateway' => 'WAN_DHCP6', 'address' => '2001:db8:1::1', 'logicalInterface' => 'wan', 'interface' => 'igb1']
+    ];
+    $compileBypass = new ReflectionMethod(Firewall::class, 'registerBypass');
     $withBypass = new Plugin();
-    $network->invoke(null, $withBypass, $networkSettings, $interfaces, $profiles, [], false, $bypassList);
-    $tag = $withBypass->rules[Policy::marker('bypass', 'network:lan')];
+    $network->invoke(null, $withBypass, $networkSettings, $interfaces, $profiles, [], false, $wan, true);
+    $compileBypass->invoke(null, $withBypass, $networkSettings, $interfaces, $bypassList, $wan, [], new Diagnostics());
+    $tag = $withBypass->rules[Policy::marker('bypass_default', 'lan:inet')];
+    $directMarker = Policy::marker('bypass', 'lan:inet:learned');
+    $directGuard = Policy::marker('bypass_guard', 'lan:inet:learned');
+    $direct = $withBypass->rules[$directMarker];
     $vpn = $withBypass->rules[Policy::marker('device', 'network:lan')];
     $guard = $withBypass->rules[Policy::marker('kill', 'network:lan')];
-    checkRouting($tag['type'] === 'match' && !$tag['quick'] && $tag['priority'] < $vpn['priority'] &&
-        $tag['to'] === '<' . $bypassTable . '>' && $tag['to_not'] && $tag['tag'] === $vpn['tagged'] &&
-        $tag['tag'] === $guard['tagged'] && count($withBypass->dns) === 2 &&
-        $withBypass->dns[0]['local-port'] === (string)SmartRouting::PORT,
-        'Bypass traffic follows native policy and both DNS families use the split resolver.');
+    checkRouting($tag['type'] === 'match' && !$tag['quick'] && $tag['to_not'] &&
+        $tag['to'] === '<' . Policy::COMBINED_LOCAL_TABLE . '>' && $tag['tag'] === $direct['tagged'] &&
+        $direct['type'] === 'pass' && $direct['quick'] && $direct['gateway'] === 'WAN_DHCP' &&
+        $direct['to'] === '<' . $bypassTable . '>' && $direct['priority'] < $withBypass->rules[$directGuard]['priority'] &&
+        $withBypass->rules[$directGuard]['priority'] < $vpn['priority'] && $vpn['priority'] < $guard['priority'] &&
+        count($withBypass->dns) === 2 && $withBypass->dns[0]['local-port'] === (string)$profiles['jp']['dnsPort'],
+        'Bypass chooses the carrier WAN before the default VPN and its guard, and DNS classification works in both families.');
+    $wanDns = new ReflectionMethod(Firewall::class, 'registerWanDns');
+    $wanDns->invoke(null, $withBypass, $wan);
+    $dnsId = '9.9.9.9:203.0.113.11';
+    $dnsPass = $withBypass->rules[Policy::marker('wan_dns', $dnsId)];
+    $dnsGuard = $withBypass->rules[Policy::marker('wan_dns_guard', $dnsId)];
+    checkRouting($dnsPass['direction'] === 'out' && $dnsPass['gateway'] === 'WAN_DHCP' &&
+        $dnsPass['from'] === '203.0.113.11' && $dnsPass['to'] === '9.9.9.9' &&
+        $dnsPass['to_port'] === '53' && $dnsPass['priority'] < $dnsGuard['priority'] && $dnsGuard['type'] === 'block',
+        'Only the specific router-originated WAN DNS connection uses the early output route and guard.');
     $withBypassDown = new Plugin();
     $network->invoke(null, $withBypassDown, $networkSettings, $interfaces, $profiles,
-        ['jp' => ['reachable' => false]], false, $bypassList);
-    checkRouting(!isset($withBypassDown->rules[Policy::marker('bypass', 'network:lan')]) &&
-        !isset($withBypassDown->rules[Policy::marker('kill', 'network:lan')]['tagged']) &&
-        $withBypassDown->dns === [], 'An outage installs a kill switch that covers previously bypassed destinations.');
+        ['jp' => ['reachable' => false]], false, $wan, true);
+    $compileBypass->invoke(null, $withBypassDown, $networkSettings, $interfaces, $bypassList, $wan, [], new Diagnostics());
+    checkRouting($withBypassDown->rules[$directMarker]['type'] === 'pass' &&
+        $withBypassDown->rules[$directMarker]['priority'] < $withBypassDown->rules[Policy::marker('kill', 'network:lan')]['priority'] &&
+        count($withBypassDown->dns) === 2, 'A tunnel outage preserves WAN Bypass and its classification while blocking other internet traffic.');
     $mixedBypass = ['china' => array_replace($bypassList['china'], ['domains' => ['.cn', '198.51.100.0/24']])];
     $withMixedBypass = new Plugin();
-    $network->invoke(null, $withMixedBypass, $networkSettings, $interfaces, $profiles, [], false, $mixedBypass);
-    $stage = $withMixedBypass->rules[Policy::marker('bypass_stage', 'network:lan')];
-    $last = $withMixedBypass->rules[Policy::marker('bypass', 'network:lan')];
-    $mixedBypassPass = $withMixedBypass->rules[Policy::marker('device', 'network:lan')];
-    checkRouting($stage['priority'] < $last['priority'] && $last['priority'] < $mixedBypassPass['priority'] &&
-        $stage['to'] === '<' . $bypassTable . '>' && $last['to'] === '<' . SmartRouting::bypassAddressTable($mixedBypass) . '>' &&
-        $last['tagged'] === $stage['tag'] && $mixedBypassPass['tagged'] === $last['tag'],
-        'One-server WAN bypass matches either an explicit CIDR or a DNS-learned address.');
+    $compileBypass->invoke(null, $withMixedBypass, $networkSettings, $interfaces, $mixedBypass,
+        ['inet' => $wan['inet']], [], new Diagnostics());
+    $fixedDirect = $withMixedBypass->rules[Policy::marker('bypass', 'lan:inet:static')];
+    $ipv6Guard = $withMixedBypass->rules[Policy::marker('bypass_guard', 'lan:inet6:learned')];
+    checkRouting($fixedDirect['to'] === '<' . SmartRouting::bypassAddressTable($mixedBypass) . '>' &&
+        $withMixedBypass->rules[$directMarker]['to'] === '<' . $bypassTable . '>' &&
+        $ipv6Guard['type'] === 'block' && !isset($withMixedBypass->rules[Policy::marker('bypass', 'lan:inet6:learned')]),
+        'Bypass accepts both CIDR and learned addresses and blocks its matches if no native gateway exists.');
     $wholeFallback = new Plugin();
     $network->invoke(null, $wholeFallback, $networkSettings + ['networkKillSwitch' => false],
-        $interfaces, $profiles, ['jp' => ['reachable' => false]]);
-    checkRouting($wholeFallback->rules === [] && $wholeFallback->nat === [],
-        'Disabling the network kill switch allows regular routing when the one exit is down.');
+        $interfaces, $profiles, ['jp' => ['reachable' => false]], false, $wan);
+    $fallbackMarker = Policy::marker('wan_fallback', 'network:lan:inet');
+    checkRouting($wholeFallback->rules[$fallbackMarker]['gateway'] === 'WAN_DHCP' &&
+        $wholeFallback->rules[$fallbackMarker]['priority'] < $wholeFallback->rules[Policy::marker('kill', 'network:lan')]['priority'] &&
+        array_column($wholeFallback->dns, 'local-port') === array_fill(0, 2, (string)Resolver::FALLBACK_PORT),
+        'Disabling the network Kill Switch opens a validated native WAN path and uses native WAN DNS when the sole tunnel is down.');
 
     $outage = new ReflectionMethod(Firewall::class, 'multiPathOutage');
     $liveHealth = ['jp' => ['probeSucceeded' => true, 'checkedAt' => time(), 'reachable' => true]];
@@ -383,6 +417,10 @@ namespace {
     $network->invoke(null, $wholeMultiUp, array_replace($wholeMulti, ['networkKillSwitch' => false]),
         $interfaces, $profiles, [], true);
     checkRouting($wholeMultiUp->rules === [], 'Only a checked Multi-Path outage adds a network-wide guard.');
+    $multiBypassOutage = new Plugin();
+    $network->invoke(null, $multiBypassOutage, $wholeMulti, $interfaces, $profiles, [], true, $wan, true);
+    checkRouting(array_column($multiBypassOutage->dns, 'local-port') === array_fill(0, 2, (string)Resolver::BYPASS_PORT),
+        'An explicit Multi-Path Kill Switch outage only keeps DNS for Bypass destinations.');
     $multiNetwork = Policy::routingSettings(array_replace($networkSettings, [
         'networkMode' => 'multi', 'interfaces' => ['lan', 'opt2'], 'tailscaleInterfaces' => ['opt2'],
         'strictInterfaces' => ['lan'], 'smartAssignedOnly' => true
@@ -404,16 +442,20 @@ namespace {
     $baseDnsKill = Policy::marker('kill_dns', 'network:lan');
     $netflixPass = Policy::marker('service', 'streaming:lan');
     $netflixKill = Policy::marker('service_guard', 'streaming:lan');
-    $compileCombined = function (array $health = []) use (
-        $network, $compileSmart, $combinedNetwork, $interfaces, $combinedProfiles, $services
+    $compileCombined = function (array $health = [], array $wanRoutes = [], bool $kill = false) use (
+        $network, $compileSmart, $combinedNetwork, $interfaces, $combinedProfiles, $services,
+        $compileBypass, $bypassList
     ): Plugin {
         $plan = new Plugin();
-        $network->invoke(null, $plan, $combinedNetwork, $interfaces, $combinedProfiles, $health);
+        $settings = array_replace($combinedNetwork, ['networkKillSwitch' => $kill]);
+        $network->invoke(null, $plan, $settings, $interfaces, $combinedProfiles, $health, false, $wanRoutes, true);
         $compileSmart->invoke(null, $plan, $combinedNetwork, $interfaces, $services, $combinedProfiles, $health);
+        $compileBypass->invoke(null, $plan, $combinedNetwork, $interfaces, $bypassList, $wanRoutes, [], new Diagnostics());
         return $plan;
     };
-    $combined = $compileCombined();
-    checkRouting(SmartRouting::activeServices($combinedNetwork, $bypassList + $services) === $services &&
+    $combined = $compileCombined([], $wan);
+    checkRouting(SmartRouting::activeServices($combinedNetwork, $bypassList + $services) === $services + $bypassList &&
+        $combined->rules[$directMarker]['priority'] < $combined->rules[$netflixPass]['priority'] &&
         $combined->rules[$netflixPass]['gateway'] === 'VPN' && $combined->rules[$basePass]['gateway'] === 'NORD' &&
         $combined->rules[$netflixPass]['priority'] < $combined->rules[$netflixKill]['priority'] &&
         $combined->rules[$netflixKill]['priority'] < $combined->rules[$basePass]['priority'] &&
@@ -423,14 +465,21 @@ namespace {
         $combined->rules[$combinedScope]['to'] === $combined->rules[$basePass]['to'] &&
         !isset($combined->rules[$smartScope]) && count($combined->dns) === 2 &&
         array_column($combined->dns, 'local-port') === array_fill(0, 2, (string)Resolver::combinedPort($chicago)),
-        'Combined coverage uses service routes first, ignores native bypass and sends both DNS families to its own resolver.');
+        'Combined coverage uses Bypass, then VPN service routes, then the default tunnel, with DNS classification on both families.');
     $overrideDown = $compileCombined(['jp' => ['reachable' => false]]);
     checkRouting(!isset($overrideDown->rules[$netflixPass]) &&
         $overrideDown->rules[$netflixKill]['priority'] < $overrideDown->rules[$basePass]['priority'],
         'A failed service guard takes precedence over a healthy default VPN.');
-    $baseDown = $compileCombined(['us' => ['reachable' => false]]);
+    $baseDown = $compileCombined(['us' => ['reachable' => false]], $wan, true);
     checkRouting(!isset($baseDown->rules[$basePass]) && isset($baseDown->rules[$netflixPass], $baseDown->rules[$baseKill]) &&
+        !isset($baseDown->rules[$fallbackMarker]) && isset($baseDown->rules[$directMarker]) &&
         count($baseDown->dns) === 2, 'A base outage still permits working overrides while ordinary traffic remains blocked.');
+    $combinedFallback = $compileCombined(['us' => ['reachable' => false]], $wan);
+    checkRouting($combinedFallback->rules[$netflixKill]['priority'] < $combinedFallback->rules[$fallbackMarker]['priority'] &&
+        $combinedFallback->rules[$fallbackMarker]['priority'] < $combinedFallback->rules[$baseKill]['priority'] &&
+        $combinedFallback->rules[$fallbackMarker]['gateway'] === 'WAN_DHCP' &&
+        array_column($combinedFallback->dns, 'local-port') === array_fill(0, 2, (string)Resolver::FALLBACK_PORT),
+        'Combined WAN fallback uses native DNS while preserving the explicit route and guard for each override.');
     \OPNsense\Core\Config::$fixture = new SimpleXMLElement('<opnsense><system><enablenatreflectionhelper>1</enablenatreflectionhelper></system></opnsense>');
     $disabledDns = $compileCombined();
     checkRouting($disabledDns->dns === [] &&
@@ -443,6 +492,18 @@ namespace {
         'profile' => 'jp', 'backup' => '', 'failure' => 'block'];
     $compileDevice = new ReflectionMethod(Firewall::class, 'registerAssignments');
     $diag = new Diagnostics();
+    $deviceScopes = Firewall::bypassScopes($settings + ['coverage' => 'device'], [
+        'protected' => $assignment + ['mode' => 'full', 'ipv6' => '2001:db8::23'],
+        'blocked' => array_replace($assignment, ['mode' => 'blocked', 'ip' => '192.0.2.24']),
+        'off' => array_replace($assignment, ['mode' => 'disabled', 'ip' => '192.0.2.25']),
+        'unassigned' => array_replace($assignment, ['mode' => 'default', 'ip' => '192.0.2.26']),
+        'unmanaged' => array_replace($assignment, ['mode' => 'full', 'interface' => 'opt2'])
+    ], $diag);
+    checkRouting($deviceScopes === ['lan' => [
+        'inet' => ['all' => true, 'sources' => ['192.0.2.23'], 'excluded' => ['192.0.2.23', '192.0.2.24', '192.0.2.25']],
+        'inet6' => ['all' => true, 'sources' => ['2001:db8::23'], 'excluded' => ['2001:db8::23']]
+    ]] && Firewall::bypassScopes(array_replace($networkSettings, ['networkMode' => 'blocked']), [], $diag) === [],
+        'Direct Bypass covers the selected network or valid routed devices and excludes explicitly blocked or Off devices.');
     $combinedDeviceSettings = $settings + ['smartAssignedOnly' => true];
     $combinedDevice = new Plugin();
     $combinedAssignments = [

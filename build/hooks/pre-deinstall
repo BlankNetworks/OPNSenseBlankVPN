@@ -8,14 +8,14 @@ fi
     libxml_use_internal_errors(true);
     $config = simplexml_load_file("/conf/config.xml", "SimpleXMLElement", LIBXML_NONET);
     if ($config === false) {
-        fwrite(STDERR, "Could not check OPNsense configuration before Blank VPN removal.\n");
+        fwrite(STDERR, "Could not check OPNsense configuration before Blank VPN & Proxy removal.\n");
         exit(1);
     }
     $nodes = $config->xpath("/opnsense/OPNsense/BlankVpn");
     foreach ($nodes ?: [] as $vpn) {
         if ((string) $vpn->settings->enabled === "1" ||
             count($vpn->xpath("profiles/profile | assignments/assignment | services/service | proxyRoutes/route | nativeRoutes/route") ?: []) !== 0) {
-            fwrite(STDERR, "Disable Blank VPN and remove its service rules, assignments, and profiles before removing the package.\n");
+            fwrite(STDERR, "Disable Blank VPN & Proxy and remove its service rules, assignments, and profiles before removing the package.\n");
             exit(1);
         }
     }

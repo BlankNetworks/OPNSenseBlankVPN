@@ -12,7 +12,7 @@ final class Operations
         $path = Policy::stateDirectory() . '/operations.lock';
         $lock = fopen($path, 'ce');
         if ($lock === false) {
-            throw new \RuntimeException('Blank VPN could not open its configuration lock.');
+            throw new \RuntimeException('Blank VPN & Proxy could not open its configuration lock.');
         }
         chmod($path, 0600);
         try {
@@ -20,7 +20,7 @@ final class Operations
                 if ($skipBusy) {
                     return null;
                 }
-                throw new \DomainException('Another Blank VPN operation is running. Try again shortly.');
+                throw new \DomainException('Another Blank VPN & Proxy operation is running. Try again shortly.');
             }
             return $work();
         } finally {
@@ -37,7 +37,7 @@ final class Operations
             $model = new BlankVpn();
             $result = $edit($model);
             $model->serializeToConfig();
-            $config->save(['description' => 'Blank VPN configuration changed']);
+            $config->save(['description' => 'Blank VPN & Proxy configuration changed']);
             $expected = self::fingerprint($config->object());
         } finally {
             $config->unlock();
@@ -83,7 +83,7 @@ final class Operations
             }
             $detail = $error instanceof \DomainException || $error::class === \RuntimeException::class
                 ? ' ' . $error->getMessage() : '';
-            throw new \DomainException('Apply failed. Blank VPN restored the preceding configuration and reloaded the firewall.' . $detail);
+            throw new \DomainException('Apply failed. Blank VPN & Proxy restored the preceding configuration and reloaded the firewall.' . $detail);
         }
 
         return $result;
@@ -131,12 +131,12 @@ final class Operations
         $config->forceReload()->lock();
         try {
             if (!hash_equals($expected, self::fingerprint($config->object()))) {
-                throw new \RuntimeException('The native configuration changed during Blank VPN apply.');
+                throw new \RuntimeException('The native configuration changed during Blank VPN & Proxy apply.');
             }
             $root = dom_import_simplexml($config->object());
             $snapshot = new \DOMDocument();
             if (!$snapshot->loadXML($original, LIBXML_NONET) || $root === false || $snapshot->documentElement === null) {
-                throw new \RuntimeException('The Blank VPN rollback snapshot is invalid.');
+                throw new \RuntimeException('The Blank VPN & Proxy rollback snapshot is invalid.');
             }
             while ($root->firstChild !== null) {
                 $root->removeChild($root->firstChild);
@@ -144,7 +144,7 @@ final class Operations
             foreach ($snapshot->documentElement->childNodes as $child) {
                 $root->appendChild($root->ownerDocument->importNode($child, true));
             }
-            $config->save(['description' => 'Blank VPN apply rolled back']);
+            $config->save(['description' => 'Blank VPN & Proxy apply rolled back']);
         } finally {
             $config->unlock();
         }
@@ -160,7 +160,7 @@ final class Operations
     {
         $backend = new Backend();
         if (trim($backend->configdRun('blankvpn proxies', false, 45)) !== 'ok') {
-            throw new \RuntimeException('The Blank VPN proxy exits could not be reconciled.');
+            throw new \RuntimeException('The Blank VPN & Proxy proxy exits could not be reconciled.');
         }
         $settings = Policy::effectiveRouting($model);
         Policy::refreshMacConflicts($model);
@@ -176,7 +176,54 @@ final class Operations
             self::resetOutageStates($settings, $assignments, $before ?? [], Firewall::loadedRules());
         }
         if (trim($backend->configdRun('blankvpn resolver', false, 45)) !== 'ok') {
-            throw new \RuntimeException('The Blank VPN DNS listeners could not be reconciled.');
+            throw new \RuntimeException('The Blank VPN & Proxy DNS listeners could not be reconciled.');
+        }
+        // Upgrade the legacy Bypass policy without keeping states that could use an old base tunnel.
+        $legacyBypass = array_filter($settings['interfaces'], static fn (string $interface): bool =>
+            ($before[Policy::marker('bypass', 'network:' . $interface)]['action'] ?? '') === 'match');
+        foreach (Policy::segmentNetworks($legacyBypass) as $network) {
+            self::resetKillSwitch($network);
+        }
+    }
+
+    public static function recordSuccessfulProbe(BlankVpn $model, array $route): void
+    {
+        $settings = Policy::effectiveRouting($model);
+        if (!$settings['enabled']) {
+            return;
+        }
+        $id = $route['id'];
+        $health = Firewall::health();
+        if (!empty($health[$id]['onDemand'])) {
+            return;
+        }
+        $previous = $health[$id] ?? [];
+        $health[$id] = ['reachable' => true, 'failures' => 0, 'checkedAt' => time(), 'probeSucceeded' => true];
+        if (($route['kind'] ?? '') === 'native') {
+            $health[$id]['source'] = $route['address'];
+        }
+        Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
+        $assignments = $settings['coverage'] === 'device'
+            ? Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()) : [];
+        $recovering = ($previous['reachable'] ?? true) === false;
+        $maxAge = ($route['kind'] ?? '') === 'proxy' ? 300 : 180;
+        $services = SmartRouting::forwardServices($settings, SmartRouting::services($model));
+        $clearOutage = self::watchMultiPathOutages($settings, $assignments) &&
+            in_array($id, array_column($services, 'profile'), true) &&
+            (empty($previous['probeSucceeded']) || time() - ($previous['checkedAt'] ?? 0) > $maxAge);
+        if ($recovering || $clearOutage) {
+            $before = Firewall::loadedRules() ?? [];
+            Policy::writeState('health-reload', '1');
+            Firewall::reload($model);
+            $after = Firewall::loadedRules() ?? [];
+            $scopes = Policy::segmentNetworks(self::networkPathChanges($settings, $before, $after));
+            if ($recovering) {
+                array_push($scopes, ...self::combinedStateScopes($settings, $assignments));
+            }
+            foreach (array_unique($scopes) as $scope) {
+                self::resetKillSwitch($scope);
+            }
+            unlink(Policy::STATE_DIR . '/health-reload');
         }
     }
 
@@ -244,6 +291,41 @@ final class Operations
             }
         }
         return array_values(array_unique(array_filter($scopes)));
+    }
+
+    public static function bypassStateScopes(array $settings, array $assignments): array
+    {
+        $scopes = [];
+        foreach (Firewall::bypassScopes($settings, $assignments, new Diagnostics()) as $interface => $families) {
+            if (($families['inet']['all'] ?? false) || ($families['inet6']['all'] ?? false)) {
+                array_push($scopes, ...Policy::segmentNetworks([$interface]));
+                continue;
+            }
+            foreach ($families as $scope) {
+                array_push($scopes, ...$scope['sources']);
+            }
+        }
+        return array_values(array_unique(array_filter($scopes)));
+    }
+
+    public static function networkPathChanges(array $settings, array $before, array $after): array
+    {
+        if ($settings['coverage'] !== 'network' || !Policy::usesBase($settings['networkMode'])) {
+            return [];
+        }
+        return array_values(array_filter($settings['interfaces'], static function (string $interface) use ($before, $after): bool {
+            $id = 'network:' . $interface;
+            foreach ([
+                Policy::marker('device', $id),
+                Policy::marker('wan_fallback', $id . ':inet'),
+                Policy::marker('wan_fallback', $id . ':inet6')
+            ] as $marker) {
+                if (($before[$marker] ?? null) !== ($after[$marker] ?? null)) {
+                    return true;
+                }
+            }
+            return false;
+        }));
     }
 
     public static function resetKillSwitch(string $source): void

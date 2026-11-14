@@ -41,7 +41,7 @@ final class RoutingBackup
         ];
     }
 
-    /** Called while holding both the Blank VPN operation lock and the native configuration lock. */
+    /** Called while holding both the Blank VPN & Proxy operation lock and the native configuration lock. */
     public static function restore(BlankVpn $model, string $json, string $user, string $confirmation): array
     {
         [$current, $incoming, $key] = self::inspect($model, $json);
@@ -77,7 +77,7 @@ final class RoutingBackup
         if (count($model->performValidation()) !== 0) {
             throw new DomainException('OPNsense rejected the routing settings. Review existing interfaces and routes.');
         }
-        return ['message' => 'Routing settings restored. Blank VPN routing is disabled. Review the settings before enabling it.']
+        return ['message' => 'Routing settings restored. Blank VPN & Proxy routing is disabled. Review the settings before enabling it.']
             + self::summary($current, $incoming);
     }
 
@@ -114,7 +114,7 @@ final class RoutingBackup
         $incoming = self::decode($json, $key);
         $current = self::snapshot($model, false);
         if (Policy::settings($model)['enabled']) {
-            throw new DomainException('Disable Blank VPN routing before restoring a backup.');
+            throw new DomainException('Disable Blank VPN & Proxy routing before restoring a backup.');
         }
 
         $interfaces = Policy::availableInterfaces();
@@ -298,19 +298,19 @@ final class RoutingBackup
     public static function decode(string $json, string $key): array
     {
         if ($json === '' || strlen($json) > self::MAX_BYTES) {
-            throw new DomainException('Choose a Blank VPN settings backup of up to 2 MiB.');
+            throw new DomainException('Choose a Blank VPN & Proxy settings backup of up to 2 MiB.');
         }
         try {
             $document = json_decode($json, true, 16, JSON_THROW_ON_ERROR);
         } catch (JsonException) {
-            throw new DomainException('The uploaded file is not valid Blank VPN settings JSON.');
+            throw new DomainException('The uploaded file is not valid Blank VPN & Proxy settings JSON.');
         }
         if (!is_array($document) || ($document['format'] ?? null) !== self::FORMAT || ($document['version'] ?? null) !== self::VERSION) {
-            throw new DomainException('The uploaded file is not a supported Blank VPN routing settings backup.');
+            throw new DomainException('The uploaded file is not a supported Blank VPN & Proxy routing settings backup.');
         }
         $router = $document['router'] ?? null;
         if (!is_string($router) || !hash_equals(hash_hmac('sha256', self::FORMAT, $key), $router)) {
-            throw new DomainException('This backup is bound to its original Blank VPN installation.');
+            throw new DomainException('This backup is bound to its original Blank VPN & Proxy installation.');
         }
         $integrity = $document['integrity'] ?? null;
         unset($document['format'], $document['version'], $document['router'], $document['integrity']);
@@ -522,7 +522,7 @@ final class RoutingBackup
         $path = Policy::stateDirectory() . '/' . self::KEY;
         if (!file_exists($path) && !is_link($path)) {
             if (!$create) {
-                throw new DomainException('No routing backup identity exists for this Blank VPN installation.');
+                throw new DomainException('No routing backup identity exists for this Blank VPN & Proxy installation.');
             }
             Policy::writeState(self::KEY, bin2hex(random_bytes(32)));
         }
@@ -530,7 +530,7 @@ final class RoutingBackup
         $key = !is_link($path) && is_file($path) && $mode !== false && ($mode & 0077) === 0
             ? @file_get_contents($path, false, null, 0, 65) : false;
         if (!is_string($key) || !preg_match('/^[0-9a-f]{64}$/D', $key)) {
-            throw new RuntimeException('The local Blank VPN backup identity could not be verified.');
+            throw new RuntimeException('The local Blank VPN & Proxy backup identity could not be verified.');
         }
         return $key;
     }

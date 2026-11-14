@@ -140,7 +140,7 @@ class Ivpn
             }
             $file = $this->path . '.json';
             if (is_file($file) && !@unlink($file)) {
-                throw new RuntimeException('Blank VPN could not remove the saved IVPN sign-in.');
+                throw new RuntimeException('Blank VPN & Proxy could not remove the saved IVPN sign-in.');
             }
         });
     }
@@ -245,7 +245,7 @@ class Ivpn
             $code === 401 || $code === 601 => ['expired', 'The saved IVPN session ended. Sign in again.'],
             $code === 702 || ($account['is_active'] ?? null) === false
                 || ($state['activeUntil'] ?? PHP_INT_MAX) <= $this->now() => ['expired', 'The IVPN subscription is inactive.'],
-            $code !== 200 || !is_bool($account['is_active'] ?? null) => ['stale', 'Blank VPN could not confirm the IVPN session. Try again.'],
+            $code !== 200 || !is_bool($account['is_active'] ?? null) => ['stale', 'Blank VPN & Proxy could not confirm the IVPN session. Try again.'],
             !isset($state['address']) => ['stale', 'IVPN did not allocate a compatible WireGuard address. Sign out and try again or import a configuration.'],
             default => ['authenticated', null],
         };
@@ -333,7 +333,7 @@ class Ivpn
         $path = $this->path . '.lock';
         $handle = is_link($path) ? false : @fopen($path, 'c');
         if ($handle === false) {
-            throw new RuntimeException('Blank VPN could not open the IVPN state lock.');
+            throw new RuntimeException('Blank VPN & Proxy could not open the IVPN state lock.');
         }
         try {
             if (!@chmod($path, 0600) || !flock($handle, LOCK_EX | LOCK_NB)) {
@@ -348,11 +348,11 @@ class Ivpn
     private function ensureDirectory(): void
     {
         if (!is_dir($this->directory) && !@mkdir($this->directory, 0700) && !is_dir($this->directory)) {
-            throw new RuntimeException('The Blank VPN state directory is unavailable.');
+            throw new RuntimeException('The Blank VPN & Proxy state directory is unavailable.');
         }
         $mode = @fileperms($this->directory);
         if ($mode === false || ($mode & 0077) !== 0 || is_link($this->directory)) {
-            throw new RuntimeException('The Blank VPN state directory permissions are unsafe.');
+            throw new RuntimeException('The Blank VPN & Proxy state directory permissions are unsafe.');
         }
     }
 
@@ -371,7 +371,7 @@ class Ivpn
         $state = $raw === false || strlen($raw) > 8192 ? null : json_decode($raw, true, 12);
         if (!is_array($state) || ($state['version'] ?? null) !== 1 || !is_string($state['account'] ?? null)
             || !self::validKey($state['privateKey'] ?? null)) {
-            throw new RuntimeException('Blank VPN could not read the saved IVPN state.');
+            throw new RuntimeException('Blank VPN & Proxy could not read the saved IVPN state.');
         }
         return $state;
     }
@@ -381,12 +381,12 @@ class Ivpn
         $json = json_encode($state + ['version' => 1], JSON_THROW_ON_ERROR);
         $temp = @tempnam($this->directory, '.ivpn-');
         if ($temp === false) {
-            throw new RuntimeException('Blank VPN could not create the IVPN state file.');
+            throw new RuntimeException('Blank VPN & Proxy could not create the IVPN state file.');
         }
         try {
             if (realpath(dirname($temp)) !== realpath($this->directory) || !@chmod($temp, 0600)
                 || @file_put_contents($temp, $json) !== strlen($json) || !@rename($temp, $this->path . '.json')) {
-                throw new RuntimeException('Blank VPN could not save IVPN state.');
+                throw new RuntimeException('Blank VPN & Proxy could not save IVPN state.');
             }
         } finally {
             if (file_exists($temp)) {

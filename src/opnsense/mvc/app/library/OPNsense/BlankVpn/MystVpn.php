@@ -95,7 +95,7 @@ class MystVpn
         $this->locked(function (): void {
             $file = $this->path . '.json';
             if (is_file($file) && !@unlink($file)) {
-                throw new RuntimeException('Blank VPN could not remove the saved Mysterium credentials.');
+                throw new RuntimeException('Blank VPN & Proxy could not remove the saved Mysterium credentials.');
             }
         });
     }
@@ -474,11 +474,11 @@ class MystVpn
     private function stateDirectory(): void
     {
         if (!is_dir($this->dataDirectory) && !@mkdir($this->dataDirectory, 0700) && !is_dir($this->dataDirectory)) {
-            throw new RuntimeException('The Blank VPN state directory is unavailable.');
+            throw new RuntimeException('The Blank VPN & Proxy state directory is unavailable.');
         }
         $mode = @fileperms($this->dataDirectory);
         if ($mode === false || ($mode & 0077) !== 0 || is_link($this->dataDirectory)) {
-            throw new RuntimeException('The Blank VPN state directory permissions are unsafe.');
+            throw new RuntimeException('The Blank VPN & Proxy state directory permissions are unsafe.');
         }
     }
 
@@ -496,7 +496,7 @@ class MystVpn
         $raw = @file_get_contents($path, false, null, 0, self::MAX_RESPONSE + 1);
         $state = $raw === false || strlen($raw) > self::MAX_RESPONSE ? null : json_decode($raw, true, 24);
         if (!is_array($state) || ($state['version'] ?? null) !== 1) {
-            throw new RuntimeException('Blank VPN could not read the saved Mysterium state.');
+            throw new RuntimeException('Blank VPN & Proxy could not read the saved Mysterium state.');
         }
         return $state;
     }
@@ -510,14 +510,14 @@ class MystVpn
         }
         $temp = @tempnam($this->dataDirectory, '.mysterium-');
         if ($temp === false) {
-            throw new RuntimeException('Blank VPN could not create the Mysterium state file.');
+            throw new RuntimeException('Blank VPN & Proxy could not create the Mysterium state file.');
         }
         try {
             if (
                 realpath(dirname($temp)) !== realpath($this->dataDirectory) || !@chmod($temp, 0600)
                 || @file_put_contents($temp, $json) !== strlen($json) || !@rename($temp, $this->path . '.json')
             ) {
-                throw new RuntimeException('Blank VPN could not save Mysterium state.');
+                throw new RuntimeException('Blank VPN & Proxy could not save Mysterium state.');
             }
         } finally {
             if (file_exists($temp)) {

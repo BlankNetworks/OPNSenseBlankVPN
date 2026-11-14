@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and verify a FreeBSD pkg archive for the Blank VPN OPNsense plugin."""
+"""Build and verify a FreeBSD pkg archive for the Blank VPN & Proxy OPNsense plugin."""
 
 import argparse
 import hashlib
@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "os-blank-vpn"
-VERSION = "0.8.17"
+VERSION = "0.8.18"
 SERIES = "26.7"
 LEGACY_ARCHES = {"amd64": "x86:64", "aarch64": "aarch64:64"}
 CORE_INSTALLER = ROOT / "src/opnsense/scripts/OPNsense/BlankVpn/install_proxy_cores.py"
@@ -111,7 +111,7 @@ def build_metadata(files, dependencies, arch):
         "name": NAME,
         "version": VERSION,
         "origin": f"opnsense/{NAME}",
-        "comment": "Per-device VPN and proxy routing with IPv4 kill switches",
+        "comment": "Blank VPN & Proxy per-device routing with IPv4 kill switches",
         "desc": (ROOT / "pkg-descr").read_text(encoding="utf-8").strip(),
         "maintainer": version["product_email"],
         "www": version["product_website"],

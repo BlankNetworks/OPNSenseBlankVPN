@@ -233,7 +233,7 @@ final class Diagnostics
     {
         $settings = $this->config->OPNsense->tailscale->settings ?? null;
         $disableSnat = (string)($settings->disableSNAT ?? '') === '1';
-        $reason = $status === [] ? 'Blank VPN could not read Tailscale status. Check the Tailscale service in OPNsense, then refresh.'
+        $reason = $status === [] ? 'Blank VPN & Proxy could not read Tailscale status. Check the Tailscale service in OPNsense, then refresh.'
             : 'Connect OPNsense to Tailscale.';
         if (($status['BackendState'] ?? '') === 'Running') {
             if (!preg_match('/^([0-9]+\.[0-9]+\.[0-9]+)(?:[+-][^\s]+)?$/D', $status['Version'] ?? '', $match) ||
@@ -462,7 +462,7 @@ final class Diagnostics
             $node = $model->hosts->add();
             $node->ip = $ip;
             $node->hwaddr = $mac;
-            $node->descr = 'Blank VPN device rule';
+            $node->descr = 'Blank VPN & Proxy device rule';
         } elseif ($provider === 'Kea DHCPv4') {
             $model = new \OPNsense\Kea\KeaDhcpv4();
             $subnets = [];
@@ -810,9 +810,12 @@ final class Diagnostics
             $reserved = [];
             $liveIpv4 = [];
             $leasedIpv4 = [];
+            $recentlySeen = false;
             foreach ($device['records'] as $record) {
                 $ip = $record['ip'];
                 $current = !empty($record['current']);
+                $recentlySeen = $recentlySeen ||
+                    ($current && in_array($record['source'], ['ARP', 'NDP', 'Hostwatch'], true));
                 if (str_contains($ip, ':')) {
                     if ($current) {
                         $ipv6[$ip] = true;
@@ -843,6 +846,7 @@ final class Diagnostics
             $device['ipv4'] = $ip;
             $device['ipv4Addresses'] = array_keys($ranked);
             $device['arpConfirmed'] = isset($liveIpv4[$ip]);
+            $device['online'] = $recentlySeen;
             $device['ipv6'] = array_keys($ipv6);
             $device['reservationIpv4'] = $reservedIp;
             $device['addressConflict'] = $conflict;

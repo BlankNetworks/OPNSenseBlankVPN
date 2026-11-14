@@ -12,4 +12,4 @@ The full package includes separate upstream executables and a Python YAML parser
 
 The [release staging script](build/prepare-release.sh) verifies the upstream FreeBSD Mihomo, tun2socks, and Xray archives and builds sing-box from the pinned source. Its sing-box build includes QUIC, uTLS, WireGuard, gVisor, and gRPC. Feature availability is documented in [PROXY_SUPPORT.md](PROXY_SUPPORT.md).
 
-Blank VPN bundles the [PIA WireGuard provisioning CA certificate](https://github.com/pia-foss/manual-connections/blob/master/ca.rsa.4096.crt) for PIA registration requests. It does not install the certificate into the system trust store.
+Blank VPN & Proxy bundles the [PIA WireGuard provisioning CA certificate](https://github.com/pia-foss/manual-connections/blob/master/ca.rsa.4096.crt) for PIA registration requests. It does not install the certificate into the system trust store.

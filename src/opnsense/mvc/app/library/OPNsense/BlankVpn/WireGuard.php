@@ -64,7 +64,7 @@ final class WireGuard
         $usedUnits = [];
         foreach ($nativeServers->servers->server->iterateItems() as $current) {
             if ((string)$current->name === $owner) {
-                throw new RuntimeException('This Blank VPN profile already owns a WireGuard instance.');
+                throw new RuntimeException('This Blank VPN & Proxy profile already owns a WireGuard instance.');
             }
             if ((string)$current->pubkey === $identityKey || (string)$current->privkey === $privateKey) {
                 throw new RuntimeException('This WireGuard identity is already used by another instance.');
@@ -89,7 +89,7 @@ final class WireGuard
         }
         foreach ($config->interfaces->children() as $interface) {
             if (strcasecmp((string)$interface->descr, $owner) === 0) {
-                throw new RuntimeException('A native interface already uses this Blank VPN profile name.');
+                throw new RuntimeException('A native interface already uses this Blank VPN & Proxy profile name.');
             }
             $usedUnits[(string)$interface->if] = true;
         }
@@ -154,7 +154,7 @@ final class WireGuard
         self::validateDefaultGateway($gateway);
         $nextIpv6 = (new Gateways())->getDefaultGW(null, 'inet6');
         if (!empty($previousIpv6['gateway']) && $previousIpv6['name'] !== ($nextIpv6['name'] ?? '')) {
-            throw new RuntimeException('The existing IPv6 default gateway must take precedence over Blank VPN gateways.');
+            throw new RuntimeException('The existing IPv6 default gateway must take precedence over Blank VPN & Proxy gateways.');
         }
 
         return [
@@ -218,7 +218,7 @@ final class WireGuard
         if ((string)(new General())->enabled !== '1') {
             foreach ((new Server())->servers->server->iterateItems() as $instance) {
                 if ((string)$instance->enabled === '1') {
-                    throw new RuntimeException('Review and enable the existing OPNsense WireGuard service before adding a Blank VPN exit.');
+                    throw new RuntimeException('Review and enable the existing OPNsense WireGuard service before adding a Blank VPN & Proxy exit.');
                 }
             }
         }
@@ -507,7 +507,7 @@ final class WireGuard
     {
         $gateway = $model->gateway_item->add();
         $gateway->name = $name;
-        $gateway->descr = 'Blank VPN ' . $name;
+        $gateway->descr = 'Blank VPN & Proxy ' . $name;
         $gateway->interface = $logical;
         $gateway->ipprotocol = $family;
         $gateway->monitor_disable = '1';
@@ -561,7 +561,7 @@ final class WireGuard
             (int)(string)$peer->keepalive !== (int)($profile['keepalive'] ?? 25) ||
             (string)$peer->tunneladdress !== self::allowedAddresses((string)($profile['address6'] ?? ''))
         ) {
-            throw new RuntimeException('The native WireGuard configuration changed outside Blank VPN. Review its owned objects.');
+            throw new RuntimeException('The native WireGuard configuration changed outside Blank VPN & Proxy. Review its owned objects.');
         }
 
         foreach (['inet' => '', 'inet6' => '6'] as $family => $suffix) {
@@ -579,7 +579,7 @@ final class WireGuard
                 !$gateway->force_down->isEmpty() || !$gateway->defaultgw->isEmpty() ||
                 (string)$gateway->monitor_disable !== '1' || (string)$gateway->priority !== '255'
             ) {
-                throw new RuntimeException('The Blank VPN gateway changed outside Blank VPN. Review its native settings.');
+                throw new RuntimeException('The Blank VPN & Proxy gateway changed outside Blank VPN & Proxy. Review its native settings.');
             }
         }
 
@@ -606,7 +606,7 @@ final class WireGuard
                 }
                 unset($target);
                 if (in_array($logical, $interfaces, true) || array_intersect($gatewayNames, $targets)) {
-                    throw new RuntimeException('A native rule, route, or group still references this Blank VPN gateway or interface.');
+                    throw new RuntimeException('A native rule, route, or group still references this Blank VPN & Proxy gateway or interface.');
                 }
             }
         }
@@ -708,7 +708,7 @@ final class WireGuard
             ($newGateway !== '' && ($default['name'] ?? '') === $newGateway) ||
             self::isTunnel((string)($default['if'] ?? ''))
         ) {
-            throw new RuntimeException('A native IPv4 WAN gateway must take precedence over Blank VPN gateways.');
+            throw new RuntimeException('A native IPv4 WAN gateway must take precedence over Blank VPN & Proxy gateways.');
         }
     }
 

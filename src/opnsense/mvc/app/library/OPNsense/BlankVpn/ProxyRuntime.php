@@ -42,7 +42,7 @@ final class ProxyRuntime
     public static function assignedRoutes(BlankVpn $model): array
     {
         $settings = Policy::effectiveRouting($model);
-        $services = SmartRouting::activeServices($settings, SmartRouting::services($model));
+        $services = SmartRouting::forwardServices($settings, SmartRouting::services($model));
         $selected = array_column($services, 'profile');
         if ($settings['coverage'] === 'network') {
             if (Policy::usesBase($settings['networkMode'])) {
@@ -434,7 +434,7 @@ final class ProxyRuntime
         if (!$testOnly) {
             self::prepareTunnelDriver();
             if (self::ifconfig($interface) !== '') {
-                throw new DomainException('A non-Blank VPN interface is using this proxy slot.');
+                throw new DomainException('A non-Blank VPN & Proxy interface is using this proxy slot.');
             }
             foreach (Policy::localNetworks(['localNetworks' => []]) as $network) {
                 if (Policy::contains($network, $route['peer'])) {

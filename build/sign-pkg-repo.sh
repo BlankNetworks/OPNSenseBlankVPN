@@ -9,7 +9,7 @@ fi
 
 version=$1
 case "$version" in
-    ''|*[!0-9.]*) echo 'Invalid Blank VPN package version.' >&2; exit 64 ;;
+    ''|*[!0-9.]*) echo 'Invalid Blank VPN & Proxy package version.' >&2; exit 64 ;;
 esac
 
 umask 077

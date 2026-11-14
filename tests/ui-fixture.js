@@ -2,7 +2,7 @@ const requests = [];
 let settingsError = null;
 let exitTestError = null;
 const updateStatus = {ok:true, supported:true, enabled:false, running:false, installed:'0.1.39',
-    available:'', message:'Check for a Blank VPN update.'};
+    available:'', message:'Check for a Blank VPN & Proxy update.'};
 const routingBackup = {schema:1, version:1, routing:{enabled:false}, assignments:[], services:[]};
 let updatePolls = 0;
 const reply = {
@@ -149,7 +149,7 @@ window.jQuery.ajax = async (request) => {
     }
     if (action === 'assign' && data.kind === 'lan' && data.mac === '02:00:00:00:00:31') {
         const existing = reply.dashboard.assignments.find(row => row.id === 'mac-device');
-        const fields = {...data, effectiveIp:data.ip};
+        const fields = {...data, effectiveIp:existing?.effectiveIp ?? data.ip};
         if (existing) Object.assign(existing, fields);
         else reply.dashboard.assignments.push({id:'mac-device', ...fields});
     }
@@ -608,15 +608,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         'Editing a MAC-bound rule must use the effective address and preserve the saved controls.');
     bv('close-assignment').click();
     macRule.effectiveIp = '';
+    laptop.online = false;
     bv('refresh').click();
     await wait();
     const waitingLaptop = bv('device-list').querySelector('[aria-label="Edit Laptop"]').closest('tr');
-    assert(waitingLaptop.textContent.includes('Waiting for DHCP') && !waitingLaptop.textContent.includes('10.0.0.31'),
-        'A MAC rule with no effective lease must distinguish its state from an active address.');
-    waitingLaptop.querySelector('[aria-label="Edit Laptop"]').click();
+    assert(waitingLaptop.textContent.includes('Waiting for DHCP') && waitingLaptop.cells[1].textContent.includes('10.0.0.32') &&
+        waitingLaptop.cells[1].textContent.includes('Saved IP 10.0.0.31') &&
+        waitingLaptop.cells[0].querySelector('.bv-offline')?.textContent === 'Offline',
+        'An offline MAC rule retains the previous saved IP and the most recent observed lease.');
+    reply.dashboard.devices = reply.dashboard.devices.filter(device => device !== laptop);
+    bv('refresh').click();
+    await wait();
+    const offlineLaptop = bv('device-list').querySelector('[aria-label="Edit Laptop"]').closest('tr');
+    assert(offlineLaptop.cells[0].querySelector('.bv-offline') && offlineLaptop.cells[1].textContent.includes('10.0.0.31') &&
+        offlineLaptop.cells[1].textContent.includes('Saved IP'),
+        'An undiscovered device must keep its saved rule and IPv4 address visible.');
+    offlineLaptop.querySelector('[aria-label="Edit Laptop"]').click();
     assert(bv('ip').value === '10.0.0.31' && !bv('device-on-demand').disabled,
         'A MAC rule waiting for DHCP must remain editable.');
-    bv('close-assignment').click();
+    bv('device-kill').checked = false;
+    bv('assign-form').requestSubmit(bv('save-device'));
+    await wait();
+    assert(requests.some(x => x.action === 'assign' && x.data.id === 'mac-device' && x.data.bindMac &&
+        x.data.ip === '10.0.0.31' && x.data.killSwitch === false && x.data.reserveIp === false),
+        'Editing an offline MAC rule must save the existing rule without attempting to reserve an old address.');
     assert(bv('tailnet-devices').tagName === 'DETAILS' && !bv('tailnet-devices').open &&
         bv('tailnet-count').textContent.includes('1 online') &&
         getComputedStyle(bv('tailnet-devices').querySelector('.bv-disclosure-link')).textDecorationLine === 'underline',
@@ -657,12 +672,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('refresh').click();
     await wait();
     const offlinePeer = bv('tailnet-device-list').querySelector('[aria-label="Edit Remote iPad"]').closest('tr');
-    assert(offlinePeer.textContent.includes('Offline') && offlinePeer.textContent.includes('On Demand'),
+    assert(offlinePeer.cells[0].querySelector('.bv-offline')?.textContent === 'Offline' &&
+        offlinePeer.textContent.includes('On Demand'),
         'An offline Tailscale device must keep its On Demand rule.');
     offlinePeer.querySelector('[aria-label="Edit Remote iPad"]').click();
     assert(bv('device-on-demand').checked && !bv('device-on-demand').disabled,
         'On Demand must remain editable for an offline Tailscale peer.');
     bv('close-assignment').click();
+    reply.dashboard.settings.tailscaleSetup = {ready:false, disableSnat:true, reason:'Tailscale is disconnected.'};
+    bv('refresh').click();
+    await wait();
+    bv('tailnet-device-list').querySelector('[aria-label="Edit Remote iPad"]').click();
+    assert(!bv('save-device').disabled && bv('identity').textContent.includes('Changes are saved'),
+        'An existing native Tailscale rule can be edited while the exit node is offline.');
+    bv('assign-form').requestSubmit(bv('save-device'));
+    await wait();
+    assert(requests.some(x => x.action === 'assign' && x.data.id === 'tailnet1' && x.data.interface === 'tailscale0' &&
+        x.data.ip === '100.101.102.104'),
+        'An offline Tailscale edit preserves the identity of the previously verified rule.');
+    reply.dashboard.settings.tailscaleSetup = {ready:true, disableSnat:true, reason:''};
     reply.dashboard.tailnetDevices = [];
     bv('refresh').click();
     await wait();
@@ -698,7 +726,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('mode').dispatchEvent(new Event('change'));
     assert(bv('profile').required && bv('profile-label').textContent === 'Base server' &&
         bv('device-kill').checked && bv('device-kill').disabled && bv('failure-field').hidden &&
-        bv('route-note').textContent.includes('Bypass lists use the base server'),
+        bv('route-note').textContent.includes('Bypass uses direct internet when available.'),
         'Combined Tailscale rules must require a base server and prevent WAN fallback.');
     bv('assign-form').requestSubmit(bv('save-device'));
     await wait();
@@ -789,8 +817,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
     bv('network-profile').value = '';
     assert(bv('network-profile').required && !bv('network-profile').checkValidity() &&
-        bv('network-profile-label').textContent === 'Base server' && bv('network-kill').checked && bv('network-kill').disabled,
-        'Combined network mode must require a base server and enforce the Kill Switch.');
+        bv('network-profile-label').textContent === 'Base server' && bv('network-kill').checked && !bv('network-kill').disabled,
+        'Combined network mode must require a base server and allow toggling the Kill Switch.');
     bv('network-profile').value = 'proxy1';
     bv('network-profile').dispatchEvent(new Event('input', {bubbles:true}));
     assert(bv('coverage-note').textContent.includes('Default traffic uses Chicago proxy') &&
@@ -802,9 +830,44 @@ document.addEventListener('DOMContentLoaded', async () => {
         x.data.networkMode === 'full_multi' && x.data.networkProfile === 'proxy1' && x.data.networkKillSwitch === true) &&
         bv('current-routing').textContent.includes('Whole-Network + Multi-Path'),
         'Whole-Network + Multi-Path settings did not apply.');
+    bv('network-kill').click();
+    assert(!bv('network-kill').checked && bv('coverage-note').textContent.includes('uses direct internet if it goes offline'),
+        'The draft must explain direct fallback with Kill Switch off.');
+    bv('settings-form').requestSubmit(bv('save-routing'));
+    await wait();
+    bv('refresh').click();
+    await wait();
+    assert(!bv('network-kill').checked && !bv('network-kill').disabled &&
+        reply.dashboard.settings.networkKillSwitch === false && bv('current-routing').textContent.includes('Kill Switch off'),
+        'Combined network coverage must submit and reload the saved Kill Switch off state.');
+    bv('network-kill').click();
+    bv('settings-form').requestSubmit(bv('save-routing'));
+    await wait();
+    assert(bv('network-kill').checked && reply.dashboard.settings.networkKillSwitch === true &&
+        bv('current-routing').textContent.includes('Kill Switch on'),
+        'Combined network coverage must allow turning the Kill Switch back on.');
     document.querySelector('[data-bv-section="smart"]').click();
-    assert(bv('smart-status').textContent.includes('Bypass lists use the base server'),
-        'Multi-Path must disclose that Bypass keeps using the VPN base in combined mode.');
+    assert(bv('smart-status').textContent.includes('Bypass uses direct internet when available'),
+        'Multi-Path must describe the direct Bypass policy in combined mode.');
+    reply.dashboard.services.push({id:'bypass-demo', name:'Direct test', domains:['example.net'], profile:'bypass',
+        routing:{lan:{bypass:true}, opt1:{bypass:false, guard:true}}});
+    bv('refresh').click();
+    await wait();
+    const directRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('Direct test'));
+    assert(directRow.cells[2].textContent.includes('Direct internet') &&
+        directRow.cells[2].textContent.includes('Direct internet unavailable'),
+        'Bypass status must distinguish a direct route from an unavailable direct gateway.');
+    reply.dashboard.settings.networkMode = 'blocked';
+    delete reply.dashboard.services.at(-1).routing;
+    bv('refresh').click();
+    await wait();
+    assert(bv('smart-status').textContent.includes('Internet access stays blocked') &&
+        bv('service-list').textContent.includes('Internet blocked'),
+        'Bypass must disclose an explicit Whole-Network block.');
+    reply.dashboard.settings.networkMode = 'full_multi';
+    reply.dashboard.services.pop();
+    bv('refresh').click();
+    await wait();
     document.querySelector('[data-bv-section="network"]').click();
     assert(bv('disable-routing').parentElement.contains(bv('settings-title')) &&
         getComputedStyle(bv('disable-routing')).backgroundColor === 'rgb(177, 40, 60)',

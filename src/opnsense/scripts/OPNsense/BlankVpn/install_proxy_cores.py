@@ -1,5 +1,5 @@
 #!/usr/local/bin/python3.13
-"""Install the pinned upstream FreeBSD proxy runtimes for Blank VPN."""
+"""Install the pinned upstream FreeBSD proxy runtimes for Blank VPN & Proxy."""
 
 import argparse
 import gzip

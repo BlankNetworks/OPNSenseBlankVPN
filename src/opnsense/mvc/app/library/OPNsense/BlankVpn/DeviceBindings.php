@@ -78,12 +78,12 @@ final class DeviceBindings
             return [];
         }
         if (is_link($path) || !is_file($path) || (fileperms($path) & 0077) !== 0) {
-            throw new \RuntimeException('Blank VPN’s device binding state has unsafe permissions.');
+            throw new \RuntimeException('Blank VPN & Proxy’s device binding state has unsafe permissions.');
         }
         $raw = @file_get_contents($path, false, null, 0, 65537);
         $record = is_string($raw) && strlen($raw) <= 65536 ? json_decode($raw, true, 4) : null;
         if (!is_array($record) || array_filter($record, static fn ($ip): bool => self::address($ip) === null) !== []) {
-            throw new \RuntimeException('Blank VPN’s device binding state is unreadable.');
+            throw new \RuntimeException('Blank VPN & Proxy’s device binding state is unreadable.');
         }
         return $record;
     }

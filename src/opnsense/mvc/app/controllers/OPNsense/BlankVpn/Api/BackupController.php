@@ -40,7 +40,7 @@ final class BackupController extends ApiControllerBase
     {
         $backup = $this->request->getPost('backup');
         if (!is_string($backup) || $backup === '' || strlen($backup) > RoutingBackup::MAX_BYTES) {
-            throw new DomainException('Choose a Blank VPN settings backup of up to 2 MiB.');
+            throw new DomainException('Choose a Blank VPN & Proxy settings backup of up to 2 MiB.');
         }
         return $backup;
     }
@@ -63,7 +63,7 @@ final class BackupController extends ApiControllerBase
             if ($error::class === RuntimeException::class) {
                 return ['ok' => false, 'error' => $error->getMessage()];
             }
-            return ['ok' => false, 'error' => 'Blank VPN could not verify the settings backup.'];
+            return ['ok' => false, 'error' => 'Blank VPN & Proxy could not verify the settings backup.'];
         } catch (\Throwable $error) {
             syslog(LOG_ERR, 'Blank VPN backup operation failed: ' . $error::class . ' at ' .
                 basename($error->getFile()) . ':' . $error->getLine());

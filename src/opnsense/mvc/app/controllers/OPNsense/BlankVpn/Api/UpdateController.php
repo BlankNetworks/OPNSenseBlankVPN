@@ -32,7 +32,7 @@ final class UpdateController extends ApiControllerBase
         return $this->respond(true, function (): array {
             $version = $this->request->getPost('version');
             if (!PackageUpdate::validVersion($version)) {
-                throw new DomainException('Choose an available Blank VPN version.');
+                throw new DomainException('Choose an available Blank VPN & Proxy version.');
             }
             $this->getLogger('audit')->notice(sprintf('[Blank VPN] %s requested package update %s', $this->getUserName(), $version));
             return $this->run('apply', [$version]);

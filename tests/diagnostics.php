@@ -168,7 +168,7 @@ namespace {
     check($snapshot['warnings'] === [] && !$snapshot['truncated'], 'Healthy discovery result');
     $devices = array_column($snapshot['devices'], null, 'id');
     $desktop = $devices['lan-020000000001'];
-    check($desktop['stable'] && $desktop['ipv4'] === '192.168.10.5', 'Stable device');
+    check($desktop['online'] && $desktop['stable'] && $desktop['ipv4'] === '192.168.10.5', 'Stable online device');
     check($desktop['ipv6'] === ['fe80::5'] && $desktop['lastSeen'] !== null, 'NDP and Hostwatch');
     check($desktop['name'] === 'reserved-host', 'Reservation hostname');
     check($devices['lan-020000000009']['addressConflict'] && !$devices['lan-020000000009']['stable'],
@@ -179,12 +179,15 @@ namespace {
         !$devices['lan-020000000004']['stable'] && !$devices['opt1-020000000015']['arpConfirmed'] &&
         $devices['opt1-020000000015']['leaseProvider'] === 'Dnsmasq DHCP',
         'Discover a valid Kea lease without an interface and a Dnsmasq lease without ARP.');
+    check(!$devices['lan-020000000004']['online'] && !$devices['opt1-020000000015']['online'],
+        'A DHCP lease by itself does not indicate recent device activity.');
     check($devices['lan-020000000014']['addressConflict'] && $devices['lan-020000000014']['leaseProvider'] === '' &&
         $devices['lan-020000000016']['addressConflict'] && $devices['lan-020000000025']['addressConflict'],
         'Conflicting DHCP or ARP claims and ambiguous leases are visible but cannot be auto-reserved.');
     check($devices['lan-020000000024']['ipv4'] === '192.168.10.31' &&
         $devices['lan-020000000024']['ipv4Addresses'] === ['192.168.10.31', '192.168.10.30'] &&
-        !$devices['lan-020000000024']['arpConfirmed'] && $devices['lan-020000000024']['leaseProvider'] === 'Kea DHCPv4',
+        !$devices['lan-020000000024']['arpConfirmed'] && $devices['lan-020000000024']['online'] &&
+        $devices['lan-020000000024']['leaseProvider'] === 'Kea DHCPv4',
         'Prefer the current unique DHCP lease over an older ARP address for the same device.');
     foreach (['lan-020000000021', 'lan-020000000022', 'lan-020000000023', 'opt1-020000000017', 'lan-020000000018'] as $key) {
         check(!isset($devices[$key]), 'Reject invalid lease identity or status for ' . $key);

@@ -1,10 +1,10 @@
 # Proxy core updates
 
-Blank VPN includes a baseline build of Mihomo, tun2socks, Xray, and sing-box. Mihomo handles Clash-compatible proxy configurations. Xray and sing-box provide native outbound adapters. Passwall is an OpenWrt interface that manages several upstream cores. Use the FreeBSD builds of the applicable cores on OPNsense.
+Blank VPN & Proxy includes a baseline build of Mihomo, tun2socks, Xray, and sing-box. Mihomo handles Clash-compatible proxy configurations. Xray and sing-box provide native outbound adapters. Passwall is an OpenWrt interface that manages several upstream cores. Use the FreeBSD builds of the applicable cores on OPNsense.
 
 ## Approve a release
 
-Edit the [amd64 catalog](src/share/blankvpn/core-catalog.json) or the [aarch64 catalog](src/share/blankvpn/core-catalog-aarch64.json) on the repository’s main branch. Each entry specifies the core, numeric version, source, GitHub release tag, asset filename, and lowercase SHA-256. Blank VPN derives the HTTPS URL from these fields and accepts only its catalog repositories and release filename patterns.
+Edit the [amd64 catalog](src/share/blankvpn/core-catalog.json) or the [aarch64 catalog](src/share/blankvpn/core-catalog-aarch64.json) on the repository’s main branch. Each entry specifies the core, numeric version, source, GitHub release tag, asset filename, and lowercase SHA-256. Blank VPN & Proxy derives the HTTPS URL from these fields and accepts only its catalog repositories and release filename patterns.
 
 | Core | Source | amd64 archive | aarch64 archive |
 | --- | --- | --- | --- |

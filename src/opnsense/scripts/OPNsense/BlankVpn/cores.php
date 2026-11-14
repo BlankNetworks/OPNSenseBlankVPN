@@ -36,6 +36,6 @@ try {
     fwrite(STDERR, $error->getMessage() . "\n");
     exit(1);
 } catch (Throwable) {
-    fwrite(STDERR, "Blank VPN could not complete the core operation. Check the router log and current core status.\n");
+    fwrite(STDERR, "Blank VPN & Proxy could not complete the core operation. Check the router log and current core status.\n");
     exit(1);
 }

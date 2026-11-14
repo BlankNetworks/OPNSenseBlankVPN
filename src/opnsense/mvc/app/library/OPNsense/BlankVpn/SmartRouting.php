@@ -19,7 +19,9 @@ final class SmartRouting
         'Netflix' => ['netflix.com', 'netflix.net', 'nflxext.com', 'nflximg.com', 'nflximg.net',
             'nflxsearch.net', 'nflxso.net', 'nflxvideo.net'],
         'Hulu' => ['hulu.com', 'hulustream.com', 'huluim.com'],
-        'WeChat' => ['wechat.com', 'weixin.qq.com']
+        'WeChat' => ['wechat.com', 'weixin.qq.com'],
+        'YouTube' => ['youtube.com', 'youtu.be', 'youtube-nocookie.com', 'googlevideo.com', 'ytimg.com',
+            'youtubei.googleapis.com', 'youtube.googleapis.com', 'yt3.ggpht.com']
     ];
 
     public static function services(BlankVpn $model): array
@@ -42,21 +44,33 @@ final class SmartRouting
 
     public static function usesBypass(array $settings): bool
     {
-        return ($settings['coverage'] ?? '') === 'network' && ($settings['networkMode'] ?? '') === 'full';
+        return !empty($settings['enabled']) && !empty($settings['interfaces']) &&
+            (($settings['coverage'] ?? '') !== 'network' ||
+            in_array($settings['networkMode'] ?? '', ['full', 'full_multi', 'multi'], true));
     }
 
     public static function activeServices(array $settings, array $services): array
     {
-        if (!$settings['enabled']) {
-            return [];
-        }
-        $bypass = self::usesBypass($settings);
-        $interfaces = $bypass ? $settings['interfaces'] : $settings['smartInterfaces'];
-        if ($interfaces === []) {
+        return self::forwardServices($settings, $services) + self::bypassServices($settings, $services);
+    }
+
+    public static function forwardServices(array $settings, array $services): array
+    {
+        if (empty($settings['enabled']) || empty($settings['smartInterfaces']) ||
+            (($settings['coverage'] ?? '') === 'network' && !Policy::usesMultiPath($settings['networkMode'] ?? ''))) {
             return [];
         }
         return array_filter(self::boundServices($services), static fn (array $service): bool =>
-            ($service['profile'] === self::BYPASS) === $bypass);
+            $service['profile'] !== self::BYPASS);
+    }
+
+    public static function bypassServices(array $settings, array $services): array
+    {
+        if (!self::usesBypass($settings)) {
+            return [];
+        }
+        return array_filter(self::boundServices($services), static fn (array $service): bool =>
+            $service['profile'] === self::BYPASS);
     }
 
     public static function bypassTable(array $services): string
@@ -248,12 +262,18 @@ final class SmartRouting
         return isset($profile['proxyDns']) || self::profileDns($profile) !== [];
     }
 
-    public static function dnsDirectives(array $services, array $profiles): array
+    public static function dnsDirectives(array $services, array $profiles, array $bypassUpstreams = []): array
     {
         $lines = [];
         $bypassLists = array_filter($services, static fn (array $service): bool =>
             ($service['profile'] ?? '') === self::BYPASS);
         $bypassTable = $bypassLists === [] ? '' : self::bypassTable($bypassLists);
+        $bypassSuffixes = [];
+        foreach ($bypassLists as $service) {
+            foreach (self::domainEntries($service['domains']) as $domain) {
+                $bypassSuffixes[ltrim($domain, '.')] = true;
+            }
+        }
         foreach (self::boundServices($services) as $service) {
             $profile = $profiles[$service['profile']] ?? [];
             $source = explode('/', $profile['address'] ?? '')[0];
@@ -262,11 +282,26 @@ final class SmartRouting
             $table = $bypass ? $bypassTable : self::table($service);
             foreach (self::domainEntries($service['domains']) as $domain) {
                 $domain = ltrim($domain, '.');
-                $lines[] = "ipset=/{$domain}/{$table}";
                 if ($bypass) {
-                    $lines[] = "server=/{$domain}/127.0.0.1#53";
+                    $lines[] = "ipset=/{$domain}/{$table}";
+                    if ($bypassUpstreams === []) {
+                        $lines[] = "local=/{$domain}/";
+                    }
+                    foreach ($bypassUpstreams as $upstream) {
+                        $lines[] = "server=/{$domain}/{$upstream}";
+                    }
                     continue;
                 }
+                // An explicit bypass applies to all names below its suffix, even with a more specific VPN list.
+                foreach (self::parentDomains($domain) as $parent) {
+                    if (isset($bypassSuffixes[$parent])) {
+                        continue 2;
+                    }
+                }
+                if (isset($bypassSuffixes[$domain])) {
+                    continue;
+                }
+                $lines[] = "ipset=/{$domain}/{$table}";
                 if (isset($profile['proxyDns'])) {
                     $lines[] = "server=/{$domain}/127.0.0.1#{$profile['proxyDns']}";
                     continue;
@@ -297,25 +332,28 @@ final class SmartRouting
 
     private static function learnedTables(array $settings, array $services): array
     {
-        $active = array_filter(self::activeServices($settings, $services),
-            static fn (array $service): bool => self::hasDomains($service['domains']));
-        if ($active !== [] && self::usesBypass($settings)) {
-            return array_fill_keys(array_keys($active), self::bypassTable($active));
-        }
-        return array_map(self::table(...), $active);
+        $hasDomains = static fn (array $service): bool => self::hasDomains($service['domains']);
+        $forward = array_filter(self::forwardServices($settings, $services), $hasDomains);
+        $bypass = array_filter(self::bypassServices($settings, $services), $hasDomains);
+        $tables = array_map(self::table(...), $forward);
+        return $bypass === [] ? $tables : $tables + array_fill_keys(array_keys($bypass), self::bypassTable($bypass));
     }
 
     public static function countLearned(array $settings, array $services): array
     {
         $counts = [];
+        $tableCounts = [];
         foreach (self::learnedTables($settings, $services) as $id => $table) {
-            try {
-                $output = Resolver::command(['/sbin/pfctl', '-t', $table, '-T', 'show']);
-                $lines = preg_split('/\R/', trim($output), -1, PREG_SPLIT_NO_EMPTY);
-                $counts[$id] = count($lines);
-            } catch (\RuntimeException) {
-                $counts[$id] = null;
+            if (!array_key_exists($table, $tableCounts)) {
+                try {
+                    $output = Resolver::command(['/sbin/pfctl', '-t', $table, '-T', 'show']);
+                    $lines = preg_split('/\R/', trim($output), -1, PREG_SPLIT_NO_EMPTY);
+                    $tableCounts[$table] = count($lines);
+                } catch (\RuntimeException) {
+                    $tableCounts[$table] = null;
+                }
             }
+            $counts[$id] = $tableCounts[$table];
         }
         return $counts;
     }

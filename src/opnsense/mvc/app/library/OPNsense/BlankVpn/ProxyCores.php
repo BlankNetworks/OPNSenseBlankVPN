@@ -285,7 +285,7 @@ final class ProxyCores
                 throw new DomainException('The core archive could not be downloaded or verified as FreeBSD ' . self::architecture() . '.');
             }
             if (disk_free_space($directory) <= self::RESERVE) {
-                throw new DomainException('The core would leave too little space for Blank VPN settings and router state.');
+                throw new DomainException('The core would leave too little space for Blank VPN & Proxy settings and router state.');
             }
             self::validate($core, $entry['version'], $temporary);
             if (!rename($temporary, $destination)) {

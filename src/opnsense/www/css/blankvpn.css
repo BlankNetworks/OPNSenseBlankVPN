@@ -263,6 +263,16 @@
     color: var(--bv-muted);
 }
 
+.blankvpn .bv-offline {
+    display: inline-block;
+    margin-inline-start: .45rem;
+    padding: .05rem .4rem;
+    border-radius: .25rem;
+    background: var(--bv-raised);
+    color: var(--bv-muted);
+    font-size: .8em;
+}
+
 .blankvpn .btn-primary,
 .blankvpn .btn-primary:is(:hover, :focus, :active, .active, :disabled) {
     border: 1px solid var(--bv-accent);

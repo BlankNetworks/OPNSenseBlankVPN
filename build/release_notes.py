@@ -13,7 +13,7 @@ def install_instructions(directory, repository):
     commands = [
         "## Install or upgrade",
         "",
-        f"If your Blank VPN dashboard already has **System Settings → Package updates**, "
+        f"If your Blank VPN & Proxy dashboard already has **System Settings → Package updates**, "
         f"[update from the WebGUI](https://github.com/{repository}/blob/v{VERSION}/README.md#update-from-the-webgui). "
         "The standalone packages below are also available for first installs and manual upgrades.",
         "",
@@ -67,7 +67,7 @@ def install_instructions(directory, repository):
             "",
         ])
     commands.extend([
-        f"Check that `pkg info {NAME}` shows **{VERSION}**. Open **VPN → Blank VPN → Dashboard** "
+        f"Check that `pkg info {NAME}` shows **{VERSION}**. Open **VPN → Blank VPN & Proxy → Dashboard** "
         "in the OPNsense HTTPS WebGUI. The same commands install over an existing version. "
         "New installations start with routing disabled.",
         "",
@@ -83,7 +83,7 @@ def main():
     parser.add_argument("--repository", default="BlankNetworks/OPNSenseBlankVPN")
     args = parser.parse_args()
     notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8").strip()
-    print(f"# Blank VPN {VERSION}\n\n"
+    print(f"# Blank VPN & Proxy {VERSION}\n\n"
           f"This lab prerelease targets OPNsense Community Edition {SERIES} and bundles the proxy runtimes. "
           "The ARM64 package requires a compatible community OPNsense build. "
           "Live forwarding, core rollback, and tunnel-drop behavior still need lab validation.\n")

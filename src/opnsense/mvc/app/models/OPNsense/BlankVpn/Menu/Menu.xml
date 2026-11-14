@@ -1,6 +1,6 @@
 <menu>
     <VPN>
-        <BlankVpn VisibleName="Blank VPN" cssClass="fa fa-shield fa-fw">
+        <BlankVpn VisibleName="Blank VPN &amp; Proxy" cssClass="fa fa-shield fa-fw">
             <Dashboard order="10" url="/ui/blankvpn/index"/>
         </BlankVpn>
     </VPN>

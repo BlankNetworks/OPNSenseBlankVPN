@@ -17,7 +17,7 @@ pkg=${BLANKVPN_PKG:-pkg}
 unset PKG_REPO_HASH PKG_REPO_SYMLINK
 
 case "$version" in
-    ''|*[!0-9.]*) echo 'Invalid Blank VPN package version.' >&2; exit 64 ;;
+    ''|*[!0-9.]*) echo 'Invalid Blank VPN & Proxy package version.' >&2; exit 64 ;;
 esac
 if [ -e "$site" ]; then
     echo 'The repository site output directory must not exist.' >&2
@@ -55,5 +55,5 @@ done
 
 cp "$public_key" "$site/pkg/repo.pub"
 printf '%s\n' "$version" > "$site/pkg/26.7/version.txt"
-printf '%s\n' '<!doctype html><html lang="en"><meta charset="utf-8"><title>Blank VPN package repository</title><h1>Blank VPN package repository</h1><p>Signed OPNsense Community Edition 26.7 packages for amd64 and aarch64.</p></html>' > "$site/index.html"
+printf '%s\n' '<!doctype html><html lang="en"><meta charset="utf-8"><title>Blank VPN &amp; Proxy package repository</title><h1>Blank VPN &amp; Proxy package repository</h1><p>Signed OPNsense Community Edition 26.7 packages for amd64 and aarch64.</p></html>' > "$site/index.html"
 touch "$site/.nojekyll"

@@ -62,6 +62,9 @@ class ServiceController extends ApiControllerBase
             $settings['dashboardMagicDns'] = Resolver::magicDnsFromStatus($tailnet);
             $settings['tailscaleSetup'] = $diagnostics->nativeTailnetSetup($tailnet);
             $discovery['tailnetDevices'] = Diagnostics::tailnetPeers($tailnet);
+            $discovery['tailnetStatusAvailable'] = ($tailnet['BackendState'] ?? '') === 'Running'
+                && is_array($tailnet['Peer'] ?? null)
+                && count($tailnet['Peer']) === count($discovery['tailnetDevices']);
             $runtime = $profiles === [] ? [] : WireGuard::runtimeRecords();
             $health = Firewall::health();
             $loaded = $settings['enabled'] ? Firewall::loadedRules() : [];
@@ -123,8 +126,7 @@ class ServiceController extends ApiControllerBase
                 $profiles['proxy-' . $id] = ['id' => 'proxy-' . $id, 'node' => $id, 'kind' => 'proxy'] + $server;
             }
             $activeLists = SmartRouting::activeServices($routing, $services);
-            $bypass = SmartRouting::usesBypass($routing);
-            $multiActive = !$bypass && $activeLists !== [];
+            $multiActive = SmartRouting::forwardServices($routing, $services) !== [];
             foreach ($assignments as $id => $row) {
                 $rule = $loaded[Policy::marker('device', $id)] ?? null;
                 $guard = ($loaded[Policy::marker('kill', $id)]['action'] ?? '') === 'block';
@@ -142,6 +144,7 @@ class ServiceController extends ApiControllerBase
                 $row['onDemand'] = Policy::onDemand($row);
                 $row['bindMac'] = Policy::bindsMac($row);
                 $row['effectiveIp'] = $effectiveAssignments[$id]['ip'];
+                $row['reservationIp'] = $row['bindMac'] ? DeviceIdentity::effective($row, $reservationIndex) : null;
                 $row['paused'] = Policy::assignmentPaused($row);
                 $assignments[$id] = $row + [
                     'device' => $row['interface'] . '/' . (($row['kind'] ?? '') === 'tailnet' ? $row['ip'] : $row['mac']),
@@ -162,27 +165,42 @@ class ServiceController extends ApiControllerBase
             if ($settings['enabled'] && $settings['coverage'] === 'network') {
                 foreach ($routing['interfaces'] as $interface) {
                     $id = 'network:' . $interface;
+                    $base = $loaded[Policy::marker('device', $id)]['gateway'] ?? null;
+                    $fallback = ($loaded[Policy::marker('wan_fallback', $id . ':inet')]['action'] ?? '') === 'pass';
                     $settings['networkRouting'][$interface] = [
-                        'gateway' => $loaded[Policy::marker('device', $id)]['gateway'] ?? null,
+                        'gateway' => $base,
+                        'wanFallback' => $fallback,
                         'blocked' => ($loaded[Policy::marker('kill', $id)]['action'] ?? null) === 'block'
-                            && empty($loaded[Policy::marker('device', $id)]['gateway'])
+                            && $base === null && !$fallback
                     ];
                 }
             }
-            $learned = $activeLists !== [] && !$bypass ? SmartRouting::status() : [];
+            $learned = $activeLists !== [] ? SmartRouting::status() : [];
+            $bypassInterfaces = SmartRouting::bypassServices($routing, $services) !== []
+                ? array_keys(Firewall::bypassScopes($routing, $effectiveAssignments, $diagnostics)) : [];
             foreach ($services as $id => &$service) {
                 $service['learned'] = $learned[$id] ?? null;
                 $service['routing'] = [];
                 if (!isset($activeLists[$id])) {
                     continue;
                 }
-                if ($bypass) {
-                    foreach ($routing['interfaces'] as $interface) {
-                        $key = 'network:' . $interface;
-                        $service['routing'][$interface] = [
-                            'bypass' => ($loaded[Policy::marker('bypass', $key)]['action'] ?? '') === 'match',
-                            'guard' => $settings['networkRouting'][$interface]['blocked'] ?? false
-                        ];
+                if ($service['profile'] === SmartRouting::BYPASS) {
+                    foreach ($bypassInterfaces as $interface) {
+                        $kinds = [];
+                        if (SmartRouting::hasDomains($service['domains'])) {
+                            $kinds[] = 'learned';
+                        }
+                        if (SmartRouting::addressEntries($service['domains']) !== []) {
+                            $kinds[] = 'static';
+                        }
+                        $direct = false;
+                        $guard = false;
+                        foreach ($kinds as $kind) {
+                            $key = $interface . ':inet:' . $kind;
+                            $direct = $direct || ($loaded[Policy::marker('bypass', $key)]['action'] ?? '') === 'pass';
+                            $guard = $guard || ($loaded[Policy::marker('bypass_guard', $key)]['action'] ?? '') === 'block';
+                        }
+                        $service['routing'][$interface] = ['bypass' => $direct, 'guard' => $guard];
                     }
                     continue;
                 }
@@ -190,8 +208,9 @@ class ServiceController extends ApiControllerBase
                     $key = $id . ':' . $interface;
                     $guard = ($loaded[Policy::marker('service_guard', $key)]['action'] ?? '') === 'block';
                     $service['routing'][$interface] = [
-                        'gateway' => $loaded[Policy::marker('service', $key)]['gateway'] ?? null,
-                        'guard' => $guard
+                        'gateway' => $loaded[Policy::marker('service', $key)]['gateway'] ??
+                            $loaded[Policy::marker('service_dns', $key)]['gateway'] ?? null,
+                        'guard' => $guard || ($loaded[Policy::marker('service_dns_guard', $key)]['action'] ?? '') === 'block'
                     ];
                 }
             }
@@ -294,7 +313,11 @@ class ServiceController extends ApiControllerBase
             if ($route === null) {
                 throw new \DomainException('Select a configured exit.');
             }
-            return $this->probeExit($model, $route);
+            $probe = $this->probeExit($model, $route);
+            if (!empty($probe['reachable']) && (($route['kind'] ?? '') !== 'proxy' || ProxyRuntime::ready($route))) {
+                Operations::recordSuccessfulProbe($model, $route);
+            }
+            return $probe;
         }), true, true);
     }
 
@@ -348,7 +371,7 @@ class ServiceController extends ApiControllerBase
         }
         $loaded = Firewall::loadedRules();
         if ($loaded === null) {
-            throw new \RuntimeException('Blank VPN could not read the active firewall rules from configd.');
+            throw new \RuntimeException('Blank VPN & Proxy could not read the active firewall rules from configd.');
         }
         if (!Firewall::probePathInstalled($route, $loaded)) {
             Firewall::reload($model);
@@ -622,7 +645,7 @@ class ServiceController extends ApiControllerBase
             try {
                 $myst->completeProvision($config['provisionReceipt']);
             } catch (\RuntimeException) {
-                $result['warning'] = 'The tunnel was added. Blank VPN could not clear the temporary Mysterium setup record.';
+                $result['warning'] = 'The tunnel was added. Blank VPN & Proxy could not clear the temporary Mysterium setup record.';
             }
             return $result;
         }), true, true, true);
@@ -1032,9 +1055,6 @@ class ServiceController extends ApiControllerBase
             if ($coverage !== 'network' || !Policy::usesBase($networkMode)) {
                 $networkProfile = '';
             }
-            if ($networkMode === 'full_multi') {
-                $networkKillSwitch = '1';
-            }
             $this->validateDashboardBinding($hostname, $bind);
             if (array_diff($interfaces, array_keys(Policy::availableInterfaces())) ||
                 array_diff($strict, $interfaces) || array_diff($smart, $interfaces)) {
@@ -1045,12 +1065,12 @@ class ServiceController extends ApiControllerBase
                 throw new \DomainException('Use Multi-Path on a selected interface with normal internet as its default.');
             }
             if ($enabled && $interfaces === [] && ($coverage !== 'device' || !Policy::nativeTailnetConfigured())) {
-                throw new \DomainException('Choose a LAN or VLAN for Blank VPN to manage.');
+                throw new \DomainException('Choose a LAN or VLAN for Blank VPN & Proxy to manage.');
             }
             if ($enabled) {
                 Policy::segmentNetworks($strict);
                 if (!Firewall::dnsRedirectionAvailable()) {
-                    throw new \DomainException('OPNsense automatic NAT reflection for port forwards conflicts with Blank VPN DNS redirection.');
+                    throw new \DomainException('OPNsense automatic NAT reflection for port forwards conflicts with Blank VPN & Proxy DNS redirection.');
                 }
             }
             $networks = [];
@@ -1235,6 +1255,7 @@ class ServiceController extends ApiControllerBase
     public function assignAction()
     {
         return $this->respond(fn () => Operations::exclusive(function () {
+            $assignmentId = $this->input('id', 64);
             $ip = $this->input('ip', 45);
             $mac = strtolower($this->input('mac', 17));
             $kind = $this->input('kind', 12, 'lan');
@@ -1277,21 +1298,27 @@ class ServiceController extends ApiControllerBase
                 throw new \DomainException($nativeTailnet ? 'Enter the iPad or other device’s Tailscale IPv4 address.'
                     : 'Enter both the Tailscale IPv4 and IPv6 addresses for this peer.');
             }
+            $saved = $assignmentId === '' ? null : (Policy::assignments(new BlankVpn())[$assignmentId] ?? null);
+            if ($assignmentId !== '' && ($saved === null || ($saved['kind'] ?? 'lan') !== $kind ||
+                $saved['interface'] !== $interface || ($kind === 'lan' ? $saved['mac'] !== $mac : $saved['ip'] !== $ip))) {
+                throw new \DomainException('This device rule changed. Refresh and open it again.');
+            }
             if ($nativeTailnet) {
                 $diagnostics = new Diagnostics();
                 $status = $diagnostics->tailnetStatus();
                 $setup = $diagnostics->nativeTailnetSetup($status);
-                if (!$setup['ready']) {
+                if (!$setup['ready'] && $saved === null) {
                     throw new \DomainException($setup['reason']);
                 }
                 $peer = $diagnostics->tailnetPeer($ip, $status);
-                if ($peer === null) {
+                $ipv6 = $peer['ipv6'][0] ?? ($saved['ipv6'] ?? '');
+                if (!Policy::tailnetAddress($ipv6, true)) {
                     throw new \DomainException('OPNsense could not verify this Tailscale peer and both addresses. Open Tailscale on the device, confirm its IPv4 address, and try again.');
                 }
-                $ipv6 = $peer['ipv6'][0];
-                $label = $label !== '' ? $label : ($peer['name'] ?? '');
+                $label = $label !== '' ? $label : ($peer['name'] ?? $saved['label'] ?? '');
             }
             $provider = '';
+            $pendingMac = false;
             $bindMac = $kind === 'lan' && $this->request->hasPost('bindMac')
                 ? ($this->flag('bindMac') ? '1' : '0') : null;
             $onDemand = $this->request->hasPost('onDemand')
@@ -1302,16 +1329,19 @@ class ServiceController extends ApiControllerBase
                     $ip = DeviceIdentity::reservation($interface, $mac, $diagnostics->reservations()) ?? $ip;
                 }
                 if (!$diagnostics->hasReservation($interface, $ip, $mac)) {
-                    if ($this->flag('reserveIp') || $bindMac === '1') {
+                    if ($this->flag('reserveIp') || ($bindMac === '1' && $saved === null)) {
                         $provider = $diagnostics->reservationProvider($interface, $ip, $mac);
                     }
-                    if ($provider === '') {
+                    $pendingMac = $provider === '' && $bindMac === '1' && $saved !== null
+                        && Policy::bindsMac($saved) && $saved['ip'] === $ip;
+                    if ($provider === '' && !$pendingMac) {
                         throw new \DomainException('A DHCP reservation is required. Refresh to reserve the device’s current lease, or create a reservation in OPNsense.');
                     }
                 }
             }
             $result = Operations::change(function (BlankVpn $model) use (
-                $ip, $ipv6, $mac, $kind, $mode, $interface, $label, $profile, $backup, $failure, $killSwitch, $provider, $nativeTailnet, $bindMac, $onDemand
+                $assignmentId, $saved, $ip, $ipv6, $mac, $kind, $mode, $interface, $label, $profile, $backup, $failure,
+                $killSwitch, $provider, $nativeTailnet, $bindMac, $onDemand, $pendingMac
             ) {
                 $settings = Policy::settings($model);
                 if (!$nativeTailnet && !in_array($interface, $settings['interfaces'], true)) {
@@ -1337,17 +1367,22 @@ class ServiceController extends ApiControllerBase
                 $node = null;
                 $prior = [];
                 $configuredAssignments = Policy::assignments($model);
+                if ($assignmentId !== '' && ($configuredAssignments[$assignmentId] ?? null) !== $saved) {
+                    throw new \DomainException('This device rule changed. Refresh and open it again.');
+                }
                 $effectiveAssignments = Policy::routingAssignments($configuredAssignments, new Diagnostics());
                 foreach ($configuredAssignments as $id => $row) {
                     if ($row['interface'] !== $interface) {
                         continue;
                     }
                     $tailnet = ($row['kind'] ?? '') === 'tailnet';
-                    if ($kind === 'tailnet' && $tailnet && $row['ip'] === $ip ||
-                        $kind === 'lan' && !$tailnet && $row['mac'] === $mac) {
+                    if ($id === $assignmentId || ($assignmentId === '' && (
+                        $kind === 'tailnet' && $tailnet && $row['ip'] === $ip ||
+                        $kind === 'lan' && !$tailnet && $row['mac'] === $mac))) {
                         $node = $model->assignments->assignment->getChild($id);
                         $prior = $effectiveAssignments[$id];
-                    } elseif ($effectiveAssignments[$id]['ip'] === $ip || ($ipv6 !== '' && ($row['ipv6'] ?? '') === $ipv6)) {
+                    } elseif ((!$pendingMac && $effectiveAssignments[$id]['ip'] === $ip) ||
+                        ($ipv6 !== '' && ($row['ipv6'] ?? '') === $ipv6)) {
                         throw new \DomainException('This address already has an assignment on the selected interface.');
                     }
                 }
@@ -1381,13 +1416,17 @@ class ServiceController extends ApiControllerBase
                 return [
                     'settings' => $settings, 'reload' => $live, 'dhcpProvider' => $provider,
                     'killSwitchReset' => $live && $changed ?
-                        array_values(array_unique(array_filter([$ip, $ipv6, $prior['ip'] ?? '', $prior['ipv6'] ?? '']))) : []
+                        array_values(array_unique(array_filter([
+                            $pendingMac ? '' : $ip, $ipv6, $prior['ip'] ?? '', $prior['ipv6'] ?? ''
+                        ]))) : []
                 ];
             });
             $reset = $result['killSwitchReset'] !== [];
-            $result = ['applied' => $result['reload'], 'killSwitchReset' => $reset];
+            $result = ['applied' => $result['reload'] && !$pendingMac, 'killSwitchReset' => $reset];
             if ($provider !== '') {
                 $result['message'] = 'IP address reserved and device rule saved.';
+            } elseif ($pendingMac) {
+                $result['message'] = 'Device rule saved. Waiting for a matching DHCP reservation.';
             }
             if ($result['applied'] && !$reset && $this->flag('switchNow')) {
                 try {
@@ -1526,16 +1565,18 @@ class ServiceController extends ApiControllerBase
             $current = ['profile' => $profileId, 'domains' => $domains];
             $changed = $profileId !== ($previous['profile'] ?? '') || $domains !== ($previous['domains'] ?? []);
             $active = SmartRouting::active($settings, array_filter([$previous, $current]));
-            return $this->serviceChange($model, $settings, $changed && $active);
+            return $this->serviceChange($model, $settings, $changed && $active,
+                $profileId === SmartRouting::BYPASS || ($previous['profile'] ?? '') === SmartRouting::BYPASS);
         });
     }
 
-    private function serviceChange(BlankVpn $model, array $settings, bool $reload): array
+    private function serviceChange(BlankVpn $model, array $settings, bool $reload, bool $bypassChanged): array
     {
         $reset = [];
         if ($reload) {
             $assignments = Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics());
-            $reset = Operations::combinedStateScopes($settings, $assignments);
+            $reset = $bypassChanged ? Operations::bypassStateScopes($settings, $assignments)
+                : Operations::combinedStateScopes($settings, $assignments);
         }
         return ['reload' => $reload, 'killSwitchReset' => $reset];
     }
@@ -1550,7 +1591,8 @@ class ServiceController extends ApiControllerBase
                     throw new \DomainException('This Multi-Path list no longer exists.');
                 }
                 $settings = Policy::effectiveRouting($model);
-                return $this->serviceChange($model, $settings, SmartRouting::active($settings, [$service]));
+                return $this->serviceChange($model, $settings, SmartRouting::active($settings, [$service]),
+                    $service['profile'] === SmartRouting::BYPASS);
             });
         }), true, true);
     }
@@ -1742,7 +1784,7 @@ class ServiceController extends ApiControllerBase
     {
         $value = $this->request->getPost($field, null, $default);
         if (!is_string($value) || strlen($value) > $max) {
-            throw new \DomainException('A submitted Blank VPN field is invalid.');
+            throw new \DomainException('A submitted Blank VPN & Proxy field is invalid.');
         }
         return $value;
     }
@@ -1754,11 +1796,11 @@ class ServiceController extends ApiControllerBase
             $items = array_filter(preg_split('/[\s,]+/', trim($items)), 'strlen');
         }
         if (!is_array($items) || count($items) > 32) {
-            throw new \DomainException('A submitted Blank VPN list exceeds the supported size.');
+            throw new \DomainException('A submitted Blank VPN & Proxy list exceeds the supported size.');
         }
         foreach ($items as $item) {
             if (!is_string($item) || strlen($item) > 50) {
-                throw new \DomainException('A submitted Blank VPN list contains an invalid item.');
+                throw new \DomainException('A submitted Blank VPN & Proxy list contains an invalid item.');
             }
         }
         return array_values(array_unique($items));
@@ -1804,8 +1846,8 @@ class ServiceController extends ApiControllerBase
             $reference = gmdate('His') . '-' . getmypid();
             syslog(LOG_ERR, 'Blank VPN ' . $reference . ' ' . get_class($error) . ' at ' .
                 basename($error->getFile()) . ':' . $error->getLine());
-            return ['ok' => false, 'error' => 'Blank VPN encountered an unexpected error. Log reference ' . $reference . '.'];
+            return ['ok' => false, 'error' => 'Blank VPN & Proxy encountered an unexpected error. Log reference ' . $reference . '.'];
         }
-        return ['ok' => false, 'error' => 'Blank VPN could not complete this operation.'];
+        return ['ok' => false, 'error' => 'Blank VPN & Proxy could not complete this operation.'];
     }
 }

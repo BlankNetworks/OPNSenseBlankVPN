@@ -36,7 +36,7 @@ final class Policy
             ? $stored['networkMode'] : 'disabled';
         $result['networkProfile'] = $stored['networkProfile'] ?? '';
         $killSwitch = $stored['networkKillSwitch'] ?? '';
-        $result['networkKillSwitch'] = $result['networkMode'] === 'full_multi' || $killSwitch === '1' || ($killSwitch === '' && $result['networkMode'] !== 'multi');
+        $result['networkKillSwitch'] = $killSwitch === '1' || ($killSwitch === '' && $result['networkMode'] !== 'multi');
         $result['dashboardBind'] = ($stored['dashboardBind'] ?? '') === 'tailnet' ? 'tailnet' : 'lan';
         $result['hostname'] = $stored['hostname'] ?? 'blankvpn.home.arpa';
         return $result;
@@ -322,7 +322,7 @@ final class Policy
                 $runtime ??= self::runtimeInterfaces();
                 $rows = $runtime[(string)$node->if]['ipv6'] ?? null;
                 if (!is_array($rows)) {
-                    throw new \DomainException('Blank VPN could not read the current IPv6 addresses on ' . $name . '. Check that the interface is active and try again.');
+                    throw new \DomainException('Blank VPN & Proxy could not read the current IPv6 addresses on ' . $name . '. Check that the interface is active and try again.');
                 }
                 array_push($networks, ...self::interfaceIpv6Networks($rows));
                 continue;
@@ -409,10 +409,10 @@ final class Policy
     public static function stateDirectory(): string
     {
         if (!is_dir(self::STATE_DIR) && !@mkdir(self::STATE_DIR, 0700) && !is_dir(self::STATE_DIR)) {
-            throw new \RuntimeException('The Blank VPN state directory is unavailable.');
+            throw new \RuntimeException('The Blank VPN & Proxy state directory is unavailable.');
         }
         if (is_link(self::STATE_DIR) || (fileperms(self::STATE_DIR) & 0077) !== 0) {
-            throw new \RuntimeException('The Blank VPN state directory permissions are unsafe.');
+            throw new \RuntimeException('The Blank VPN & Proxy state directory permissions are unsafe.');
         }
         return self::STATE_DIR;
     }
@@ -422,12 +422,12 @@ final class Policy
         $path = self::stateDirectory() . '/' . $name;
         $temporary = tempnam(self::STATE_DIR, '.blankvpn-');
         if ($temporary === false) {
-            throw new \RuntimeException('Blank VPN could not create its state file.');
+            throw new \RuntimeException('Blank VPN & Proxy could not create its state file.');
         }
         try {
             chmod($temporary, 0600);
             if (file_put_contents($temporary, $contents) !== strlen($contents) || !rename($temporary, $path)) {
-                throw new \RuntimeException('Blank VPN could not write its state file.');
+                throw new \RuntimeException('Blank VPN & Proxy could not write its state file.');
             }
         } finally {
             if (is_file($temporary)) {

@@ -1,6 +1,6 @@
 <acl>
     <page-blankvpn-dashboard>
-        <name>VPN: Blank VPN: View devices and connections</name>
+        <name>VPN: Blank VPN &amp; Proxy: View devices and connections</name>
         <patterns>
             <pattern>ui/blankvpn/index*</pattern>
             <pattern>api/blankvpn/service/dashboard*</pattern>
@@ -9,26 +9,26 @@
         </patterns>
     </page-blankvpn-dashboard>
     <page-blankvpn-manage>
-        <name>VPN: Blank VPN: Manage tunnels and policy routing</name>
+        <name>VPN: Blank VPN &amp; Proxy: Manage tunnels and policy routing</name>
         <patterns>
             <pattern>ui/blankvpn/index*</pattern>
             <pattern>api/blankvpn/service/*</pattern>
         </patterns>
     </page-blankvpn-manage>
     <page-blankvpn-cores>
-        <name>VPN: Blank VPN: Manage approved proxy cores</name>
+        <name>VPN: Blank VPN &amp; Proxy: Manage approved proxy cores</name>
         <patterns>
             <pattern>api/blankvpn/core/*</pattern>
         </patterns>
     </page-blankvpn-cores>
     <page-blankvpn-backup>
-        <name>VPN: Blank VPN: Back up and restore routing settings</name>
+        <name>VPN: Blank VPN &amp; Proxy: Back up and restore routing settings</name>
         <patterns>
             <pattern>api/blankvpn/backup/*</pattern>
         </patterns>
     </page-blankvpn-backup>
     <page-blankvpn-update>
-        <name>VPN: Blank VPN: Read package update status</name>
+        <name>VPN: Blank VPN &amp; Proxy: Read package update status</name>
         <patterns>
             <pattern>api/blankvpn/update/status</pattern>
         </patterns>
