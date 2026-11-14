@@ -356,8 +356,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                 name + ' must align server names with their desktop table heading.');
             assert(buttons.every(button => Math.abs(button.top - buttons[0].top) < 1),
                 name + ' must keep its desktop actions in one row.');
-            assert(row.getBoundingClientRect().height <= 2 * buttons[0].height + 18,
-                name + ' must keep its desktop row compact.');
+            const identityStyle = getComputedStyle(row.cells[0]);
+            const detailStyle = getComputedStyle(row.cells[0].querySelector('small'));
+            const expectedContent = parseFloat(identityStyle.lineHeight) + parseFloat(detailStyle.lineHeight) +
+                parseFloat(detailStyle.marginTop);
+            const expectedHeight = Math.max(buttons[0].height, expectedContent) +
+                parseFloat(identityStyle.paddingTop) + parseFloat(identityStyle.paddingBottom);
+            assert(row.getBoundingClientRect().height <= expectedHeight + 4,
+                name + ' must keep its desktop row compact (' +
+                Math.round(row.getBoundingClientRect().height) + 'px, expected up to ' + Math.ceil(expectedHeight + 4) + 'px).');
         } else {
             const identity = row.cells[0].getBoundingClientRect();
             assert(presentation !== 'table' && buttons[0].top >= identity.bottom - 1,

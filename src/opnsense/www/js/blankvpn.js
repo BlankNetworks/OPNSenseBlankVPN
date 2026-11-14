@@ -1415,8 +1415,13 @@
             }
             for (const node of results) {
                 const row = servers.insertRow();
-                const address = endpoint(node.host, node.port);
-                cell(row, node.name, '', node.legacy ? address + ' · Legacy or unencrypted transport' : address);
+                const server = cell(row, node.name, '', endpoint(node.host, node.port));
+                if (node.legacy) {
+                    const warning = document.createElement('span');
+                    warning.textContent = 'Legacy';
+                    warning.title = 'Legacy or unencrypted transport';
+                    server.querySelector('small').append(' · ', warning);
+                }
                 cell(row, proxyProtocol(node).toUpperCase(), 'Protocol');
                 const exit = state.profiles.find((profile) => profile.node === node.id);
                 cell(row, node.core, 'Core', node.disabled ? 'Disabled' : exit?.status || 'Ready to assign');
