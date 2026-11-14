@@ -28,7 +28,8 @@ trap 'exit 1' HUP INT TERM
 
 if [ "$site" != - ] && [ "$base_url" = - ]; then
     mkdir -p "$work/http"
-    python3 - "$site" "$work/http/port" <<'PY' &
+    python=$(command -v python3 || command -v python3.13)
+    "$python" - "$site" "$work/http/port" <<'PY' &
 import http.server
 import sys
 from functools import partial

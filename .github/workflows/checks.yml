@@ -140,6 +140,9 @@ jobs:
 
   package-repository:
     needs: [checks, publish]
+    if: |
+      !cancelled() && needs.checks.result == 'success' &&
+      (needs.publish.result == 'success' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-24.04
     environment:
       name: github-pages
@@ -158,10 +161,19 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        if: github.event_name != 'workflow_dispatch'
         with:
           pattern: blank-vpn-release-*
           path: dist
           merge-multiple: true
+      - name: Retrieve the published release for repository redeployment
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          test "$(gh release view "v$PACKAGE_VERSION" --json isDraft --jq .isDraft)" = false
+          gh release download "v$PACKAGE_VERSION" --pattern 'os-blank-vpn-*.pkg*' --dir dist --clobber
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
         id: pages
       - name: Prepare the FreeBSD repository builder
