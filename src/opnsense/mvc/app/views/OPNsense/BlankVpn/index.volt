@@ -463,6 +463,7 @@
                             <th scope="col" role="columnheader">Interface</th>
                             <th scope="col" role="columnheader">Assignment</th>
                             <th scope="col" role="columnheader">Status</th>
+                            <th scope="col" role="columnheader">Ping</th>
                             <th scope="col" role="columnheader"><span class="sr-only">Actions</span></th>
                         </tr>
                     </thead>
@@ -473,13 +474,14 @@
             <section id="bv-tailnet-devices" hidden aria-label="Tailscale devices">
                 <p id="bv-tailnet-count" class="text-muted"></p>
                 <p id="bv-tailnet-snat-note" class="text-muted">Exit-node clients need <strong>Disable SNAT</strong> enabled in OPNsense Tailscale settings.
-                    For domain-based Multi-Path, point the client’s DNS to the OPNsense Tailscale IP.</p>
+                    For domain-based Multi-Path, use the OPNsense Tailscale IP as a nameserver with <strong>Use with exit node</strong> enabled.</p>
                 <p id="bv-tailnet-routing-hint" class="text-muted"></p>
                 <button type="button" id="bv-add-tailnet-peer" class="btn btn-default" data-manage-only hidden>Add by Tailscale IP</button>
                 <div class="bv-scroll">
                     <table class="table bv-table bv-devices" role="table">
                         <thead><tr><th scope="col">Device</th><th scope="col">Addresses</th><th scope="col">Availability</th>
-                            <th scope="col">Rule</th><th scope="col">Routing</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                            <th scope="col">Rule</th><th scope="col">Routing</th><th scope="col">Ping</th>
+                            <th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                         <tbody id="bv-tailnet-device-list" role="rowgroup"></tbody>
                     </table>
                 </div>

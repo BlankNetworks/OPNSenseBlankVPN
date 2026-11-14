@@ -254,8 +254,13 @@ final class Diagnostics
             } elseif (!$disableSnat) {
                 $reason = 'Check Disable SNAT in OPNsense Tailscale advanced settings and apply from the LAN.';
             } else {
-                $reason = $this->nativeTailnetInterfaceReady($status)
-                    ? '' : 'The Tailscale kernel interface is not ready. Apply Tailscale settings from the LAN, then refresh.';
+                if (!$this->nativeTailnetInterfaceReady($status)) {
+                    $reason = 'The Tailscale kernel interface is not ready. Apply Tailscale settings from the LAN, then refresh.';
+                } elseif (trim(Resolver::command(['/sbin/sysctl', '-n', 'net.inet.ip.forwarding'], false)) !== '1') {
+                    $reason = 'IPv4 forwarding is off. Apply the OPNsense Tailscale exit-node settings from the LAN, then refresh.';
+                } else {
+                    $reason = '';
+                }
             }
         }
         return ['ready' => $reason === '', 'disableSnat' => $disableSnat, 'reason' => $reason];
@@ -566,7 +571,7 @@ final class Diagnostics
         $prefix = Policy::cidr($source);
         $local = Policy::localNetworks(['localNetworks' => [], 'interfaces' => [Policy::TAILSCALE_DEVICE]]);
         foreach ($states as $state) {
-            $ip = self::ip((string)($state['src_addr'] ?? ''));
+            $ip = self::stateSource($state);
             if ($ip === null || ($prefix !== null ? !Policy::contains($prefix, $ip) : $ip !== $source)) {
                 continue;
             }
@@ -599,7 +604,7 @@ final class Diagnostics
                 throw new RuntimeException('Firewall sessions are unavailable. Try again.');
             }
             foreach ($states['details'] as $state) {
-                $ip = self::ip((string)($state['src_addr'] ?? ''));
+                $ip = self::stateSource($state);
                 if ($ip !== null && ($prefix !== null ? Policy::contains($prefix, $ip) : $source === $ip) &&
                     ($state['label'] ?? '') === $rule && ($state['pkts'][0] ?? 0) > 0 && ($state['pkts'][1] ?? 0) > 0) {
                     return true;
@@ -607,6 +612,15 @@ final class Diagnostics
             }
         }
         return false;
+    }
+
+    private static function stateSource(array $state): ?string
+    {
+        // OPNsense reports the original source of an outbound SNAT state in nat_addr.
+        if (($state['direction'] ?? '') === 'out' && !empty($state['nat_addr'])) {
+            return self::ip((string)$state['nat_addr']);
+        }
+        return self::ip((string)($state['src_addr'] ?? ''));
     }
 
     public function connections(string $ip): array

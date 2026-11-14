@@ -10,6 +10,10 @@ final class Firewall
 {
     // All 16 service-specific pass/block pairs precede the combined policy's default route.
     private const VPN_EGRESS_TAG = 'blankvpn_tunnel_only';
+    private const TAILNET_TUNNEL_TAG = 'blankvpn_tailnet_tunnel';
+    private const TAILNET_WAN_TAG = 'blankvpn_tailnet_wan';
+    // Run after the OPNsense user rules so explicit quick rules are respected.
+    private const TAILNET_DEFAULT_PRIORITY = 490000;
     private const STATIC_DESTINATIONS = Policy::PRIORITY + 30;
     private const LEARNED_DESTINATIONS = self::STATIC_DESTINATIONS + SmartRouting::MAX_SERVICES * 2;
     private const COMBINED_BASE = self::LEARNED_DESTINATIONS + SmartRouting::MAX_SERVICES * 2 + 2;
@@ -27,7 +31,7 @@ final class Firewall
         }
         if (in_array(Policy::TAILSCALE_DEVICE, $settings['interfaces'], true)) {
             $interface = Policy::TAILSCALE_DEVICE;
-            $interfaces[$interface] = [
+            $interfaces[$interface] ??= [
                 'if' => $interface, 'ifconfig' => $firewall->getIfconfigDetails()[$interface] ?? [],
                 'descr' => 'Tailscale', 'virtual' => true
             ];
@@ -53,7 +57,7 @@ final class Firewall
             $profile['owned'] = ($profile['kind'] ?? '') === 'native'
                 ? $profile['configured'] && $profile['address'] !== ''
                 : WireGuard::check($profile)['ok'];
-            self::registerProfile($firewall, $profile, $settings['enabled']);
+            self::registerProfile($firewall, $profile, $settings['enabled'], isset($settings['scopes']['tailscale']));
         }
         unset($profile);
         if (!$settings['enabled']) {
@@ -74,7 +78,7 @@ final class Firewall
         $connected = Policy::localNetworks(array_replace($settings, ['localNetworks' => []]));
         $connectedFile = Policy::writeState('combined-local-networks', implode("\n", $connected) . "\n");
         $firewall->registerTable(Policy::COMBINED_LOCAL_TABLE, true, $connectedFile);
-        self::registerUplinkGuards($firewall, $interfaces);
+        self::registerUplinkGuards($firewall, $interfaces, isset($scopes['tailscale']));
         $wantWanDns = false;
         foreach ($scopes as $scope) {
             $wantWanDns = $wantWanDns || SmartRouting::hasBypassDomains($scope, $lists) ||
@@ -85,6 +89,11 @@ final class Firewall
         }
         $wan = array_filter($wan, static fn (array $gateway, string $family): bool =>
             self::wanGatewayMapped($firewall, $gateway, $family), ARRAY_FILTER_USE_BOTH);
+        if (isset($scopes['tailscale'])) {
+            foreach ($wan as $family => $gateway) {
+                self::registerTailnetOutput($firewall, $gateway, $family, self::TAILNET_WAN_TAG);
+            }
+        }
         $registered = [];
         foreach ($scopes as $scope) {
             $assignments = $scope['coverage'] === 'device' ? Policy::scopedAssignments($scope, $bound) : [];
@@ -92,6 +101,17 @@ final class Firewall
             $bypass = SmartRouting::bypassServices($scope, $lists);
             $bypassDomains = SmartRouting::hasBypassDomains($scope, $lists);
             self::registerSharedLanGuards($firewall, $interfaces, $scope, $assignments, $diagnostics);
+            if (($scope['scope'] ?? '') === 'tailscale' &&
+                ($scope['coverage'] === 'device' || $scope['networkMode'] === 'disabled')) {
+                foreach ($scope['interfaces'] as $interface) {
+                    if (!empty($interfaces[$interface]['if']) &&
+                        ($interface !== Policy::TAILSCALE_DEVICE || Policy::nativeTailnetConfigured())) {
+                        self::registerTailnetInternet($firewall, 'network:' . $interface, $interface, [
+                            'inet' => Policy::TAILSCALE_V4, 'inet6' => Policy::TAILSCALE_V6
+                        ], $wan);
+                    }
+                }
+            }
             self::registerDeviceBypass($firewall, $interfaces, Policy::networkBypassSources($scope, $rows, $diagnostics), $wan);
             if ($bypass !== []) {
                 self::registerBypass($firewall, $scope, $interfaces, $bypass, $wan, $assignments, $diagnostics, $registered);
@@ -102,8 +122,7 @@ final class Firewall
                 );
             } else {
                 self::registerAssignments(
-                    $firewall, $scope, $interfaces, $assignments, $profiles, $health, $diagnostics, $bypassDomains,
-                    $wan
+                    $firewall, $scope, $interfaces, $assignments, $profiles, $health, $diagnostics, $bypassDomains
                 );
             }
             if ($services !== [] || $bypassDomains) {
@@ -138,14 +157,19 @@ final class Firewall
         }
     }
 
-    private static function registerUplinkGuards(Plugin $firewall, array $interfaces): void
+    private static function registerUplinkGuards(Plugin $firewall, array $interfaces, bool $tailnet = false): void
     {
+        $tags = [self::VPN_EGRESS_TAG => 'tunnel_only'];
+        if ($tailnet) {
+            $tags[self::TAILNET_TUNNEL_TAG] = 'tailnet_tunnel_only';
+        }
         foreach (self::uplinks($interfaces) as $id) {
-            $firewall->registerFilterRule(Policy::PRIORITY - 3, [
-                'type' => 'block', 'direction' => 'out', 'interface' => $id, 'ipprotocol' => 'inet46',
-                'tagged' => self::VPN_EGRESS_TAG, 'quick' => true,
-                'label' => Policy::marker('tunnel_only', $id)
-            ]);
+            foreach ($tags as $tag => $kind) {
+                $firewall->registerFilterRule(Policy::PRIORITY - 3, [
+                    'type' => 'block', 'direction' => 'out', 'interface' => $id, 'ipprotocol' => 'inet46',
+                    'tagged' => $tag, 'quick' => true, 'label' => Policy::marker($kind, $id)
+                ]);
+            }
         }
     }
 
@@ -222,7 +246,7 @@ final class Firewall
             $fallback = !$killSwitch && $profile === null ? $wan : [];
             if ($mode === 'full_multi') {
                 self::registerCombinedPolicy($firewall, $id, $interface, $sources['inet'], $sources['inet6'],
-                    $base, $profile, $fallback, $killSwitch);
+                    $base, $profile, $fallback, $killSwitch, $tailnet);
                 continue;
             }
             if ($mode === 'multi') {
@@ -240,13 +264,13 @@ final class Firewall
             }
             $local = $killSwitch || $mode === 'blocked' || $tailnet ? Policy::COMBINED_LOCAL_TABLE : Policy::LOCAL_TABLE;
             if ($profile !== null) {
-                $firewall->registerFilterRule(Policy::PRIORITY + 10, [
+                $firewall->registerFilterRule(Policy::PRIORITY + 10, self::stateOptions($profile, $tailnet) + [
                     'type' => 'pass', 'direction' => 'in', 'interface' => $interface, 'ipprotocol' => 'inet',
                     'from' => $sources['inet'],
                     'to' => '<' . $local . '>', 'to_not' => true, 'quick' => true, 'disablereplyto' => true,
                     'statetype' => 'keep', 'gateway' => $profile['gateway'], 'skip_rules_gw_down' => true,
                     'label' => Policy::marker('device', $id), 'descr' => 'Blank VPN & Proxy Whole-Network coverage'
-                ] + self::stateOptions($profile));
+                ]);
                 self::registerClientNat($firewall, $profile, $tailnet ? $sources['inet'] : $interface, 'any', 60);
             }
             $basePort = $killSwitch && $profile !== null
@@ -254,7 +278,7 @@ final class Firewall
             foreach ($sources as $family => $source) {
                 if ($mode === 'full' && isset($fallback[$family])) {
                     self::registerWanFallback($firewall, $id, $interface, $family, $fallback[$family],
-                        Policy::PRIORITY + 10, $local, $source);
+                        Policy::PRIORITY + 10, $local, $source, $tailnet);
                 }
                 if (isset($fallback['inet'])) {
                     self::redirectDns($firewall, $interface, $source, Resolver::FALLBACK_PORT, $id, 57, false, $family);
@@ -359,11 +383,12 @@ final class Firewall
                         'to' => $destination, 'quick' => true, 'tagged' => $tag, 'disablereplyto' => true
                     ];
                     if (isset($wan[$family])) {
+                        $tailnet = self::isTailnetIngress($settings, $interface);
                         $firewall->registerFilterRule(Policy::PRIORITY + 8, [
                             'type' => 'pass', 'gateway' => $wan[$family]['gateway'], 'skip_rules_gw_down' => true,
                             'statetype' => 'keep', 'label' => Policy::marker('bypass', $id . ':' . $kind)
-                        ] + $rule);
-                        if (self::isTailnetIngress($settings, $interface)) {
+                        ] + ($tailnet ? self::tailnetWanState() : []) + $rule);
+                        if ($tailnet) {
                             foreach ($scope['all'] ? [self::tailnetSource($family)] : array_unique($scope['sources']) as $source) {
                                 self::registerClientNat($firewall, $wan[$family], $source, $destination, 59, $family);
                             }
@@ -465,7 +490,8 @@ final class Firewall
         array $gateway,
         int $priority,
         string $local,
-        string $source
+        string $source,
+        bool $tailnet
     ): void {
         $firewall->registerFilterRule($priority, [
             'type' => 'pass', 'direction' => 'in', 'interface' => $interface, 'ipprotocol' => $family,
@@ -473,8 +499,8 @@ final class Firewall
             'quick' => true, 'disablereplyto' => true, 'statetype' => 'keep',
             'gateway' => $gateway['gateway'], 'skip_rules_gw_down' => true,
             'label' => Policy::marker('wan_fallback', $id . ':' . $family)
-        ]);
-        if (Policy::contains(self::tailnetSource($family), explode('/', $source, 2)[0])) {
+        ] + ($tailnet ? self::tailnetWanState() : []));
+        if ($tailnet) {
             self::registerClientNat($firewall, $gateway, $source, 'any', 62, $family);
         }
     }
@@ -497,8 +523,7 @@ final class Firewall
         array $profiles,
         array $health,
         Diagnostics $diagnostics,
-        bool $bypassDomains = false,
-        array $wan = []
+        bool $bypassDomains = false
     ): void {
         foreach ($assignments as $id => $row) {
             $interface = $row['interface'];
@@ -533,11 +558,9 @@ final class Firewall
                     self::registerProtectedPolicy($firewall, $id, $interface, $ip, $ipv6, true);
                     continue;
                 }
-                self::registerCombinedPolicy($firewall, $id, $interface, $ip, $ipv6, $base, $selected, protected: true);
+                self::registerCombinedPolicy($firewall, $id, $interface, $ip, $ipv6, $base, $selected,
+                    protected: true, tailnet: $tailnet);
                 continue;
-            }
-            if ($reserved && $tailnet && $mode !== 'blocked' && !$killSwitch) {
-                self::registerTailnetInternet($firewall, $id, $interface, ['inet' => $ip, 'inet6' => $ipv6], $wan);
             }
             if ($mode === 'multi') {
                 if ($killSwitch) {
@@ -588,7 +611,7 @@ final class Firewall
             if ($selected !== null) {
                 $firewall->registerFilterRule(Policy::PRIORITY + 10, [
                     'gateway' => $selected['gateway'], 'skip_rules_gw_down' => true
-                ] + self::stateOptions($selected) + $pass);
+                ] + self::stateOptions($selected, $tailnet) + $pass);
                 self::registerClientNat($firewall, $selected, $ip, 'any', 60);
                 if ($killSwitch) {
                     self::registerProtectedPolicy($firewall, $id, $interface, $ip, $ipv6, false,
@@ -638,16 +661,17 @@ final class Firewall
         array $base,
         ?array $profile,
         array $fallback = [],
-        bool $protected = false
+        bool $protected = false,
+        bool $tailnet = false
     ): void {
         if ($profile !== null) {
-            $firewall->registerFilterRule(self::COMBINED_BASE, [
+            $firewall->registerFilterRule(self::COMBINED_BASE, self::stateOptions($profile, $tailnet) + [
                 'type' => 'pass', 'direction' => 'in', 'interface' => $interface, 'ipprotocol' => 'inet',
                 'from' => $ip, 'to' => '<' . Policy::COMBINED_LOCAL_TABLE . '>', 'to_not' => true,
                 'quick' => true, 'disablereplyto' => true, 'statetype' => 'keep',
                 'gateway' => $profile['gateway'], 'skip_rules_gw_down' => true,
                 'label' => Policy::marker('device', $id), 'descr' => 'Blank VPN & Proxy base tunnel with Multi-Path'
-            ] + self::stateOptions($profile));
+            ]);
             self::registerClientNat($firewall, $profile, $ip === 'any' ? $interface : $ip, 'any', 60);
         }
         // Keep DNS classification available for healthy overrides even when the base tunnel is down.
@@ -656,7 +680,7 @@ final class Firewall
             if ($source !== '') {
                 if (isset($fallback[$family])) {
                     self::registerWanFallback($firewall, $id, $interface, $family, $fallback[$family],
-                        self::COMBINED_BASE + 1, Policy::COMBINED_LOCAL_TABLE, $source);
+                        self::COMBINED_BASE + 1, Policy::COMBINED_LOCAL_TABLE, $source, $tailnet);
                 }
                 if (isset($fallback['inet'])) {
                     self::redirectDns($firewall, $interface, $source, Resolver::COMBINED_FALLBACK_PORT, $id, 57, false, $family);
@@ -680,18 +704,16 @@ final class Firewall
         array $wan
     ): void {
         foreach ($sources as $family => $source) {
-            if ($source === '') {
+            if ($source === '' || !isset($wan[$family])) {
                 continue;
             }
-            $firewall->registerFilterRule(490000, [
+            $firewall->registerFilterRule(self::TAILNET_DEFAULT_PRIORITY, [
                 'type' => 'pass', 'direction' => 'in', 'interface' => $interface,
                 'ipprotocol' => $family, 'from' => $source, 'to' => '<' . Policy::COMBINED_LOCAL_TABLE . '>',
                 'to_not' => true, 'quick' => false, 'statetype' => 'keep', 'disablereplyto' => true,
                 'label' => Policy::marker('tailnet_internet', $id . ':' . $family)
-            ]);
-            if (isset($wan[$family])) {
-                self::registerClientNat($firewall, $wan[$family], $source, 'any', 62, $family);
-            }
+            ] + self::tailnetWanState());
+            self::registerClientNat($firewall, $wan[$family], $source, 'any', 62, $family);
         }
     }
 
@@ -878,7 +900,7 @@ final class Firewall
                         'type' => 'pass', 'ipprotocol' => 'inet', 'gateway' => $profile['gateway'],
                         'skip_rules_gw_down' => true, 'statetype' => 'keep',
                         'label' => Policy::marker($marker, $id)
-                    ] + self::stateOptions($profile) + $base);
+                    ] + self::stateOptions($profile, $tailnet) + $base);
                     $source = $tailnet ? Policy::TAILSCALE_V4 : $interface;
                     self::registerClientNat($firewall, $profile, $source, $table, 61);
                 }
@@ -921,7 +943,7 @@ final class Firewall
             $scope = ['from' => '<' . $table . '>', 'from_not' => $exclude];
         }
         $firewall->registerFilterRule(Policy::PRIORITY + 12, [
-            'type' => 'match', 'interface' => $interface, 'ipprotocol' => 'inet46', 'quick' => false,
+            'type' => 'match', 'direction' => 'in', 'interface' => $interface, 'ipprotocol' => 'inet46', 'quick' => false,
             'to' => '<' . $local . '>', 'to_not' => true, 'tag' => $tag,
             'label' => Policy::marker($combined ? 'combined_scope' : 'smart_scope', $interface),
             'descr' => 'Blank VPN & Proxy Multi-Path source and destination scope'
@@ -937,10 +959,19 @@ final class Firewall
         return $table;
     }
 
-    private static function stateOptions(array $profile): array
+    private static function stateOptions(array $profile, bool $tailnet): array
     {
-        return ['tag' => self::VPN_EGRESS_TAG] +
-            (($profile['kind'] ?? '') === 'proxy' ? ['state-policy' => 'floating'] : []);
+        // A floating ingress state can match on output before PF evaluates tunnel source NAT.
+        if (($profile['kind'] ?? '') === 'proxy') {
+            return ['tag' => self::VPN_EGRESS_TAG, 'state-policy' => 'floating'];
+        }
+        return $tailnet ? ['tag' => self::TAILNET_TUNNEL_TAG, 'state-policy' => 'if-bound'] :
+            ['tag' => self::VPN_EGRESS_TAG];
+    }
+
+    private static function tailnetWanState(): array
+    {
+        return ['tag' => self::TAILNET_WAN_TAG, 'state-policy' => 'if-bound'];
     }
 
     private static function registerClientNat(
@@ -959,6 +990,34 @@ final class Firewall
             'from' => $source, 'to' => $destination, 'target' => explode('/', $profile['address'])[0],
             'descr' => 'Blank VPN & Proxy client source NAT'
         ]);
+    }
+
+    private static function registerTailnetOutput(Plugin $firewall, array $profile, string $family, string $tag): void
+    {
+        // This state handles the translated reply across the egress and Tailscale interfaces.
+        // The source match requires PF to have applied NAT on this interface.
+        $firewall->registerFilterRule(self::TAILNET_DEFAULT_PRIORITY, [
+            'type' => 'pass', 'direction' => 'out', 'interface' => $profile['logicalInterface'],
+            'ipprotocol' => $family, 'from' => explode('/', $profile['address'])[0],
+            'tagged' => $tag, 'quick' => false, 'disablereplyto' => true,
+            'statetype' => 'keep', 'state-policy' => 'floating',
+            'label' => self::tailnetOutputMarker($profile['logicalInterface'], $family, $tag)
+        ]);
+    }
+
+    private static function tailnetOutputMarker(string $interface, string $family, string $tag): string
+    {
+        return Policy::marker('tailnet_output', $interface . ':' . $family . ':' . $tag);
+    }
+
+    public static function forwardedReplyMarkers(array $loaded, array $markers, array $profile): array
+    {
+        foreach ($markers as $marker) {
+            if (($loaded[$marker]['tag'] ?? '') === self::TAILNET_TUNNEL_TAG) {
+                return [self::tailnetOutputMarker($profile['logicalInterface'], 'inet', self::TAILNET_TUNNEL_TAG)];
+            }
+        }
+        return $markers;
     }
 
     private static function bypassSmartDns(Plugin $firewall, string $interface, string $ip, string $family): void
@@ -1071,7 +1130,7 @@ final class Firewall
         return null;
     }
 
-    private static function registerProfile(Plugin $firewall, array $profile, bool $includeDns): void
+    private static function registerProfile(Plugin $firewall, array $profile, bool $includeDns, bool $tailnet = false): void
     {
         $address = explode('/', $profile['address'] ?? '')[0];
         if (filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
@@ -1079,6 +1138,9 @@ final class Firewall
         }
 
         $ready = self::gatewayAvailable($firewall, $profile);
+        if ($ready && $tailnet) {
+            self::registerTailnetOutput($firewall, $profile, 'inet', self::TAILNET_TUNNEL_TAG);
+        }
         $destinations = [
             ['to' => self::probeIp(), 'to_port' => '443', 'protocol' => 'tcp', 'kind' => 'probe']
         ];
@@ -1213,7 +1275,7 @@ final class Firewall
         $rule = $loaded[$marker] ?? [];
         if ($rule !== [] && (($rule['action'] ?? '') !== 'pass' ||
             !preg_match('/^(?:wg[0-9]+|ovpnc[0-9]+|tun20[0-7])$/D', $rule['gateway'] ?? '') ||
-            ($rule['tag'] ?? '') !== self::VPN_EGRESS_TAG)) {
+            !in_array($rule['tag'] ?? '', [self::VPN_EGRESS_TAG, self::TAILNET_TUNNEL_TAG], true))) {
             throw new \RuntimeException('A protected route is not pinned to a VPN or proxy interface.');
         }
     }
@@ -1265,10 +1327,16 @@ final class Firewall
         foreach (Policy::scopes($settings) as $scope) {
             self::verifyScope($model, $scope, $loaded);
         }
-        if (($loaded[Policy::marker('tunnel_only', 'wan')]['action'] ?? '') !== 'block' ||
-            ($loaded[Policy::marker('tunnel_only', 'wan')]['tagged'] ?? '') !== self::VPN_EGRESS_TAG) {
-            $configuredWan = (string)(Config::getInstance()->object()->interfaces->wan->if ?? '');
-            if ($configuredWan !== '') {
+        if ((string)(Config::getInstance()->object()->interfaces->wan->if ?? '') !== '') {
+            $tags = [self::VPN_EGRESS_TAG => 'tunnel_only'];
+            if (isset($settings['scopes']['tailscale'])) {
+                $tags[self::TAILNET_TUNNEL_TAG] = 'tailnet_tunnel_only';
+            }
+            foreach ($tags as $tag => $kind) {
+                $guard = $loaded[Policy::marker($kind, 'wan')] ?? [];
+                if (($guard['action'] ?? '') === 'block' && ($guard['tagged'] ?? '') === $tag) {
+                    continue;
+                }
                 throw new \RuntimeException('The tagged WAN egress guard did not load.');
             }
         }

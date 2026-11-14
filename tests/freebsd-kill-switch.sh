@@ -315,3 +315,99 @@ reachable 4 "$protected4" "$override4"
 rule_matched override_route
 reachable 4 "$regular4" "$override4"
 echo 'Losing the base VPN blocked unmatched protected traffic while the healthy Multi-Path override stayed online.'
+
+# Reuse the isolated client link as the kernel Tailscale ingress. Upstreams
+# have no route to the peers, so successful traffic must be source-NATed.
+jexec "$router" ifconfig "$vpn_link" up
+jexec "$router" ifconfig "$lan_link" name tailscale0
+lan_link=tailscale0
+peer4=100.101.102.2
+other4=100.101.102.3
+jexec "$router" ifconfig "$lan_link" inet 100.101.102.1/24 alias
+jexec "$client" ifconfig "$client_link" inet "$peer4/24" alias
+jexec "$client" ifconfig "$client_link" inet "$other4/32" alias
+jexec "$client" route -n change default 100.101.102.1
+for upstream in "$wan" "$vpn" "$override"; do
+    jexec "$upstream" route -n delete default
+done
+jexec "$wan" ifconfig "$wan_peer" inet "$vpn4/32" alias
+tunnel_tag=blankvpn_tailnet_tunnel
+wan_tag=blankvpn_tailnet_wan
+
+write_tailnet_rules() {
+    mode=$1 base=$2 override_status=$3
+    scope=100.64.0.0/10
+    if [ "$mode" = device ]; then
+        scope=$peer4
+    fi
+    {
+        printf 'set state-policy floating\n'
+        printf 'set timeout { icmp.first 90, icmp.error 90 }\n'
+        printf 'table <connected> const { 100.64.0.0/10, 192.0.2.0/24 }\n'
+        printf 'table <service> const { %s }\n' "$override4"
+        printf 'nat on %s inet from 100.64.0.0/10 to any -> 203.0.113.1\n' "$wan_link"
+        printf 'nat on %s inet from %s to any -> 198.51.100.1\n' "$vpn_link" "$scope"
+        printf 'nat on %s inet from %s to <service> -> 10.220.1.1\n' "$override_link" "$scope"
+        printf 'block all\n'
+        write_egress_guard
+        if [ "$mode" = combined ] || [ "$mode" = multi ]; then
+            printf 'match in on %s inet from %s to ! <connected> tag ts_service\n' "$lan_link" "$scope"
+            if [ "$override_status" = up ]; then
+                printf 'pass in quick on %s route-to (%s 10.220.1.2) inet to <service> tag %s tagged ts_service keep state (if-bound) label "ts_override"\n' \
+                    "$lan_link" "$override_link" "$tunnel_tag"
+            fi
+            printf 'block in quick on %s inet to <service> tagged ts_service label "ts_override_guard"\n' "$lan_link"
+        fi
+        if [ "$mode" = whole ] || [ "$mode" = device ] || [ "$mode" = combined ]; then
+            if [ "$base" = up ]; then
+                printf 'pass in quick on %s route-to (%s 198.51.100.2) inet from %s to ! <connected> tag %s keep state (if-bound) label "ts_base"\n' \
+                    "$lan_link" "$vpn_link" "$scope" "$tunnel_tag"
+            fi
+            printf 'block in quick on %s inet from %s to ! <connected> label "ts_base_guard"\n' "$lan_link" "$scope"
+        fi
+        printf 'pass in on %s inet from 100.64.0.0/10 to ! <connected> tag %s keep state (if-bound) label "ts_regular"\n' \
+            "$lan_link" "$wan_tag"
+        printf 'pass out on %s inet from 203.0.113.1 tagged %s keep state (floating) label "ts_wan_output"\n' "$wan_link" "$wan_tag"
+        printf 'pass out on %s inet from 198.51.100.1 tagged %s keep state (floating) label "ts_base_output"\n' "$vpn_link" "$tunnel_tag"
+        printf 'pass out on %s inet from 10.220.1.1 tagged %s keep state (floating) label "ts_override_output"\n' "$override_link" "$tunnel_tag"
+    } >"$rules"
+    pf -f "$rules"
+    pf -F states
+}
+
+write_tailnet_rules whole up up
+reachable 4 "$peer4" "$vpn4"
+reachable 4 "$other4" "$vpn4"
+rule_matched ts_base_output
+blocked 4 "$peer4" "$wan4"
+
+write_tailnet_rules device up up
+reachable 4 "$peer4" "$vpn4"
+rule_matched ts_base_output
+reachable 4 "$other4" "$wan4"
+rule_matched ts_wan_output
+blocked 4 "$peer4" "$wan4"
+
+write_tailnet_rules multi up up
+reachable 4 "$peer4" "$override4"
+rule_matched ts_override_output
+reachable 4 "$peer4" "$wan4"
+rule_matched ts_wan_output
+
+write_tailnet_rules combined up up
+reachable 4 "$peer4" "$vpn4"
+reachable 4 "$peer4" "$override4"
+rule_matched ts_base_output
+rule_matched ts_override_output
+
+write_tailnet_rules combined down up
+blocked 4 "$peer4" "$vpn4"
+rule_matched ts_base_guard
+reachable 4 "$peer4" "$override4"
+
+write_tailnet_rules combined up down
+reachable 4 "$peer4" "$vpn4"
+blocked 4 "$peer4" "$override4"
+rule_matched ts_override_guard
+
+echo 'Tailscale PF forwarding, source NAT and replies passed for Whole-Network, per-device, Multi-Path and combined routing.'

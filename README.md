@@ -163,7 +163,7 @@ Check **Follow DHCP reservation by MAC** on a LAN rule to use the device’s uni
 
 You can run multiple provider exits together, with up to 32 VPN profiles and eight active proxy exits. A phone can use Mullvad, a TV ExpressVPN, a tablet a proxy, and a Mac NordVPN. With Multi-Path, select a different exit for each service, such as a Japan exit for Netflix, a USA exit for Hulu, and a China exit for WeChat. Each service uses the domains you enter. Presets are starting lists that you can edit.
 
-Use **Ping** beside an active device rule with a base server for a LAN or Tailscale device. It runs an HTTPS probe from OPNsense through the assigned server and looks for packets in both directions on a firewall state belonging to the device's route. Open a fresh page on the device before running the check.
+Use **Test** beside an active device rule with a base server. The **Ping** column shows the time measured by an HTTPS probe from OPNsense through that server. Click the time to see whether the router observed traffic in both directions from the device. Open a fresh page on the device before running the check.
 
 ### Use a base VPN with Multi-Path
 

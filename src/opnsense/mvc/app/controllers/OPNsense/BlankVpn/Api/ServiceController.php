@@ -454,7 +454,8 @@ class ServiceController extends ApiControllerBase
             ($loaded[$marker]['gateway'] ?? '') === $route['interface']);
         if ($paths !== []) {
             try {
-                $seen = (new Diagnostics())->hasRoutedTraffic($source, array_values($paths));
+                $seen = (new Diagnostics())->hasRoutedTraffic($source,
+                    Firewall::forwardedReplyMarkers($loaded, $paths, $route));
                 $observed = $seen ? 'seen' : 'unseen';
             } catch (\RuntimeException) {
                 $observed = 'unavailable';

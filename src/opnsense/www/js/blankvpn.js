@@ -729,6 +729,7 @@
                     statusDetail.push('Internet is blocked on this interface until the protected device has a confirmed IPv4 address.');
                 }
                 cell(row, status, 'Status', statusDetail.join(' '));
+                const ping = cell(row, '—', 'Ping');
                 const actions = row.insertCell();
                 actions.setAttribute('role', 'cell');
                 if (state.canManage) {
@@ -764,7 +765,7 @@
                     } else if (!networkDraft && assignment) {
                         actions.append(button('Edit', () => openAssignment(assignment, tailnet ? 'tailnet' : 'lan', discovered), 'Edit ' + name));
                         if (policy?.enabled && !paused && usesBaseServer(assignment.mode) && assignment.profile) {
-                            appendConnectionTest(actions, 'testDeviceRoute', assignment.id, name, {title: 'Ping'});
+                            appendConnectionTest(actions, 'testDeviceRoute', assignment.id, name, {ping});
                         }
                         if (tailnet) {
                             const action = paused ? 'Enable' : 'Disable';
@@ -785,13 +786,13 @@
                 }
             }
             if (!body.rows.length) {
-                empty(body, 'No LAN devices or DHCP leases found. Press Refresh.', 6);
+                empty(body, 'No LAN devices or DHCP leases found. Press Refresh.', 7);
             }
             byId('add-tailnet-peer').hidden = wholeTailnet || (!nativeTailnet && !transit.length);
             if (!tailnetBody.rows.length) {
                 empty(tailnetBody, nativeTailnet && !wholeTailnet
                     ? 'No Tailscale peers listed. Add a device by its Tailscale IP.'
-                    : 'No Tailscale peers listed.', 6);
+                    : 'No Tailscale peers listed.', 7);
             }
             const online = state.tailnetDevices.filter(device => device.online).length;
             byId('tailnet-count').textContent = state.tailnetDevices.length ? online + ' online' : '';
@@ -1984,8 +1985,9 @@
             if (ping) {
                 error = button('Failed', () => {
                     const dialog = byId('ping-dialog');
-                    byId('ping-dialog-title').textContent = name + ' · Test failed';
-                    byId('ping-dialog-detail').textContent = state.tests.get(key)?.text || '';
+                    const result = state.tests.get(key);
+                    byId('ping-dialog-title').textContent = name + (result?.kind === 'fail' ? ' · Test failed' : ' · Route test');
+                    byId('ping-dialog-detail').textContent = result?.text || '';
                     dialog.showModal();
                 }, 'Show test error for ' + name);
                 error.className = 'bv-ping-error';
@@ -1996,23 +1998,30 @@
                 actions.append(status);
             }
             actions.prepend(control);
-            testDisplays.set(control, {status, detail, dismiss, error});
+            testDisplays.set(control, {status, detail, dismiss, error, name});
             updateConnectionTest(control);
         }
 
         function updateConnectionTest(control) {
-            const {status, detail, dismiss, error} = testDisplays.get(control);
+            const {status, detail, dismiss, error, name} = testDisplays.get(control);
             const result = state.tests.get(control.dataset.testKey);
             control.disabled = control.dataset.disabled === 'true' || result?.kind === 'pending' ||
                 (control.dataset.proxyTest === 'true' && state.proxyTestRunning);
             const failed = result?.kind === 'fail' && result.dismissed !== true;
             if (error) {
-                const label = failed ? 'Failed' : result?.kind === 'pass' ? result.latency
+                const routeTest = result?.routeTest === true && !result.dismissed && Boolean(result.latency);
+                const label = routeTest ? result.latency : failed ? 'Failed' : result?.kind === 'pass' ? result.latency
                     : result?.kind === 'pending' ? 'Testing…' : '—';
-                detail.textContent = label;
-                detail.classList.toggle('bv-ping-announcement', failed);
-                error.hidden = !failed;
-                error.title = failed ? result.text : '';
+                detail.textContent = routeTest ? result.text : label;
+                detail.classList.toggle('bv-ping-announcement', failed || routeTest);
+                error.hidden = !failed && !routeTest;
+                error.textContent = label;
+                error.title = failed || routeTest ? result.text : '';
+                if (routeTest) {
+                    error.setAttribute('aria-label', result.text);
+                } else {
+                    error.setAttribute('aria-label', 'Show test error for ' + name);
+                }
             } else {
                 status.hidden = !result || result.dismissed === true;
                 detail.textContent = result?.text || '';
@@ -2052,13 +2061,14 @@
                         : target + ' · ' + (result.detail || 'router HTTPS failed');
                     const observation = {
                         seen: 'Device traffic seen in both directions',
-                        unseen: 'No matching device traffic yet. Open a new page on the device and try again.',
+                        unseen: 'No completed connection observed from the device. Open a new page on the device and try again.',
                         inactive: 'Device rule has no active VPN path',
                         unavailable: 'Device traffic status unavailable'
                     };
                     const kind = result.reachable !== true || result.deviceTraffic === 'inactive' ? 'fail'
                         : result.deviceTraffic === 'seen' ? 'pass' : 'unverified';
-                    state.tests.set(key, {kind, text: reachability + ' · ' + observation[result.deviceTraffic]});
+                    state.tests.set(key, {kind, text: reachability + ' · ' + observation[result.deviceTraffic], routeTest: true,
+                        latency: result.reachable === true ? result.milliseconds + ' ms' : null});
                     return;
                 }
                 state.tests.set(key, relay ? (result.replied

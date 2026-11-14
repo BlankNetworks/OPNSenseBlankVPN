@@ -114,8 +114,7 @@ final class Policy
                 $settings[$field] = $settings['tailnet' . ucfirst($field)];
             }
             $settings['interfaces'] = $transit;
-            if (($settings['coverage'] === 'network' &&
-                ($transit === [] || self::nativeTailnetConfigured())) ||
+            if (self::nativeTailnetConfigured() || ($settings['coverage'] === 'network' && $transit === []) ||
                 in_array(self::TAILSCALE_DEVICE, array_column($rows, 'interface'), true)) {
                 $settings['interfaces'][] = self::TAILSCALE_DEVICE;
             }

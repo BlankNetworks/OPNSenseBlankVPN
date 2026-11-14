@@ -772,7 +772,8 @@ namespace {
         ['native-peer' => $tailnet], $profiles, [], $diag);
     $tailnetPass = $nativePeer->rules[Policy::marker('device', 'native-peer')];
     checkRouting($tailnetPass['interface'] === Policy::TAILSCALE_DEVICE && $tailnetPass['from'] === $tailnet['ip'] &&
-        $tailnetPass['gateway'] === 'VPN' && $nativePeer->nat[0]['from'] === $tailnet['ip'] &&
+        $tailnetPass['gateway'] === 'VPN' && $tailnetPass['state-policy'] === 'if-bound' &&
+        $tailnetPass['tag'] === 'blankvpn_tailnet_tunnel' && $nativePeer->nat[0]['from'] === $tailnet['ip'] &&
         $nativePeer->rules[Policy::marker('kill_v6', 'native-peer')]['from'] === $tailnet['ipv6'],
         'A native peer routes through its VPN and blocks IPv6 with a kill switch.');
     $pausedPeer = new Plugin();
@@ -793,6 +794,18 @@ namespace {
             'native-peer' => $tailnet, 'lan' => $assignment
         ]) === ['native-peer' => $tailnet],
         'Local whole-network routing and individual Tailscale peer routing are independent.');
+    checkRouting(Policy::scope($saved, 'tailscale')['interfaces'] === ['opt2', Policy::TAILSCALE_DEVICE],
+        'Native exit traffic must have an ingress even with no saved peer rules.');
+    $direct = new Plugin();
+    $directId = 'network:tailscale0';
+    (new ReflectionMethod(Firewall::class, 'registerTailnetInternet'))->invoke(null, $direct, $directId,
+        Policy::TAILSCALE_DEVICE, ['inet' => Policy::TAILSCALE_V4, 'inet6' => Policy::TAILSCALE_V6], $wan);
+    $directPass = $direct->rules[Policy::marker('tailnet_internet', $directId . ':inet')];
+    checkRouting($directPass['state-policy'] === 'if-bound' && $directPass['quick'] === false &&
+        $directPass['priority'] > $tailnetPass['priority'] &&
+        $directPass['to'] === '<' . Policy::COMBINED_LOCAL_TABLE . '>' && $directPass['to_not'] &&
+        $direct->nat[0]['from'] === Policy::TAILSCALE_V4 && $direct->nat[0]['interface'] === 'wan',
+        'Ordinary exit-node Internet runs after device and firewall rules with its own WAN NAT.');
     $saved['tailnetCoverage'] = 'network';
     $saved['tailnetNetworkMode'] = 'full_multi';
     $saved['tailnetNetworkProfile'] = 'us';
@@ -804,10 +817,19 @@ namespace {
     checkRouting($sharedRules->rules[$basePass]['interface'] === 'lan' &&
         $sharedRules->rules[$tailnetBase]['from'] === Policy::TAILSCALE_V4 &&
         $sharedRules->rules[$tailnetBase]['gateway'] === 'NORD' &&
+        $sharedRules->rules[$tailnetBase]['state-policy'] === 'if-bound' &&
         $sharedRules->rules[Policy::marker('kill_v6', 'network:tailscale0')]['from'] === Policy::TAILSCALE_V6 &&
         $sharedRules->nat[1]['from'] === Policy::TAILSCALE_V4 &&
         $sharedRules->dns[2]['local-port'] === (string)Resolver::scopedPort(Resolver::protectedCombinedPort($chicago), true),
         'Tailscale whole-network routing only matches peer addresses and has dedicated NAT and DNS.');
+    $reply = new Plugin();
+    (new ReflectionMethod(Firewall::class, 'registerTailnetOutput'))->invoke(null, $reply, $chicago, 'inet',
+        'blankvpn_tailnet_tunnel');
+    $marker = array_key_first($reply->rules);
+    checkRouting($reply->rules[$marker]['from'] === explode('/', $chicago['address'])[0] &&
+        $reply->rules[$marker]['direction'] === 'out' && $reply->rules[$marker]['state-policy'] === 'floating' &&
+        Firewall::forwardedReplyMarkers([$tailnetBase => $sharedRules->rules[$tailnetBase]], [$tailnetBase], $chicago) === [$marker],
+        'The route test observes the translated egress state which tracks replies.');
     checkRouting(Operations::serviceStateScopes($tailnetScope, []) === [Policy::TAILSCALE_V4, Policy::TAILSCALE_V6],
         'Tailscale state resets target Tailscale sources even on an Ethernet transit link.');
 

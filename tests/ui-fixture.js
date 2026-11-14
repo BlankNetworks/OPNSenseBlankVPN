@@ -175,7 +175,7 @@ window.jQuery.ajax = async (request) => {
         return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:'unseen'};
     }
     if (action === 'testDeviceRoute') {
-        return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:'seen', usingBackup:false};
+        return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:data.id === 'tailnet1' ? 'unseen' : 'seen', usingBackup:false};
     }
     if (action === 'testExit' && exitTestError) {
         return {ok:true, reachable:false, detail:exitTestError};
@@ -762,7 +762,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     const baseResult = bv('tailnet-base-test').querySelector('[data-test-result]');
     assert(requests.some(x => x.action === 'testTailnetBase') && baseResult.dataset.result === 'unverified' &&
-        baseResult.textContent.includes('router HTTPS') && baseResult.textContent.includes('No matching device traffic'),
+        baseResult.textContent.includes('router HTTPS') && baseResult.textContent.includes('No completed connection'),
         'A successful Tailscale base probe with no observed peer traffic stays unverified.');
     bv('tailnet-coverage').value = 'device';
     bv('tailnet-coverage').dispatchEvent(new Event('input', {bubbles:true}));
@@ -834,18 +834,27 @@ document.addEventListener('DOMContentLoaded', async () => {
         x.data.ip === '100.101.102.104' && x.data.ipv6 === '' && x.data.profile === 'vpn1'),
         'A missing peer must be looked up by IPv4 when saving the chosen server.');
     const tailnetTable = bv('tailnet-device-list');
-    tailnetTable.querySelector('[aria-label="Ping Remote iPad"]').click();
+    const peerPing = tailnetTable.querySelector('[data-test-result="device:tailnet1"]').closest('td');
+    assert(peerPing.dataset.label === 'Ping' && peerPing.querySelector('[role="status"]').textContent === '—',
+        'The Tailscale row must reserve its Ping cell before a test.');
+    tailnetTable.querySelector('[aria-label="Test Remote iPad"]').click();
     await wait();
-    assert(tailnetTable.querySelector('[data-test-result="device:tailnet1"]').textContent.includes('Device traffic seen') &&
-        requests.some(x => x.action === 'testDeviceRoute' && x.data.id === 'tailnet1'), 'Tailscale rule Ping must display an inline result.');
+    const latency = peerPing.querySelector('button');
+    assert(latency.textContent === '22.4 ms' && !latency.hidden &&
+        requests.some(x => x.action === 'testDeviceRoute' && x.data.id === 'tailnet1'),
+        'Tailscale Test must update the existing Ping cell even without a completed peer connection.');
+    latency.click();
+    assert(bv('ping-dialog').open && bv('ping-dialog-detail').textContent.includes('No completed connection observed'),
+        'Clicking the measured latency explains the separate peer traffic result.');
+    bv('ping-dialog').close();
     tailnetTable.querySelector('[aria-label="Disable Remote iPad"]').click();
     await wait();
-    assert(tailnetTable.textContent.includes('Disabled') && !tailnetTable.querySelector('[aria-label="Ping Remote iPad"]') &&
+    assert(tailnetTable.textContent.includes('Disabled') && !tailnetTable.querySelector('[aria-label="Test Remote iPad"]') &&
         reply.dashboard.assignments.find(row => row.id === 'tailnet1').profile === 'vpn1',
         'Pausing a Tailscale rule must retain the server and hide Ping.');
     tailnetTable.querySelector('[aria-label="Enable Remote iPad"]').click();
     await wait();
-    assert(tailnetTable.querySelector('[aria-label="Ping Remote iPad"]') &&
+    assert(tailnetTable.querySelector('[aria-label="Test Remote iPad"]') &&
         requests.some(x => x.action === 'setTailnetRuleEnabled' && x.data.id === 'tailnet1' && x.data.enabled),
         'Re-enabling a Tailscale rule restores the saved route and Ping.');
     tailnetTable.querySelector('[aria-label="Edit Remote iPad"]').click();
@@ -859,12 +868,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'assign' && x.data.kind === 'tailnet' && x.data.mode === 'full_multi' &&
         x.data.profile === 'vpn1' && x.data.failure === 'block' && x.data.killSwitch === true && x.data.onDemand === true) &&
-        tailnetTable.querySelector('[aria-label="Ping Remote iPad"]') && tailnetTable.textContent.includes('Base VPN + Multi-Path'),
+        tailnetTable.querySelector('[aria-label="Test Remote iPad"]') && tailnetTable.textContent.includes('Base VPN + Multi-Path'),
         'A combined Tailscale rule must keep On Demand and base server Ping.');
     Object.assign(reply.dashboard.assignments[0], {mode:'full',profile:'vpn1'});
     bv('refresh').click();
     await wait();
-    bv('device-list').querySelector('[aria-label="Ping <b>Device rule</b>"]').click();
+    bv('device-list').querySelector('[aria-label="Test <b>Device rule</b>"]').click();
     await wait();
     assert(bv('device-list').querySelector('[data-test-result="device:device1"]').textContent.includes('22.4 ms') &&
         requests.some(x => x.action === 'testDeviceRoute' && x.data.id === 'device1'), 'LAN rules use the same Ping check.');

@@ -67,3 +67,9 @@
 - Network Settings offers independent Local and Tailscale coverage, each with Whole-Network and Only Devices I choose. Multi-Path lists can apply to Local, Tailscale, or both. Existing peer rules and shared lists keep their previous scope.
 - Matching Multi-Path destinations use their selected exits ahead of the base VPN or proxy. With Kill Switch enabled, a base outage blocks unmatched traffic while healthy overrides keep working. An unavailable override blocks its own destinations.
 - Base and override status are displayed separately. Multi-Path route tests open in a dialog and the list fits narrow screens.
+
+## 0.8.25
+
+- Tailscale exit-node forwarding applies source NAT on the selected VPN or WAN interface and tracks the return traffic to the original peer.
+- Whole-Network, individual device and Multi-Path policies share that forwarding path. Unassigned peers in individual coverage can use the regular exit-node WAN path. Protected peers and destinations retain their Kill Switch guards.
+- The device table reserves a Ping column. Test fills it with the measured router HTTPS latency, and clicking the value shows whether OPNsense observed a completed connection from the device.

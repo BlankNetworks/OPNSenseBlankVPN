@@ -150,6 +150,8 @@ namespace {
                 'bytes' => [321, 4321], 'pkts' => [4, 5], 'route-to' => '10.10.0.2', 'label' => 'blankvpn_device_fixture'],
             ['id' => '0000000012345679/abcdef01', 'src_addr' => '192.168.10.6', 'dst_addr' => '198.51.100.4',
                 'nat_addr' => '192.168.10.5'],
+            ['id' => '0000000012345680/abcdef01', 'src_addr' => '10.64.0.2', 'dst_addr' => '198.51.100.5',
+                'nat_addr' => '100.101.102.103', 'direction' => 'out', 'pkts' => [4, 5], 'label' => 'blankvpn_tailnet_fixture'],
         ]],
         'wireguard show' => ['status' => 'ok', 'records' => [
             ['type' => 'interface', 'if' => 'wg4', 'status' => 'up', 'public-key' => 'do-not-return'],
@@ -269,6 +271,10 @@ namespace {
     check($diagnostics->hasRoutedTraffic('192.168.10.0/24', ['blankvpn_device_fixture']) &&
         !$diagnostics->hasRoutedTraffic('100.64.0.0/10', ['blankvpn_device_fixture']),
         'A whole-network probe confirms bidirectional traffic only from its allowed source range.');
+    check($diagnostics->hasRoutedTraffic('100.101.102.103', ['blankvpn_tailnet_fixture']) &&
+        $diagnostics->hasRoutedTraffic('100.64.0.0/10', ['blankvpn_tailnet_fixture']) &&
+        !$diagnostics->hasRoutedTraffic('10.64.0.2', ['blankvpn_tailnet_fixture']),
+        'The egress NAT state identifies the original device, including for whole-Tailscale tests.');
 
     $tunnels = $diagnostics->tunnels();
     check($tunnels['wg4']['handshakeRecent'] && $tunnels['wg4']['reachability'] === 'unverified', 'Handshake and path status');

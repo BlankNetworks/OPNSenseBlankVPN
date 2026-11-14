@@ -472,6 +472,15 @@ final class Operations
                 }
                 continue;
             }
+            if (($settings['scope'] ?? '') === 'tailscale') {
+                foreach (['inet', 'inet6'] as $family) {
+                    $marker = Policy::marker('tailnet_internet', 'network:' . $interface . ':' . $family);
+                    if (($before[$marker] ?? null) !== ($after[$marker] ?? null)) {
+                        $segments[] = $interface;
+                        break;
+                    }
+                }
+            }
             foreach ($byInterface[$interface] ?? [] as $id => $row) {
                 $mode = Policy::mode($row);
                 $outage = $legacyReset || (Policy::usesBase($mode) && in_array($row['profile'] ?? '', $failedExits, true)) ||
