@@ -106,7 +106,13 @@ try {
                         }
                     }
                 }
-                if (Policy::anyEnabled($settings) || Policy::profiles($model) !== [] || NativeVpn::routes($model) !== [] ||
+                $tunnels = Policy::profiles($model) + NativeVpn::routes($model);
+                $health = Firewall::health();
+                $verified = Operations::discardUnverifiedTunnelProbes($health, $tunnels);
+                if ($verified !== $health) {
+                    Policy::writeState('health.json', json_encode($verified, JSON_THROW_ON_ERROR));
+                }
+                if (Policy::anyEnabled($settings) || $tunnels !== [] ||
                     (string)(\OPNsense\Core\Config::getInstance()->object()->OPNsense->tailscale->settings->enabled ?? '') === '1') {
                     Operations::sync($model);
                 }
@@ -180,6 +186,7 @@ try {
                 $changed = $repair['repaired'] || $runningProxies !== $previousProxies ||
                     @file_get_contents(Policy::STATE_DIR . '/local-networks') !==
                         implode("\n", Policy::localNetworks($settings)) . "\n";
+                $nat = null;
                 foreach ($routes as $id => $profile) {
                     if (!isset($selected[$id]) || !empty($profile['disabled'])) {
                         continue;
@@ -211,14 +218,15 @@ try {
                         }
                         $probe = ProxyRuntime::probe($profile);
                     } else {
-                        $targets = Firewall::probePathsInstalled($profile, $loaded);
+                        $nat ??= Resolver::command(['/sbin/pfctl', '-sn']);
+                        $targets = Firewall::probePathsInstalled($profile, $loaded, $nat);
                         if (count($targets) < count(Policy::PROBE_TARGETS) &&
                             ($profile['address'] ?? '') !== '' && (int)gmdate('i') % 4 === 0) {
                             // Rebuild missing pins without sending any unpinned probes.
                             $changed = true;
                         }
                         $probe = ($profile['kind'] ?? '') === 'native'
-                            ? WireGuard::probeSource($profile['address'], $targets)
+                            ? WireGuard::probeSource($profile, $targets)
                             : WireGuard::probe($profile, $targets);
                     }
                     $observation = Operations::probeObservation(

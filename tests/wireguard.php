@@ -7,6 +7,7 @@ namespace OPNsense\BlankVpn;
 use ReflectionMethod;
 use RuntimeException;
 
+require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/Policy.php';
 require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/WireGuard.php';
 
 function checkWireGuard(bool $condition, string $name): void
@@ -42,7 +43,22 @@ function proc_close($process): int
     return 0;
 }
 
-$profile = ['interface' => 'wg7', 'identityKey' => 'local-key', 'peerKey' => 'peer-key'];
+final class WireGuardBackendFixture
+{
+    public static array $records = [];
+
+    public function configdRun(string $action, bool $raiseOnFailure, int $timeout): string
+    {
+        if ($action !== 'wireguard show') {
+            throw new RuntimeException('Unexpected configd action in WireGuard fixture.');
+        }
+        return json_encode(['records' => self::$records], JSON_THROW_ON_ERROR);
+    }
+}
+
+class_alias(WireGuardBackendFixture::class, 'OPNsense\Core\Backend');
+
+$profile = ['interface' => 'wg7', 'identityKey' => 'local-key', 'peerKey' => 'peer-key', 'address' => '10.130.65.41/32'];
 $now = time();
 $records = [
     ['if' => 'wg9', 'type' => 'interface', 'public-key' => 'local-key', 'status' => 'up'],
@@ -66,7 +82,41 @@ checkWireGuard(WireGuard::status($profile, $records)['status'] === 'awaiting han
 
 $records[1]['public-key'] = 'foreign-local-key';
 checkWireGuard(WireGuard::status($profile, $records)['status'] === 'unavailable', 'A reused device name is insufficient');
-checkWireGuard(WireGuard::probe($profile)['reachable'] === null, 'Avoid an internet probe without a verified local route');
+checkWireGuard(WireGuard::probe($profile)['reachable'] === null, 'An unreadable runtime remains unverified.');
+
+$records[1]['public-key'] = 'local-key';
+$records[3]['latest-handshake'] = $now;
+WireGuardBackendFixture::$records = $records;
+checkWireGuard(WireGuard::probe($profile)['reachable'] === null, 'Avoid an internet probe without a verified local route.');
+WireGuardBackendFixture::$records[3]['latest-handshake'] = 0;
+$failed = WireGuard::probe($profile);
+checkWireGuard($failed['reachable'] === false && str_contains($failed['detail'], 'no recent WireGuard handshake'),
+    'A readable owned peer without a handshake invalidates a positive health reading even with no safe probe route.');
+
+$probeState = new ReflectionMethod(WireGuard::class, 'probeStateConfirmed');
+$marker = Policy::marker('probe', 'fixture' . Policy::PROBE_IP);
+$flow = [
+    'label' => $marker, 'direction' => 'out', 'proto' => 'tcp', 'src_addr' => '10.130.65.41',
+    'src_port' => '41443', 'dst_addr' => Policy::PROBE_IP, 'dst_port' => '443',
+    'route-to' => '0.0.0.0@wg7', 'nat_addr' => null, 'pkts' => [5, 4],
+];
+$confirmed = static fn (array $state): bool =>
+    $probeState->invoke(null, [$state], '10.130.65.41', 41443, Policy::PROBE_IP, 'wg7', $marker);
+checkWireGuard($confirmed($flow), 'A bidirectional exact probe flow through the intended tunnel proves reachability.');
+checkWireGuard(!$confirmed(array_replace($flow, ['src_addr' => '192.0.2.10', 'nat_addr' => '10.130.65.41'])),
+    'A source-bound probe that succeeds only via WAN NAT is never green.');
+foreach ([
+    ['label' => 'native_default'],
+    ['route-to' => '0.0.0.0@wg70'],
+    ['route-to' => '192.0.2.1@igc0'],
+    ['src_port' => '41444'],
+    ['dst_addr' => '8.8.8.8'],
+    ['dst_port' => '853'],
+    ['pkts' => [5, 0]],
+] as $invalid) {
+    checkWireGuard(!$confirmed(array_replace($flow, $invalid)),
+        'Missing or different flow evidence must fail: ' . json_encode($invalid, JSON_THROW_ON_ERROR));
+}
 
 $routeLookup = new ReflectionMethod(WireGuard::class, 'routeLookup');
 $underlay = new ReflectionMethod(WireGuard::class, 'checkUnderlay');

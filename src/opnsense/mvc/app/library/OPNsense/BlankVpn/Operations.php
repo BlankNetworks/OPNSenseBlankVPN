@@ -198,6 +198,9 @@ final class Operations
         }
         $previous = $health[$id] ?? [];
         $health[$id] = ['reachable' => true, 'failures' => 0, 'checkedAt' => time(), 'probeSucceeded' => true];
+        if (($route['kind'] ?? '') !== 'proxy') {
+            $health[$id]['tunnelVerified'] = true;
+        }
         if (($route['kind'] ?? '') === 'native') {
             $health[$id]['source'] = $route['address'];
         }
@@ -294,6 +297,16 @@ final class Operations
         return !empty($interfaces[$device]['up']) && array_diff($expected, $prefixes) === [] ? 'ready' : 'missing';
     }
 
+    public static function discardUnverifiedTunnelProbes(array $health, array $tunnels): array
+    {
+        foreach (array_intersect_key($health, $tunnels) as $id => $result) {
+            if (($result['probeSucceeded'] ?? false) && empty($result['tunnelVerified'])) {
+                unset($health[$id]);
+            }
+        }
+        return $health;
+    }
+
     public static function probeObservation(array $prior, array $profile, ?bool $observed, bool $protected, int $now): array
     {
         $source = ($profile['kind'] ?? '') === 'native' ? $profile['address'] : null;
@@ -310,6 +323,9 @@ final class Operations
         $health = [
             'reachable' => $reachable, 'failures' => $failures, 'checkedAt' => $now, 'probeSucceeded' => $observed
         ];
+        if ($observed && ($profile['kind'] ?? '') !== 'proxy') {
+            $health['tunnelVerified'] = true;
+        }
         if ($source !== null) {
             $health['source'] = $source;
         }

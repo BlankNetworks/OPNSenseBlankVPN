@@ -421,25 +421,36 @@ final class WireGuard
      */
     public static function probe(array $profile, array $protectedTargets = []): array
     {
-        if ($protectedTargets === []) {
-            return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
-                'detail' => 'The protected tunnel test route is unavailable.'];
-        }
         $status = self::status($profile);
         if (!$status['available'] || !$status['peerPresent']) {
             return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
                 'detail' => 'The WireGuard interface or peer is missing from the kernel.'];
         }
 
-        $result = self::probeSource(explode('/', $profile['address'], 2)[0], $protectedTargets);
-        if ($result['reachable'] === false && (self::status($profile)['handshake'] ?? 0) < time() - self::HANDSHAKE_WINDOW) {
-            $result['detail'] = 'The server has no recent WireGuard handshake. Check whether outbound UDP reaches the relay.';
+        $result = self::probeSource($profile, $protectedTargets);
+        if ($status['status'] === 'recent handshake') {
+            return $result;
+        }
+
+        // Allow a test to initiate the first handshake. A responsive HTTPS
+        // server cannot establish health for a peer the kernel never reached.
+        if ($protectedTargets !== []) {
+            $status = self::status($profile);
+        }
+        if ($status['available'] && $status['peerPresent'] && $status['status'] !== 'recent handshake') {
+            return ['reachable' => false, 'checkedAt' => time(), 'status' => 'probe failed', 'milliseconds' => null,
+                'detail' => 'The server has no recent WireGuard handshake. Check for a reply from the relay on its configured UDP port.'];
+        }
+        if ($result['reachable'] === true && $status['status'] !== 'recent handshake') {
+            return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
+                'detail' => 'OPNsense could not verify the WireGuard handshake after testing.'];
         }
         return $result;
     }
 
-    public static function probeSource(string $address, array $protectedTargets): array
+    public static function probeSource(array $profile, array $protectedTargets): array
     {
+        $address = explode('/', $profile['address'] ?? '', 2)[0];
         if (!filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
             return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
                 'detail' => 'The tunnel has no usable IPv4 source address.'];
@@ -452,12 +463,25 @@ final class WireGuard
         if (!function_exists('curl_init')) {
             throw new RuntimeException('The OPNsense PHP cURL extension is unavailable.');
         }
+        $wrongPath = false;
+        $unverified = false;
         foreach ($targets as $destination => $target) {
-            $latency = self::probeEndpoint($address, $destination, $target['host'], $target['path']);
-            if ($latency !== null) {
+            $marker = Policy::marker('probe', $profile['id'] . $destination);
+            $probe = self::probeEndpoint($address, $destination, $target['host'], $target['path'], $profile['interface'], $marker);
+            if ($probe['status'] === 'reachable') {
                 return ['reachable' => true, 'checkedAt' => time(), 'status' => 'reachable',
-                    'milliseconds' => $latency, 'detail' => null];
+                    'milliseconds' => $probe['milliseconds'], 'detail' => null];
             }
+            $wrongPath = $wrongPath || $probe['status'] === 'wrong path';
+            $unverified = $unverified || $probe['status'] === 'unverified';
+        }
+        if ($wrongPath) {
+            return ['reachable' => false, 'checkedAt' => time(), 'status' => 'probe failed', 'milliseconds' => null,
+                'detail' => 'HTTPS responded without a matching bidirectional firewall state through the selected tunnel.'];
+        }
+        if ($unverified) {
+            return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
+                'detail' => 'OPNsense could not read the firewall state to confirm the HTTPS path.'];
         }
         if (count($targets) !== count(Policy::PROBE_TARGETS)) {
             return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',
@@ -467,14 +491,20 @@ final class WireGuard
             'detail' => 'Neither independent HTTPS endpoint responded through the tunnel.'];
     }
 
-    private static function probeEndpoint(string $address, string $destination, string $host, string $path): ?float
-    {
+    private static function probeEndpoint(
+        string $address,
+        string $destination,
+        string $host,
+        string $path,
+        string $interface,
+        string $marker
+    ): array {
         $curl = curl_init('https://' . $host . $path);
         if ($curl === false) {
             throw new RuntimeException('OPNsense could not initialize the HTTPS tunnel test.');
         }
         $body = '';
-        curl_setopt_array($curl, [
+        if (!curl_setopt_array($curl, [
             CURLOPT_INTERFACE => $address,
             CURLOPT_RESOLVE => [$host . ':' . Policy::PROBE_PORT . ':' . $destination],
             CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
@@ -493,7 +523,9 @@ final class WireGuard
                 $body .= $chunk;
                 return strlen($chunk);
             },
-        ]);
+        ])) {
+            throw new RuntimeException('OPNsense could not configure the protected HTTPS tunnel test.');
+        }
         $transport = curl_exec($curl) === true;
         $info = curl_getinfo($curl);
         $answer = json_decode($body, true);
@@ -502,7 +534,45 @@ final class WireGuard
             ($info['local_ip'] ?? '') === $address &&
             ($info['primary_ip'] ?? '') === $destination &&
             ($answer['Status'] ?? null) === 0;
-        return $reachable ? round($info['total_time'] * 1000, 1) : null;
+        if (!$reachable || empty($info['local_port'])) {
+            return ['status' => 'failed'];
+        }
+
+        // A source-bound socket still reports the bound IP and port when WAN
+        // source NAT translates the packet. Verify the live per-flow PF route.
+        $sourcePort = (int)$info['local_port'];
+        $raw = (new Backend())->configdpRun(
+            'filter list states', [$address . ':' . $sourcePort, '8', '0', $marker, ''], false, 3
+        );
+        $states = json_decode((string)$raw, true)['details'] ?? null;
+        if (!is_array($states)) {
+            return ['status' => 'unverified'];
+        }
+        if (!self::probeStateConfirmed($states, $address, $sourcePort, $destination, $interface, $marker)) {
+            return ['status' => 'wrong path'];
+        }
+        return ['status' => 'reachable', 'milliseconds' => round($info['total_time'] * 1000, 1)];
+    }
+
+    private static function probeStateConfirmed(
+        array $states,
+        string $address,
+        int $sourcePort,
+        string $destination,
+        string $interface,
+        string $marker
+    ): bool {
+        foreach ($states as $state) {
+            if (($state['label'] ?? '') === $marker && ($state['proto'] ?? '') === 'tcp' &&
+                ($state['direction'] ?? '') === 'out' && ($state['src_addr'] ?? '') === $address &&
+                (int)($state['src_port'] ?? 0) === $sourcePort && ($state['dst_addr'] ?? '') === $destination &&
+                (int)($state['dst_port'] ?? 0) === Policy::PROBE_PORT && empty($state['nat_addr']) &&
+                str_ends_with((string)($state['route-to'] ?? ''), '@' . $interface) &&
+                ($state['pkts'][0] ?? 0) > 0 && ($state['pkts'][1] ?? 0) > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static function createInterface(string $device, string $owner): string

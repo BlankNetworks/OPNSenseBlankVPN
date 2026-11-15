@@ -34,6 +34,14 @@ $recovered = Operations::probeObservation($down['health'], $native, true, true, 
 expectHealth($recovered['health']['reachable'] && $recovered['reload'] && !$recovered['failed'],
     'A verified positive probe reopens the selected tunnel.');
 
+$legacyHealth = ['old-native' => $known, 'old-proxy' => $known, 'verified-native' => $recovered['health'],
+    'failed-native' => $down['health']];
+expectHealth(($recovered['health']['tunnelVerified'] ?? false) &&
+    Operations::discardUnverifiedTunnelProbes($legacyHealth, array_fill_keys(
+        ['old-native', 'verified-native', 'failed-native'], true
+    )) === array_diff_key($legacyHealth, ['old-native' => true]),
+    'Upgrades invalidate old positive tunnel probes without resetting verified results, failures or proxy health.');
+
 $proxy = ['kind' => 'proxy'];
 $retry = Operations::probeObservation([], $proxy, false, false, 201);
 expectHealth($retry['health']['reachable'] && !$retry['reload'] &&

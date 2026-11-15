@@ -123,17 +123,23 @@ EOF
     pf -F states
 }
 
-check_tcp() {
-    source_jail=$1 source_addr=$2 port=$3 expected=$4
-    jexec "$exit_node" sh -c 'printf "%s\n" "$3" | nc -N -w 5 -l "$1" "$2"' \
-        sh "$service" "$port" "$expected" &
+listen_tcp() {
+    timeout -k 2 7 jexec "$exit_node" sh -c 'printf "%s\n" "$3" | timeout -f -k 2 7 nc -N -l "$1" "$2"' \
+        sh "$service" "$1" "$2" &
     listener=$!
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
-        if jexec "$exit_node" sockstat -4l | grep -Fq "$service:$port"; then
-            break
+        if jexec "$exit_node" sockstat -4l | grep -Fq "$service:$1"; then
+            return 0
         fi
         sleep 0.1
     done
+    echo "TCP listener did not start on $service:$1." >&2
+    exit 1
+}
+
+check_tcp() {
+    source_jail=$1 source_addr=$2 port=$3 expected=$4
+    listen_tcp "$port" "$expected"
     actual=$(jexec "$source_jail" nc -N -w 4 -s "$source_addr" "$service" "$port" </dev/null) || {
         echo "TCP request failed for $expected." >&2
         exit 1
@@ -145,15 +151,75 @@ check_tcp() {
     fi
 }
 
+rule_matched() {
+    pf -s labels | awk -v label="$1" '$1 == label && $3 > 0 { found=1 } END { exit !found }'
+}
+
 check_forwarding() {
     write_rules 100.64.0.0/10
     check_tcp "$router" "$router_tunnel" "$probe_port" 'router probe'
     check_tcp "$client" "$client_addr" "$service_port" 'Whole-Network WireGuard'
-    pf -s labels | awk '$1 == "translated_egress" && $3 > 0 { found=1 } END { exit !found }'
+    rule_matched translated_egress
 
     write_rules "$client_addr"
     check_tcp "$client" "$client_addr" "$service_port" 'per-device WireGuard'
-    pf -s labels | awk '$1 == "translated_egress" && $3 > 0 { found=1 } END { exit !found }'
+    rule_matched translated_egress
+}
+
+write_probe_rules() {
+    {
+        printf 'set skip on lo0\n'
+        if [ "$1" = protected ]; then
+            printf 'no nat inet proto tcp from %s to %s port %s\n' \
+                "$router_tunnel" "$service" "$probe_port"
+        fi
+        cat <<EOF
+nat on $underlay inet from $router_tunnel to any -> $router_underlay
+block all
+pass out quick on $underlay inet proto udp from $router_underlay to $exit_underlay port 51820 keep state
+EOF
+        if [ "$2" = available ]; then
+            printf 'pass out quick route-to %s inet proto tcp from %s to %s port %s keep state label "router_probe"\n' \
+                "$router_wg" "$router_tunnel" "$service" "$probe_port"
+        fi
+        cat <<EOF
+block out quick inet proto tcp from $router_tunnel to $service port $probe_port label "probe_guard"
+pass out quick on $underlay inet proto tcp from $router_underlay to $service port $probe_port keep state label "wan_probe"
+EOF
+    } >"$stage/pf.conf"
+    pf -f "$stage/pf.conf"
+    pf -F states
+}
+
+check_probe_isolation() {
+    write_probe_rules legacy available
+    check_tcp "$router" "$router_tunnel" "$probe_port" 'legacy WAN false positive'
+    rule_matched wan_probe
+    if rule_matched router_probe; then
+        echo 'The WAN false-positive fixture also matched the tunnel policy.' >&2
+        exit 1
+    fi
+
+    write_probe_rules protected available
+    check_tcp "$router" "$router_tunnel" "$probe_port" 'protected WireGuard probe'
+    rule_matched router_probe
+    if rule_matched wan_probe; then
+        echo 'The protected WireGuard probe escaped through the WAN.' >&2
+        exit 1
+    fi
+
+    write_probe_rules protected unavailable
+    listen_tcp "$probe_port" 'unprotected WAN fallback'
+    if jexec "$router" nc -z -w 2 -s "$router_tunnel" "$service" "$probe_port"; then
+        echo 'The protected probe succeeded through WAN with no WireGuard route.' >&2
+        exit 1
+    fi
+    wait "$listener" || :
+    rule_matched probe_guard
+    if rule_matched wan_probe; then
+        echo 'The protected probe reached the WAN with no WireGuard route.' >&2
+        exit 1
+    fi
 }
 
 pf -e
@@ -165,3 +231,5 @@ if jexec "$router" sysctl -n net.pf.share_forward >/dev/null 2>&1; then
     done
 fi
 echo 'Whole-Network and per-device TCP passed through policy routing, source NAT and two real WireGuard peers.'
+check_probe_isolation
+echo 'WAN source NAT reproduced the false positive. Probe-specific NAT exclusion keeps the tunnel test on WireGuard and blocks WAN fallback.'

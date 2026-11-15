@@ -14,6 +14,8 @@ final class Firewall
     private const TAILNET_WAN_TAG = 'blankvpn_tailnet_wan';
     // Tailscale carries 1280-byte IP packets. Leave room for IPv4 and TCP headers.
     private const TAILNET_TCP_SCRUB = 'max-mss 1240';
+    // OPNsense evaluates manual outbound NAT at priority 100 and automatic NAT at 200.
+    private const PROBE_NO_NAT_PRIORITY = 40;
     // Run after the OPNsense user rules so explicit quick rules are respected.
     private const TAILNET_DEFAULT_PRIORITY = 490000;
     private const STATIC_DESTINATIONS = Policy::PRIORITY + 30;
@@ -1175,6 +1177,13 @@ final class Firewall
         $destinations = [];
         foreach (array_keys(Policy::PROBE_TARGETS) as $target) {
             $destinations[] = ['to' => $target, 'to_port' => (string)Policy::PROBE_PORT, 'protocol' => 'tcp', 'kind' => 'probe'];
+            // Outbound translation runs before the source-bound pass and fallback block.
+            // Preserve the exact probe's source even if its initial route points at a WAN.
+            $firewall->registerSourceNatRule(self::PROBE_NO_NAT_PRIORITY, [
+                'nonat' => true, 'ipprotocol' => 'inet', 'protocol' => 'tcp',
+                'from' => $address, 'to' => $target, 'dstport' => (string)Policy::PROBE_PORT,
+                'descr' => 'Blank VPN & Proxy prevents source NAT on a tunnel probe'
+            ]);
         }
         foreach ($includeDns ? ($profile['dns'] ?? []) : [] as $dns) {
             if (filter_var($dns, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
@@ -1211,7 +1220,7 @@ final class Firewall
         return is_array($data) ? $data : [];
     }
 
-    public static function probePathsInstalled(array $profile, array $loaded): array
+    public static function probePathsInstalled(array $profile, array $loaded, string $nat): array
     {
         $source = explode('/', $profile['address'] ?? '', 2)[0];
         if (!filter_var($source, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || empty($profile['interface'])) {
@@ -1225,11 +1234,19 @@ final class Firewall
             if (($pass['action'] ?? '') === 'pass' && ($pass['source'] ?? '') === $source &&
                 ($pass['gateway'] ?? null) === $profile['interface'] && ($pass['probeTarget'] ?? '') === $target &&
                 ($guard['action'] ?? '') === 'block' && ($guard['source'] ?? '') === $source &&
-                ($guard['probeTarget'] ?? '') === $target) {
+                ($guard['probeTarget'] ?? '') === $target && self::probeNoNatInstalled($nat, $source, $target)) {
                 $verified[] = $target;
             }
         }
         return $verified;
+    }
+
+    private static function probeNoNatInstalled(string $nat, string $source, string $destination): bool
+    {
+        $source = preg_quote($source, '/');
+        $destination = preg_quote($destination, '/');
+        return preg_match('/^\h*(?:@\d+\h+)?no nat inet proto tcp from ' . $source . '(?:\/32)? to ' .
+            $destination . '(?:\/32)? port\h*=\h*(?:443|https)\h*$/m', $nat) === 1;
     }
 
     public static function parseLoadedRules(string $output): array

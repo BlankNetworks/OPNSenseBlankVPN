@@ -84,3 +84,9 @@
 - Active managed WireGuard exits recover from missing owned runtime interfaces, peers, or default AllowedIPs. Maintenance caps repair attempts and preserves the Kill Switch while checking the recovered path.
 - VPN health checks use two independent HTTPS destinations through individually verified firewall routes. Proxy health checks verify the processes and loopback listeners for each assigned exit and retry failed runtimes with backoff.
 - Device route tests distinguish recent replies from unanswered TCP attempts, even when a router-side HTTPS probe succeeds.
+
+## 0.8.28
+
+- A successful VPN test requires a bidirectional firewall state on the selected tunnel. The exact test flows are excluded from WAN source NAT so a router connection through the ISP cannot pass as a VPN test.
+- Managed WireGuard tests report a missing handshake and the upgrade discards older unverified positive tunnel results. Protected routes retain their fail-closed behavior.
+- FreeBSD CI exercises Whole-Network and per-device TCP through real WireGuard peers and checks that a failed tunnel probe cannot fall back to the WAN.

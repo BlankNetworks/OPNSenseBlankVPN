@@ -484,19 +484,19 @@ class ServiceController extends ApiControllerBase
         if ($loaded === null) {
             throw new \RuntimeException('Blank VPN & Proxy could not read the active firewall rules from configd.');
         }
-        $targets = Firewall::probePathsInstalled($route, $loaded);
+        $targets = Firewall::probePathsInstalled($route, $loaded, Firewall::loadedNat());
         if (count($targets) !== count(Policy::PROBE_TARGETS)) {
             $settings = Policy::effectiveRouting($model);
             $assignments = Policy::deviceAssignments($settings,
                 Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()));
             Operations::reloadRoutingPaths($model, $settings, $assignments, $loaded);
-            $targets = Firewall::probePathsInstalled($route, Firewall::loadedRules() ?? []);
+            $targets = Firewall::probePathsInstalled($route, Firewall::loadedRules() ?? [], Firewall::loadedNat());
             if ($targets === []) {
-                throw new \RuntimeException('OPNsense did not load the protected test route. Check the exit gateway and firewall status.');
+                throw new \RuntimeException('OPNsense did not load the protected test route and NAT exclusion. Check the exit gateway and firewall status.');
             }
         }
         return ($route['kind'] ?? '') === 'native'
-            ? WireGuard::probeSource($route['address'], $targets)
+            ? WireGuard::probeSource($route, $targets)
             : WireGuard::probe($route, $targets);
     }
 

@@ -383,6 +383,14 @@ namespace {
     (new ReflectionMethod(Firewall::class, 'registerProfile'))->invoke(null, $probeOnly, $profiles['jp'], false);
     checkRouting(array_keys($probeOnly->rules) === [$probe, $probe . '_block', $alternateProbe, $alternateProbe . '_block'],
         'A VPN test while routing is off installs two independent router test paths.');
+    checkRouting(count($probeOnly->nat) === count(Policy::PROBE_TARGETS), 'Install one source NAT exception per probe.');
+    foreach ($probeOnly->nat as $index => $exception) {
+        checkRouting($exception['nonat'] === true && $exception['priority'] < 100 && !isset($exception['interface']) &&
+            $exception['from'] === '10.64.0.9' && $exception['to'] === array_keys(Policy::PROBE_TARGETS)[$index] &&
+            $exception['ipprotocol'] === 'inet' && $exception['protocol'] === 'tcp' &&
+            $exception['dstport'] === (string)Policy::PROBE_PORT,
+            'The exact probe bypasses source NAT before manual and automatic WAN rules on all interfaces.');
+    }
     foreach ([$probe => Policy::PROBE_IP, $alternateProbe => $alternateTarget] as $label => $destination) {
         foreach ([$label, $label . '_block'] as $rule) {
             checkRouting($probeOnly->rules[$rule]['from'] === '10.64.0.9' &&
@@ -397,10 +405,17 @@ namespace {
     $alternateRules = "pass out quick route-to (wg0 ?) inet proto tcp from 10.64.0.9 to $alternateTarget port = 443 " .
         "flags S/SA keep state label \"$alternateProbe\"\n" .
         "block drop out quick inet proto tcp from 10.64.0.9 to $alternateTarget port = 443 label \"{$alternateProbe}_block\"\n";
-    $probePaths = static fn (string $rules): array => Firewall::probePathsInstalled($profiles['jp'], Firewall::parseLoadedRules($rules));
-    checkRouting($probePaths($probeRules) === [], 'A manual exit test requires a fallback guard.');
-    checkRouting($probePaths($probeRules . $primaryGuard) === [Policy::PROBE_IP], 'Retain the original protected test path during upgrades.');
-    checkRouting($probePaths($probeRules . $primaryGuard . $alternateRules) === array_keys(Policy::PROBE_TARGETS),
+    $primaryNoNat = 'no nat inet proto tcp from 10.64.0.9 to ' . Policy::PROBE_IP . " port = https\n";
+    $alternateNoNat = "no nat inet proto tcp from 10.64.0.9 to $alternateTarget port = 443\n";
+    $probePaths = static fn (string $rules, string $nat): array =>
+        Firewall::probePathsInstalled($profiles['jp'], Firewall::parseLoadedRules($rules), $nat);
+    checkRouting($probePaths($probeRules, $primaryNoNat) === [], 'A manual exit test requires a fallback guard.');
+    checkRouting($probePaths($probeRules . $primaryGuard, '') === [],
+        'A loaded pass and fallback block cannot verify the path if source NAT can change the probe source.');
+    checkRouting($probePaths($probeRules . $primaryGuard, $primaryNoNat) === [Policy::PROBE_IP],
+        'The original protected test path keeps its label during upgrades.');
+    $bothProbeRules = $probeRules . $primaryGuard . $alternateRules;
+    checkRouting($probePaths($bothProbeRules, $primaryNoNat . $alternateNoNat) === array_keys(Policy::PROBE_TARGETS),
         'A protected source can test both configured HTTPS endpoints.');
     foreach ([
         str_replace($alternateTarget, '192.0.2.20', $alternateRules),
@@ -409,8 +424,18 @@ namespace {
         str_replace('out quick', 'in quick', $alternateRules),
         str_replace('block drop out quick', 'block drop out', $alternateRules),
     ] as $misconfiguredAlternate) {
-        checkRouting($probePaths($probeRules . $primaryGuard . $misconfiguredAlternate) === [Policy::PROBE_IP],
+        checkRouting($probePaths($probeRules . $primaryGuard . $misconfiguredAlternate, $primaryNoNat . $alternateNoNat) === [Policy::PROBE_IP],
             'A mismatched alternate rule cannot authorize a probe.');
+    }
+    foreach ([
+        str_replace('no nat', 'no nat on wg0', $alternateNoNat),
+        str_replace('10.64.0.9', '10.64.0.8', $alternateNoNat),
+        str_replace($alternateTarget, '192.0.2.20', $alternateNoNat),
+        str_replace('port = 443', 'port = 53', $alternateNoNat),
+        str_replace('proto tcp', 'proto udp', $alternateNoNat),
+    ] as $misconfiguredNoNat) {
+        checkRouting($probePaths($bothProbeRules, $primaryNoNat . $misconfiguredNoNat) === [Policy::PROBE_IP],
+            'A different source, destination, port, protocol or egress-specific NAT exception is insufficient.');
     }
     checkRouting(SmartRouting::dnsDirectives($chinaService, $profiles) === [
         'ipset=/cn/' . SmartRouting::table($chinaService['china']), 'server=/cn/10.64.0.1@10.64.0.9'
