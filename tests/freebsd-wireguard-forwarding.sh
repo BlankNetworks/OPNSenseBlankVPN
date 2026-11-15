@@ -75,6 +75,7 @@ exit_tunnel=10.130.65.42
 service=198.18.20.1
 service_port=8443
 probe_port=9443
+wireguard_port=51820
 
 jexec "$router" ifconfig "$ingress" inet "$client_gateway/24" up -txcsum -txcsum6
 jexec "$client" ifconfig "$client_link" inet "$client_addr/24" up -txcsum -txcsum6
@@ -112,7 +113,7 @@ table <connected> const { 100.64.0.0/10, 192.0.2.0/24 }
 nat on $router_wg inet from $scope to any -> $router_tunnel
 block all
 block out quick on $underlay inet tagged vpn_client label "plain_wan_guard"
-pass out quick on $underlay inet proto udp from $router_underlay to $exit_underlay port 51820 keep state
+pass out quick on $underlay inet proto udp from $router_underlay to $exit_underlay port $wireguard_port keep state
 pass out quick route-to $router_wg inet proto tcp from $router_tunnel to $service port $probe_port keep state label "router_probe"
 block out quick inet proto tcp from $router_tunnel to $service port $probe_port
 pass in quick on $ingress route-to $router_wg inet from $scope to ! <connected> scrub (max-mss 1240) tag vpn_client keep state (if-bound) label "client_ingress"
@@ -176,7 +177,7 @@ write_probe_rules() {
         cat <<EOF
 nat on $underlay inet from $router_tunnel to any -> $router_underlay
 block all
-pass out quick on $underlay inet proto udp from $router_underlay to $exit_underlay port 51820 keep state
+pass out quick on $underlay inet proto udp from $router_underlay to $exit_underlay port $wireguard_port keep state
 EOF
         if [ "$2" = available ]; then
             printf 'pass out quick route-to %s inet proto tcp from %s to %s port %s keep state label "router_probe"\n' \
@@ -233,3 +234,11 @@ fi
 echo 'Whole-Network and per-device TCP passed through policy routing, source NAT and two real WireGuard peers.'
 check_probe_isolation
 echo 'WAN source NAT reproduced the false positive. Probe-specific NAT exclusion keeps the tunnel test on WireGuard and blocks WAN fallback.'
+
+wireguard_port=53
+jexec "$exit_node" wg set "$exit_wg" listen-port "$wireguard_port"
+jexec "$router" wg set "$router_wg" peer "$exit_key" endpoint "$exit_underlay:$wireguard_port"
+test "$(jexec "$router" wg show "$router_wg" public-key)" = "$router_key"
+test "$(jexec "$router" wg show "$router_wg" endpoints | cut -f2)" = "$exit_underlay:$wireguard_port"
+check_forwarding
+echo 'The same WireGuard identity and relay passed forwarded TCP over alternate UDP port 53.'

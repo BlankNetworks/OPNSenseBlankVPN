@@ -225,12 +225,12 @@
             return element;
         }
 
-        function nameEditor(row, name, id, action, render, onSave) {
+        function nameEditor(row, name, id, action, render, onSave, renderDetails = null) {
             const edit = button('Edit', () => {
                 state.nameEditor = {id, action, draft: name};
                 render();
                 root.querySelector('.bv-name-editor input')?.focus();
-            }, 'Edit name for ' + name);
+            }, 'Edit ' + (renderDetails ? 'name and WireGuard port' : 'name') + ' for ' + name);
             const current = state.nameEditor;
             if (current?.id !== id || current.action !== action) {
                 return edit;
@@ -269,7 +269,54 @@
                 });
             });
             row.cells[0].append(form);
+            if (renderDetails) {
+                row.cells[0].append(renderDetails(current));
+            }
             return null;
+        }
+
+        function mullvadPortEditor(profile, editor) {
+            const savedPort = Number(profile.port || 51820);
+            const form = document.createElement('form');
+            form.className = 'bv-inline-form bv-mullvad-port';
+            const label = document.createElement('label');
+            label.textContent = 'WireGuard port (UDP)';
+            const select = document.createElement('select');
+            select.className = 'form-control';
+            select.append(new Option('51820 (default)', '51820'), new Option('53', '53'));
+            select.value = String(editor.port ?? savedPort);
+            label.append(select);
+            const save = document.createElement('button');
+            save.type = 'submit';
+            save.className = 'btn btn-primary btn-sm';
+            save.textContent = 'Save port';
+            const updateSave = () => { save.disabled = Number(select.value) === savedPort; };
+            select.addEventListener('change', () => {
+                editor.port = Number(select.value);
+                updateSave();
+            });
+            updateSave();
+            form.append(label, save);
+            form.addEventListener('submit', (event) => {
+                event.preventDefault();
+                const port = Number(select.value);
+                if (![51820, 53].includes(port) || port === savedPort) {
+                    return;
+                }
+                void mutate(save, () => api('setMullvadPort', {id: profile.id, port}),
+                    'Mullvad WireGuard port saved.', (result) => {
+                        profile.port = result.port;
+                        state.tests.delete('exit:' + profile.id);
+                        state.tests.delete('tailnet-base:' + profile.id);
+                        for (const assignment of state.assignments) {
+                            if ([assignment.profile, assignment.backup].includes(profile.id)) {
+                                state.tests.delete('device:' + assignment.id);
+                            }
+                        }
+                        renderProfiles();
+                    });
+            });
+            return form;
         }
 
         function options(select, choices, placeholder, previous = select.value) {
@@ -856,7 +903,8 @@
                             dormant ? profile.node : profile.id, profileName(profile.id),
                             {nodeId: profile.node, disabled: profile.disabled === true, ping});
                         const edit = nameEditor(row, profile.name || profile.relay, profile.node || profile.id,
-                            profile.node ? 'renameProxyNode' : 'renameProfile', renderProfiles, (name) => { profile.name = name; });
+                            profile.node ? 'renameProxyNode' : 'renameProfile', renderProfiles, (name) => { profile.name = name; },
+                            profile.relay ? (editor) => mullvadPortEditor(profile, editor) : null);
                         if (edit) {
                             actions.append(edit);
                         }
@@ -2584,12 +2632,14 @@
             if (!state.mullvadSignedIn || byId('register').disabled) {
                 return;
             }
-            const payload = {relay: byId('relay').value, name: byId('register-name').value.trim()};
+            const payload = {relay: byId('relay').value, name: byId('register-name').value.trim(),
+                port: Number(byId('register-port').value)};
             void mutate(event.submitter, () => api('register', payload), 'Mullvad server added.', (result) => {
                 if (result.profile) {
                     state.tests.delete('exit:' + result.profile);
                 }
                 byId('register-name').value = '';
+                byId('register-port').value = '51820';
                 byId('relay').value = '';
             }).then(() => {
                 renderRelayChoice();

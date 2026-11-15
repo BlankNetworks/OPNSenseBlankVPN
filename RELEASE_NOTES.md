@@ -89,4 +89,5 @@
 
 - A successful VPN test requires a bidirectional firewall state on the selected tunnel. The exact test flows are excluded from WAN source NAT so a router connection through the ISP cannot pass as a VPN test.
 - Managed WireGuard tests report a missing handshake and the upgrade discards older unverified positive tunnel results. Protected routes retain their fail-closed behavior.
+- Saved Mullvad exits support UDP 51820 and 53. Changing a port reuses the existing WireGuard key and keeps the saved routing assignments.
 - FreeBSD CI exercises Whole-Network and per-device TCP through real WireGuard peers and checks that a failed tunnel probe cannot fall back to the WAN.

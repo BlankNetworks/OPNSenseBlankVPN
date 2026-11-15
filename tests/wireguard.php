@@ -89,8 +89,8 @@ $records[3]['latest-handshake'] = $now;
 WireGuardBackendFixture::$records = $records;
 checkWireGuard(WireGuard::probe($profile)['reachable'] === null, 'Avoid an internet probe without a verified local route.');
 WireGuardBackendFixture::$records[3]['latest-handshake'] = 0;
-$failed = WireGuard::probe($profile);
-checkWireGuard($failed['reachable'] === false && str_contains($failed['detail'], 'no recent WireGuard handshake'),
+$failed = WireGuard::probe($profile + ['port' => 53]);
+checkWireGuard($failed['reachable'] === false && str_contains($failed['detail'], 'no recent WireGuard handshake on UDP 53'),
     'A readable owned peer without a handshake invalidates a positive health reading even with no safe probe route.');
 
 $probeState = new ReflectionMethod(WireGuard::class, 'probeStateConfirmed');

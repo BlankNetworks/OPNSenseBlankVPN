@@ -188,12 +188,9 @@ final class Operations
     public static function recordSuccessfulProbe(BlankVpn $model, array $route): void
     {
         $settings = Policy::effectiveRouting($model);
-        if (!$settings['enabled']) {
-            return;
-        }
         $id = $route['id'];
         $health = Firewall::health();
-        if (!empty($health[$id]['onDemand'])) {
+        if ($settings['enabled'] && !empty($health[$id]['onDemand'])) {
             return;
         }
         $previous = $health[$id] ?? [];
@@ -204,14 +201,16 @@ final class Operations
         if (($route['kind'] ?? '') === 'native') {
             $health[$id]['source'] = $route['address'];
         }
+        // A successful test with routing off should make the verified exit usable
+        // as soon as its policy is enabled, without changing currently loaded rules.
+        if (!$settings['enabled'] || (($previous['reachable'] ?? true) !== false && !self::pathReloadPending())) {
+            Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
+            return;
+        }
         $assignments = Policy::deviceAssignments($settings,
             Policy::routingAssignments(Policy::assignments($model, true), new Diagnostics()));
-        if (($previous['reachable'] ?? true) === false || self::pathReloadPending()) {
-            $before = Firewall::loadedRules() ?? [];
-            self::reloadRoutingPaths($model, $settings, $assignments, $before, health: $health);
-        } else {
-            Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
-        }
+        $before = Firewall::loadedRules() ?? [];
+        self::reloadRoutingPaths($model, $settings, $assignments, $before, health: $health);
     }
 
     public static function repairManagedWireGuard(array $profiles, ?array $runtime): array

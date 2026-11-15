@@ -132,7 +132,7 @@ window.jQuery.ajax = async (request) => {
     }
     if (action === 'register') {
         reply.dashboard.profiles.push({id:'vpn2',name:data.name,provider:'mullvad',relay:data.relay,
-            interface:'wg3',dns:['10.64.0.1']});
+            interface:'wg3',port:data.port,dns:['10.64.0.1']});
         return {ok:true, profile:'vpn2'};
     }
     if (action === 'removeProfile') {
@@ -146,6 +146,10 @@ window.jQuery.ajax = async (request) => {
     }
     if (action === 'setMullvadEnabled') {
         reply.dashboard.profiles.find(x => x.id === data.id).disabled = !data.enabled;
+    }
+    if (action === 'setMullvadPort') {
+        reply.dashboard.profiles.find(x => x.id === data.id).port = data.port;
+        return {ok:true, port:data.port};
     }
     if (action === 'assign' && data.kind === 'tailnet') {
         const existing = reply.dashboard.assignments.find(row => row.id === 'tailnet1');
@@ -388,7 +392,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(vpnStatus('vpn1') === 'Ready' && vpnPing.firstElementChild.textContent === '45.2 ms' && steady(vpnRow, beforeVpn),
         'The VPN ping result must preserve layout and set Ready status.');
-    bv('profile-list').querySelector('[aria-label="Edit name for Canada"]').click();
+    const editMullvad = (name) => bv('profile-list').querySelector('[aria-label="Edit name and WireGuard port for ' + name + '"]');
+    editMullvad('Canada').click();
     const vpnName = bv('profile-list').querySelector('.bv-name-editor');
     vpnName.querySelector('input').value = 'Canada home';
     vpnName.requestSubmit(vpnName.querySelector('button[type=submit]'));
@@ -425,12 +430,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(!reply.dashboard.profiles[0].disabled && vpnStatus('vpn1') === 'Standby',
         'The existing Mullvad tunnel must be re-enabled without stale test status.');
+    bv('profile-list').querySelector('[data-test-key]').click();
+    await wait();
+    editMullvad('Canada home').click();
+    const portForm = bv('profile-list').querySelector('.bv-mullvad-port');
+    const portChoice = portForm.querySelector('select');
+    const savePort = portForm.querySelector('button');
+    assert(portChoice.value === '51820' && [...portChoice.options].map(x => x.value).join(',') === '51820,53' && savePort.disabled,
+        'Existing Mullvad tunnels must show the default port and the supported alternate.');
+    portChoice.value = '53';
+    portChoice.dispatchEvent(new Event('change'));
+    assert(!savePort.disabled && requests.every(x => x.action !== 'setMullvadPort'),
+        'Changing the port selector must wait for explicit save.');
+    const assignmentBeforePort = JSON.stringify(reply.dashboard.assignments);
+    portForm.requestSubmit(savePort);
+    await wait();
+    assert(requests.some(x => x.action === 'setMullvadPort' && x.data.id === 'vpn1' && x.data.port === 53) &&
+        bv('profile-list').querySelector('.bv-mullvad-port select').value === '53' &&
+        bv('profile-list').querySelector('[data-test-result]').firstElementChild.textContent === '—' &&
+        JSON.stringify(reply.dashboard.assignments) === assignmentBeforePort,
+        'Saving a Mullvad port must keep the assigned tunnel and clear its old Ping result.');
+    [...bv('profile-list').querySelector('.bv-name-editor').querySelectorAll('button')]
+        .find(button => button.textContent === 'Cancel').click();
     assert(bv('account').value === '', 'successful sign-in retained account input');
     bv('country').value = 'Japan';
     bv('country').dispatchEvent(new Event('change'));
     bv('relay').value = 'jp-test-wg-001';
     bv('relay').dispatchEvent(new Event('change'));
     bv('register-name').value = 'Japan home';
+    assert(bv('register-port').value === '51820', 'New Mullvad tunnels must default to the standard WireGuard port.');
+    bv('register-port').value = '53';
     assert(bv('register').textContent === 'Add server' && !bv('register').disabled && !bv('retarget'),
         'Mullvad should offer an independent Add server action.');
     const routingBeforeAdd = structuredClone({assignments:reply.dashboard.assignments, settings:reply.dashboard.settings});
@@ -439,9 +468,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     const addRequests = requests.slice(requestCountBeforeAdd).filter(request => request.method === 'POST');
     assert(addRequests.length === 1 && addRequests[0].action === 'register' &&
-        Object.keys(addRequests[0].data).sort().join(',') === 'name,relay' &&
-        addRequests[0].data.relay === 'jp-test-wg-001' && addRequests[0].data.name === 'Japan home',
-        'Add server should send only the selected relay and name.');
+        Object.keys(addRequests[0].data).sort().join(',') === 'name,port,relay' && addRequests[0].data.port === 53 &&
+        addRequests[0].data.relay === 'jp-test-wg-001' && addRequests[0].data.name === 'Japan home' &&
+        bv('register-port').value === '51820',
+        'Add server must send the selected UDP port and reset the port selector for the next tunnel.');
     assert(reply.dashboard.profiles[0].relay === 'ca-test-wg-001' &&
         bv('profile-list').textContent.includes('Japan home') &&
         [...bv('network-profile').options].some(option => option.value === 'vpn2') &&

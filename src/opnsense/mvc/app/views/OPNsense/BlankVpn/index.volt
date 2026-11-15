@@ -90,6 +90,12 @@
                     <div class="bv-fields">
                         <label>Tunnel name <input id="bv-register-name" type="text" class="form-control" maxlength="64"
                             placeholder="Defaults to server name"></label>
+                        <label>WireGuard port (UDP)
+                            <select id="bv-register-port" class="form-control">
+                                <option value="51820">51820 (default)</option>
+                                <option value="53">53</option>
+                            </select>
+                        </label>
                     </div>
                     <div class="bv-actions">
                         <button id="bv-register" type="submit" class="btn btn-primary" disabled>Add server</button>

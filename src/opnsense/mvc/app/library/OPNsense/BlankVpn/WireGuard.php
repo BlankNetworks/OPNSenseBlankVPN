@@ -209,6 +209,21 @@ final class WireGuard
         ]);
     }
 
+    /** Stage a change to the owned Mullvad peer without changing its address or identity. */
+    public static function setMullvadPort(array $profile, int $port): array
+    {
+        if (empty($profile['relay']) || !in_array($port, Mullvad::WIREGUARD_PORTS, true)) {
+            throw new \DomainException('Choose a saved Mullvad server and a supported WireGuard UDP port.');
+        }
+        [, $peers] = self::ownedObjects($profile);
+        self::checkUnderlay($profile['endpoint']);
+        self::ensureUniquePeer($peers, $profile['owner'], $profile['peerKey'], $profile['endpoint'], $port, $profile['peer']);
+        $peer = $peers->getNodeByReference('clients.client.' . $profile['peer']);
+        $peer->serverport = (string)$port;
+        self::serialize($peers, 'WireGuard peer');
+        return array_replace($profile, ['port' => $port]);
+    }
+
     public static function preflight(?string $endpoint = null): void
     {
         if ((string)(new General())->enabled !== '1') {
@@ -438,8 +453,10 @@ final class WireGuard
             $status = self::status($profile);
         }
         if ($status['available'] && $status['peerPresent'] && $status['status'] !== 'recent handshake') {
+            $port = (int)($profile['port'] ?? 0);
+            $where = $port > 0 ? ' on UDP ' . $port : '';
             return ['reachable' => false, 'checkedAt' => time(), 'status' => 'probe failed', 'milliseconds' => null,
-                'detail' => 'The server has no recent WireGuard handshake. Check for a reply from the relay on its configured UDP port.'];
+                'detail' => 'The server has no recent WireGuard handshake' . $where . '. Check whether the relay replied.'];
         }
         if ($result['reachable'] === true && $status['status'] !== 'recent handshake') {
             return ['reachable' => null, 'checkedAt' => null, 'status' => 'unverified',

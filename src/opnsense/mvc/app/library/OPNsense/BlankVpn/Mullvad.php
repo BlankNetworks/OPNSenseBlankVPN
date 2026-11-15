@@ -10,6 +10,9 @@ use RuntimeException;
 
 class Mullvad
 {
+    public const DEFAULT_WIREGUARD_PORT = 51820;
+    public const WIREGUARD_PORTS = [self::DEFAULT_WIREGUARD_PORT, 53];
+
     private const API = 'https://api.mullvad.net';
     private const TOKEN = '/auth/v1/token';
     private const DEVICE_LIMIT = 5;
@@ -656,7 +659,7 @@ class Mullvad
                 'ipv4' => $ipv4,
                 'ipv6' => $ipv6,
                 'publicKey' => $publicKey,
-                'port' => 51820,
+                'port' => self::DEFAULT_WIREGUARD_PORT,
                 'active' => $active,
             ];
         }

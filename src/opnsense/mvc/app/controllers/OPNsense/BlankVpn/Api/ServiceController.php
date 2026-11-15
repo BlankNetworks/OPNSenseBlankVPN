@@ -85,9 +85,18 @@ class ServiceController extends ApiControllerBase
                     $status['status'] = 'Native configuration changed';
                 }
                 $checked = $health[$id] ?? [];
+                if ($profile['relay'] !== '') {
+                    $profile['provider'] = 'mullvad';
+                    if ($status['status'] === 'recent handshake' &&
+                        ($status['handshake'] ?? 0) < ($profile['portChangedAt'] ?? 0) &&
+                        empty($checked['probeSucceeded'])) {
+                        $status['status'] = 'awaiting handshake';
+                        $status['handshake'] = null;
+                    }
+                }
                 $profiles[$id] = array_intersect_key(
                     $profile,
-                    array_flip(['id', 'name', 'relay', 'identity', 'interface', 'address6', 'dns', 'disabled', 'provider', 'providerLocation', 'providerServer'])
+                    array_flip(['id', 'name', 'relay', 'identity', 'interface', 'address6', 'dns', 'disabled', 'provider', 'providerLocation', 'providerServer', 'port'])
                 ) + $status + [
                     'reachability' => time() - ($checked['checkedAt'] ?? 0) > 180 ? 'unverified or stale'
                         : (($checked['probeSucceeded'] ?? false) ? 'router probe succeeded' : 'router probe failed'),
@@ -596,6 +605,7 @@ class ServiceController extends ApiControllerBase
         return $this->respond(fn () => Operations::exclusive(function () {
             $relayId = $this->input('relay', 100);
             $name = $this->name($relayId);
+            $port = $this->mullvadPort(Mullvad::DEFAULT_WIREGUARD_PORT);
             $mullvad = new Mullvad();
             $token = $this->requireMullvadToken($mullvad);
             $model = new BlankVpn();
@@ -613,6 +623,7 @@ class ServiceController extends ApiControllerBase
                 }
             }
             $relay = $this->relay($mullvad, $relayId);
+            $relay['port'] = $port;
             $dnsPort = Resolver::freePort(Policy::routes($model));
             WireGuard::preflight($relay['ipv4']);
             $occupiedKeys = array_unique([...array_column($profiles, 'identityKey'), ...WireGuard::identityKeys()]);
@@ -663,7 +674,12 @@ class ServiceController extends ApiControllerBase
             if ($profile['relay'] === $relayId) {
                 return ['profile' => $id, 'message' => 'This Mullvad server is already added.'];
             }
-            return $this->switchMullvadServer($profile, $relayId, $this->relay($mullvad, $relayId));
+            $relay = $this->relay($mullvad, $relayId);
+            $savedPort = (int)($profile['port'] ?? 0);
+            if (in_array($savedPort, Mullvad::WIREGUARD_PORTS, true)) {
+                $relay['port'] = $savedPort;
+            }
+            return $this->switchMullvadServer($profile, $relayId, $relay);
         }), true, true, true);
     }
 
@@ -1049,6 +1065,57 @@ class ServiceController extends ApiControllerBase
             ProxyCatalog::renameNode($this->input('id', 64), $this->input('name', 256));
             return [];
         }), true, true);
+    }
+
+    public function setMullvadPortAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $id = $this->input('id', 64);
+            $port = $this->mullvadPort();
+            $result = Operations::change(function (BlankVpn $model) use ($id, $port) {
+                $profile = Policy::profiles($model)[$id] ?? null;
+                if ($profile === null || $profile['relay'] === '') {
+                    throw new \DomainException('Choose a saved Mullvad server.');
+                }
+                if ((int)($profile['port'] ?? 0) === $port) {
+                    return [];
+                }
+                $updated = WireGuard::setMullvadPort($profile, $port);
+                $ownership = array_diff_key($updated, array_flip(['id', 'name', 'relay']));
+                $ownership['portChangedAt'] = time();
+                $model->profiles->profile->getChild($id)->ownership = json_encode($ownership, JSON_THROW_ON_ERROR);
+
+                // A disabled exit is applied when the user enables it again.
+                // The Operations transaction verifies the port on an active peer.
+                return empty($profile['disabled'])
+                    ? ['changed' => true, 'added' => $ownership, 'reload' => true]
+                    : ['changed' => true];
+            });
+            if (!empty($result['changed'])) {
+                $health = Firewall::health();
+                if (isset($health[$id])) {
+                    // An existing outage remains blocked until a fresh probe succeeds.
+                    if (($health[$id]['reachable'] ?? null) === false) {
+                        $health[$id] = ['reachable' => false, 'failures' => 2];
+                    } else {
+                        unset($health[$id]);
+                    }
+                    Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
+                }
+            }
+            return ['port' => $port];
+        }), true, true);
+    }
+
+    private function mullvadPort(?int $default = null): int
+    {
+        $port = $this->request->getPost('port', null, $default);
+        foreach (Mullvad::WIREGUARD_PORTS as $allowed) {
+            if ($port === $allowed || $port === (string)$allowed) {
+                return $allowed;
+            }
+        }
+        throw new \DomainException('Choose a supported Mullvad WireGuard UDP port.');
     }
 
     public function setMullvadEnabledAction()

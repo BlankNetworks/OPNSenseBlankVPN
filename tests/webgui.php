@@ -168,6 +168,8 @@ namespace OPNsense\BlankVpn {
 
     final class Mullvad
     {
+        public const DEFAULT_WIREGUARD_PORT = 51820;
+        public const WIREGUARD_PORTS = [self::DEFAULT_WIREGUARD_PORT, 53];
         public static int $calls = 0;
         private static array $saved = [];
 
@@ -245,6 +247,20 @@ namespace {
         'The ping must use a catalog IP and report its latency.');
     $unknown = new ServiceController('https', ['relay' => '127.0.0.1']);
     checkWebGui(!$unknown->testRelayAction()['ok'], 'The relay test must reject caller-supplied destinations.');
+    $readPort = new ReflectionMethod(ServiceController::class, 'mullvadPort');
+    checkWebGui($readPort->invoke(new ServiceController('https'), Mullvad::DEFAULT_WIREGUARD_PORT) === 51820,
+        'Existing server-add calls keep using the standard port when it is omitted.');
+    foreach ([53, '53', 51820, '51820'] as $port) {
+        checkWebGui($readPort->invoke(new ServiceController('https', ['port' => $port])) === (int)$port,
+            'Accept valid Mullvad UDP ports from JSON and form fields.');
+    }
+    foreach ([true, 53.0, '53.0', '053', 443, 0, 'any', [53]] as $port) {
+        $rejectedPort = (new ServiceController('https', ['id' => 'fixture', 'port' => $port]))->setMullvadPortAction();
+        checkWebGui(!$rejectedPort['ok'] && str_contains($rejectedPort['error'], 'supported Mullvad'),
+            'Reject unapproved ports before modifying a native WireGuard peer.');
+    }
+    $portGet = new ServiceController('https', ['id' => 'fixture', 'port' => 53], 'admin', false);
+    checkWebGui(!$portGet->setMullvadPortAction()['ok'], 'Port changes require POST.');
     $failedProxy = (new ServiceController('https', ['id' => 'offline']))->testProxyNodeAction();
     checkWebGui($failedProxy === ['ok' => false, 'error' => 'Proxy connection timed out.'],
         'An expected proxy failure must be returned to the server row.');

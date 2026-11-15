@@ -217,6 +217,15 @@
     width: 100%;
 }
 
+.blankvpn .bv-mullvad-port {
+    align-items: end;
+    margin-top: .5em;
+}
+
+.blankvpn .bv-mullvad-port label {
+    margin: 0;
+}
+
 .blankvpn label {
     display: block;
     margin-bottom: .3rem;
