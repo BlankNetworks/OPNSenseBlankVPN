@@ -10,9 +10,25 @@
 | PHP and XML source | The repository checks workflow runs the PHP fixtures and syntax checks. MVC, menu and ACL XML are parsed. JavaScript syntax is checked with Node. |
 | Package archives | The release workflow checks the ABI and checksums for both FreeBSD architectures, opens each package with native pkg in a FreeBSD 15.1 guest, and runs the bundled core version commands. |
 | Packet-filter fail-closed fixture | The release workflow uses isolated FreeBSD 15.1 networks to test tagged IPv4 and IPv6 WAN blocking, pinned VPN routes, removal of stale WAN states, preserved local access, and recovery. It also verifies that a failed Multi-Path override blocks its own destination while the base VPN and an unrelated WAN client stay online. |
-| Router access | Read-only SSH was blocked by the development environment. No router changes or Mullvad account changes were made. |
+| Physical OPNsense router | Upgraded an amd64 OPNsense 26.7 router from 0.8.29 to the signed 0.8.30 package. Fresh SSH through Tailscale worked after the upgrade and routing tests; Tailscale settings and management routes were not changed. See the dated results below. |
 
 Run the dashboard fixture again with `python3 tests/ui_fixture.py /path/to/chromium`. The PHP fixtures under `tests/` require a PHP runtime with SimpleXML.
+
+## Physical OPNsense verification — 2026-11-15
+
+These results came from one router and its LAN iPad. The protected configuration and pre-upgrade package were backed up, with timed rollback armed for live changes. No credentials or private keys are included here.
+
+| Check | Observation |
+| --- | --- |
+| Whole-Network proxy browsing | The iPad loaded both a numeric-IP HTTPS page and a hostname HTTPS page. Its observed LAN client states showed bidirectional HTTPS through the selected proxy TUN and no direct WAN HTTPS states. A router-originated HTTPS request forced through the same TUN returned HTTP 200. |
+| Proxy exit address and IPv6 | The iPad's Cloudflare trace and a router request through the TUN reported the same public IPv6 exit address and Swiss location. The router had no IPv6 default route, and its LAN IPv6 Kill Switch rule was loaded. The public IPv6 address was the proxy's website-facing exit; this was not an IPv6 packet test from the iPad. |
+| Client DNS | OPNsense loaded destination-port-53 redirects for LAN UDP and TCP DNS. The selected proxy's local resolver returned NOERROR for a hostname. Bidirectional client DNS states were observed during the live redirect repair, before the package upgrade. A fresh client DNS packet was not captured after the upgrade. |
+| Mullvad DNS and IPv4 | Under a temporary protected Chicago WireGuard policy, provider DNS returned NOERROR over the tunnel and a numeric-IP HTTPS request returned HTTP 200. A router-originated provider DNS query while that profile was unselected later followed WAN and timed out; that unselected query does not validate the selected-client path. The protected Chicago test was not repeated after package installation. |
+| State resets | Whole-Network activation removed old direct-WAN and tunnel sessions from the managed LAN client while preserving Tailscale SSH. The per-device reset removed 57 selected translated client state IDs, retained the observed other-client state, and preserved fresh Tailscale SSH. |
+| Kill Switch and recovery | Stopping the Blank VPN proxy worker under a timed rollback loaded explicit IPv4 and IPv6 outage blocks without direct WAN client states. The worker and normal proxy route recovered. After package installation, a transient failed proxy health observation left the outage guard active even though the TUN returned HTTP 200; recording a successful probe restored the protected route. The cause and automatic recovery time of that transient observation remain unverified. |
+| Release checks | Repository PHP, browser, package, and FreeBSD forwarding checks passed for 0.8.30. Both package architectures and the signed repository were published; the router's signed updater installed 0.8.30 successfully. |
+
+Live browsing was verified under Whole-Network proxy coverage. The separate per-device browser flow, a fresh post-upgrade client DNS packet, and an internet-bound IPv6 packet from the iPad still need their own controlled tests.
 
 ## Required OPNsense lab checks
 
@@ -42,7 +58,7 @@ A passing lab should confirm all of the following on the exact CE 26.7 build. Us
 | Provider behavior | Test a real Mullvad exit, cache expiry or API outage, account expiry and full slots. Confirm that changing an unassigned profile preserves its registered device. |
 | Sustained operation | Run a 72-hour soak with concurrent WireGuard and proxy traffic and one normal WAN client. Include idle periods, upstream outages, failed and successful subscription refreshes, process restarts and a router reboot. Record per-worker resident memory and count, PF state and learned-address counts, disk free space, and latency and throughput for the normal WAN client. Compare readings at equivalent idle and load levels for growth across recovery cycles. |
 
-There was no matching OPNsense guest on the development host. Installation and data-plane behavior on physical OPNsense routers, including the NanoPi, still need lab verification. Test real Netflix playback separately because service-side VPN restrictions are independent of correct routing.
+The physical check above covers one amd64 router and one LAN client. ARM64 package behavior, the remaining lab cases, and sustained operation still need separate verification. Test real Netflix playback separately because service-side VPN restrictions are independent of correct routing.
 
 ## Provider and subscription checks
 
