@@ -700,8 +700,11 @@ final class Operations
         $states = [];
         foreach ($data['details'] as $state) {
             $source = (string)($state['src_addr'] ?? '');
+            // OPNsense reports the translated egress address as src_addr and
+            // the original LAN client as nat_addr for outbound NAT states.
+            $original = (string)($state['nat_addr'] ?? '');
             $destination = (string)($state['dst_addr'] ?? '');
-            if (!self::inNetworks($networks, $source) ||
+            if ((!self::inNetworks($networks, $source) && !self::inNetworks($networks, $original)) ||
                 ((int)($state['dst_port'] ?? 0) !== 53 && self::inNetworks($local, $destination))) {
                 continue;
             }
@@ -715,10 +718,20 @@ final class Operations
         }
         foreach ($states as $state) {
             $response = $backend->configdpRun('filter kill state', $state, false, 5);
-            if (!preg_match('/\b[0-9]+ states? killed\b/i', $response)) {
+            if (self::killedStateCount($response) === null) {
                 throw new \RuntimeException('An existing managed-segment session could not be reset.');
             }
         }
+    }
+
+    private static function killedStateCount(string $response): ?int
+    {
+        $response = trim($response);
+        if (preg_match('/^killed\s+([0-9]+)\s+states?$/iD', $response, $match) ||
+            preg_match('/^([0-9]+)\s+states?\s+killed$/iD', $response, $match)) {
+            return (int)$match[1];
+        }
+        return null;
     }
 
     private static function inNetworks(array $networks, string $ip): bool
@@ -749,8 +762,8 @@ final class Operations
                 }
             }
             $response = $backend->configdpRun('filter kill state', [$session['stateId'], $session['creatorId']], false, 5);
-            if (preg_match('/\b([0-9]+) states? killed\b/i', $response, $match)) {
-                $count += (int)$match[1];
+            if (($killed = self::killedStateCount($response)) !== null) {
+                $count += $killed;
             } else {
                 $failed++;
             }

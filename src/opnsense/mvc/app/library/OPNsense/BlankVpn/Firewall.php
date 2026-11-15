@@ -1193,6 +1193,16 @@ final class Firewall
         foreach ($destinations as $destination) {
             $kind = $destination['kind'];
             unset($destination['kind']);
+            if ($kind === 'dns_out') {
+                // The kernel initially selects WAN for the provider resolver. PF
+                // translates that source before the filter's route-to can use
+                // WireGuard, so exclude this exact tunnel DNS flow from WAN NAT.
+                $firewall->registerSourceNatRule(self::PROBE_NO_NAT_PRIORITY, [
+                    'nonat' => true, 'ipprotocol' => 'inet', 'protocol' => 'tcp/udp',
+                    'from' => $address, 'to' => $destination['to'], 'dstport' => '53',
+                    'descr' => 'Blank VPN & Proxy preserves tunnel DNS source'
+                ]);
+            }
             $label = Policy::marker($kind, $profile['id'] . $destination['to']);
             $base = $destination + [
                 'direction' => 'out', 'ipprotocol' => 'inet', 'from' => $address,

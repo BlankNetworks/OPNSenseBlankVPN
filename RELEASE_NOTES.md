@@ -97,3 +97,8 @@
 - Saved VPN and proxy servers have selection checkboxes, Select all, and Remove selected. Proxy selection covers every page. Removal validates the selection and protects servers referenced by routing settings or device rules.
 - Saved VPN servers show Port between Status and Ping.
 - Proxy columns are Name, Server, Protocol, Core, Ping, and Action. Edit changes the display name while keeping the original server details and connection settings. Custom names survive subscription refreshes.
+
+## 0.8.30
+
+- Preserve the WireGuard source address for provider DNS over UDP and TCP before outbound WAN NAT. Protected Mullvad DNS now follows the selected tunnel.
+- Reset existing LAN internet sessions when activating Whole-Network protection, including sessions already translated to a WAN or VPN address. Accept OPNsense's native PF state-kill response while keeping local and Tailscale states outside the reset.

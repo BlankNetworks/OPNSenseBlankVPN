@@ -9,6 +9,9 @@ namespace OPNsense\Core {
         public static ?array $loaded = null;
         public static bool $failStateReset = false;
         public static array $resets = [];
+        public static ?array $stateList = null;
+        public static string $stateKillResponse = 'killed 1 state';
+        public static array $stateKills = [];
 
         public function configdRun(string $action, bool $async, int $timeout): string
         {
@@ -28,6 +31,13 @@ namespace OPNsense\Core {
 
         public function configdpRun(string $action, array $args, bool $async, int $timeout): string
         {
+            if ($action === 'filter list states' && self::$stateList !== null) {
+                return json_encode(self::$stateList, JSON_THROW_ON_ERROR);
+            }
+            if ($action === 'filter kill state' && self::$stateList !== null) {
+                self::$stateKills[] = $args;
+                return self::$stateKillResponse;
+            }
             if ($action !== 'blankvpn reset_ip' || self::$loaded === null) {
                 throw new \RuntimeException('Unexpected firewall command.');
             }
@@ -221,6 +231,30 @@ namespace {
     checkRouting(Policy::segmentNetworks(['lan', 'opt1']) === [
         '192.168.2.0/24', '2001:db8:12::/64', '10.12.0.0/24', '2001:db8:99::/64'
     ], 'Session resets must include the current tracked IPv6 prefix and static prefixes.');
+    \OPNsense\Core\Backend::$stateList = ['total_entries' => 3, 'details' => [
+        ['src_addr' => '203.0.113.9', 'nat_addr' => '192.168.2.20',
+            'dst_addr' => '1.1.1.1', 'dst_port' => 443,
+            'id' => '0123456789abcdef/89abcdef'],
+        ['src_addr' => '192.168.2.20', 'dst_addr' => '192.168.2.30', 'dst_port' => 443,
+            'id' => '1111111111111111/11111111'],
+        ['src_addr' => '100.100.1.2', 'dst_addr' => '1.1.1.1', 'dst_port' => 443,
+            'id' => '2222222222222222/22222222']
+    ]];
+    Operations::resetSegments(['lan'], ['localNetworks' => []]);
+    checkRouting(\OPNsense\Core\Backend::$stateKills === [['0123456789abcdef', '89abcdef']],
+        'Whole-Network activation closes the existing LAN internet state only, preserving local and Tailscale states.');
+    \OPNsense\Core\Backend::$stateKillResponse = 'killed 0 states';
+    Operations::resetSegments(['lan'], ['localNetworks' => []]);
+    \OPNsense\Core\Backend::$stateKillResponse = 'invalid response';
+    try {
+        Operations::resetSegments(['lan'], ['localNetworks' => []]);
+        throw new LogicException('An unverified PF state reset must fail.');
+    } catch (RuntimeException $error) {
+        checkRouting(str_contains($error->getMessage(), 'could not be reset'),
+            'Reject a malformed state reset response.');
+    }
+    \OPNsense\Core\Backend::$stateList = null;
+    \OPNsense\Core\Backend::$stateKills = [];
     $pathSettings = [
         'enabled' => true, 'coverage' => 'network', 'networkMode' => 'full_multi',
         'networkKillSwitch' => true, 'networkProfile' => 'base',
@@ -391,6 +425,15 @@ namespace {
             $exception['dstport'] === (string)Policy::PROBE_PORT,
             'The exact probe bypasses source NAT before manual and automatic WAN rules on all interfaces.');
     }
+    $withDns = new Plugin();
+    (new ReflectionMethod(Firewall::class, 'registerProfile'))->invoke(null, $withDns, $profiles['jp'], true);
+    $dnsNat = array_values(array_filter($withDns->nat, static fn (array $rule): bool =>
+        ($rule['dstport'] ?? '') === '53'));
+    checkRouting(count($dnsNat) === 1 && $dnsNat[0]['nonat'] === true &&
+        $dnsNat[0]['priority'] < 100 && !isset($dnsNat[0]['interface']) &&
+        $dnsNat[0]['from'] === '10.64.0.9' && $dnsNat[0]['to'] === '10.64.0.1' &&
+        $dnsNat[0]['ipprotocol'] === 'inet' && $dnsNat[0]['protocol'] === 'tcp/udp',
+        'Provider DNS must keep its tunnel source before WAN NAT, for UDP and TCP only at port 53.');
     foreach ([$probe => Policy::PROBE_IP, $alternateProbe => $alternateTarget] as $label => $destination) {
         foreach ([$label, $label . '_block'] as $rule) {
             checkRouting($probeOnly->rules[$rule]['from'] === '10.64.0.9' &&

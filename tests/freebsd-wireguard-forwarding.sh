@@ -223,6 +223,57 @@ check_probe_isolation() {
     fi
 }
 
+write_dns_rules() {
+    protection=$1
+    {
+        printf 'set skip on lo0\n'
+        if [ "$protection" = protected ]; then
+            for protocol in tcp udp; do
+                printf 'no nat inet proto %s from %s to %s port 53\n' \
+                    "$protocol" "$router_tunnel" "$service"
+            done
+        fi
+        cat <<EOF
+nat on $underlay inet from $router_tunnel to any -> $router_underlay
+block all
+pass out quick on $underlay inet proto udp from $router_underlay to $exit_underlay port $wireguard_port keep state
+pass out quick route-to $router_wg inet proto udp from $router_tunnel to $service port 53 keep state label "router_dns"
+block out quick inet proto udp from $router_tunnel to $service port 53 label "dns_guard"
+pass out quick on $underlay inet proto udp from $router_underlay to $service port 53 keep state label "wan_dns"
+EOF
+    } >"$stage/pf.conf"
+    pf -f "$stage/pf.conf"
+    pf -F states
+}
+
+send_dns_packet() {
+    printf 'dns-path-fixture\n' | timeout -k 2 4 jexec "$router" nc -u -w 1 -s "$router_tunnel" "$service" 53 || :
+}
+
+check_dns_nat_isolation() {
+    write_dns_rules legacy
+    send_dns_packet
+    rule_matched wan_dns
+    if rule_matched router_dns; then
+        echo 'The DNS fixture unexpectedly used WireGuard before the NAT exclusion.' >&2
+        exit 1
+    fi
+
+    write_dns_rules protected
+    timeout -k 2 5 jexec "$exit_node" tcpdump -ni "$exit_wg" -c 1 'udp dst port 53' \
+        >"$stage/dns-on-wireguard" 2>/dev/null &
+    capture=$!
+    sleep 0.3
+    send_dns_packet
+    wait "$capture"
+    grep -F "$router_tunnel." "$stage/dns-on-wireguard" >/dev/null
+    rule_matched router_dns
+    if rule_matched wan_dns; then
+        echo 'The protected provider DNS escaped through WAN.' >&2
+        exit 1
+    fi
+}
+
 pf -e
 check_forwarding
 if jexec "$router" sysctl -n net.pf.share_forward >/dev/null 2>&1; then
@@ -234,6 +285,8 @@ fi
 echo 'Whole-Network and per-device TCP passed through policy routing, source NAT and two real WireGuard peers.'
 check_probe_isolation
 echo 'WAN source NAT reproduced the false positive. Probe-specific NAT exclusion keeps the tunnel test on WireGuard and blocks WAN fallback.'
+check_dns_nat_isolation
+echo 'Provider DNS kept its tunnel source and crossed WireGuard after the targeted NAT exclusion.'
 
 wireguard_port=53
 jexec "$exit_node" wg set "$exit_wg" listen-port "$wireguard_port"
