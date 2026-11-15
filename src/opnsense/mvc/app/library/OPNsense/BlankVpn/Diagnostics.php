@@ -238,7 +238,7 @@ final class Diagnostics
         return is_array($status) ? $status : [];
     }
 
-    public function nativeTailnetSetup(array $status): array
+    public function nativeTailnetSetup(array $status, ?bool $noSnat = null): array
     {
         $settings = $this->config->OPNsense->tailscale->settings ?? null;
         $disableSnat = (string)($settings->disableSNAT ?? '') === '1';
@@ -254,7 +254,10 @@ final class Diagnostics
             } elseif (!$disableSnat) {
                 $reason = 'Check Disable SNAT in OPNsense Tailscale advanced settings and apply from the LAN.';
             } else {
-                if (!$this->nativeTailnetInterfaceReady($status)) {
+                $noSnat ??= $this->nativeTailnetNoSnat();
+                if (!$noSnat) {
+                    $reason = 'Tailscale is still source-NATing peers. The OPNsense Disable SNAT switch alone may not set the daemon flag; apply --snat-subnet-routes=false from the LAN or console, then refresh.';
+                } elseif (!$this->nativeTailnetInterfaceReady($status)) {
                     $reason = 'The Tailscale kernel interface is not ready. Apply Tailscale settings from the LAN, then refresh.';
                 } elseif (trim(Resolver::command(['/sbin/sysctl', '-n', 'net.inet.ip.forwarding'], false)) !== '1') {
                     $reason = 'IPv4 forwarding is off. Apply the OPNsense Tailscale exit-node settings from the LAN, then refresh.';
@@ -264,6 +267,13 @@ final class Diagnostics
             }
         }
         return ['ready' => $reason === '', 'disableSnat' => $disableSnat, 'reason' => $reason];
+    }
+
+    private function nativeTailnetNoSnat(): bool
+    {
+        $output = Resolver::command(['/bin/timeout', '3', '/usr/local/bin/tailscale', 'debug', 'prefs'], false);
+        $prefs = json_decode($output, true);
+        return is_array($prefs) && ($prefs['NoSNAT'] ?? null) === true;
     }
 
     private function nativeTailnetInterfaceReady(array $status): bool

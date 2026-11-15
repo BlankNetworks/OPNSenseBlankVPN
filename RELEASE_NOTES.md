@@ -104,3 +104,8 @@
 - Match the client DNS destination port in OPNsense redirect rules, so Whole-Network and device queries reach the selected VPN or proxy resolver instead of the Kill Switch DNS block.
 - Reset existing LAN internet sessions when activating Whole-Network protection, including sessions already translated to a WAN or VPN address. Accept OPNsense's native PF state-kill response while keeping local and Tailscale states outside the reset.
 - Reset a device's translated internet sessions when its own routing or Kill Switch policy changes, while retaining other devices and management sessions.
+
+## 0.8.31
+
+- Tailscale readiness checks the daemon's live no-SNAT preference. os-tailscale 1.4 can enable its kernel interface without setting this preference; Blank VPN now explains the missing step instead of reporting peer routing ready.
+- Document the protected Tailscale exit-node setup and physical iPhone tests through both a Swiss proxy and Mullvad WireGuard, including the distinction between Tailscale's direct-WAN userspace path and Blank VPN's PF path.

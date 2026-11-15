@@ -76,7 +76,11 @@ namespace {
     check(!$unchecked['ready'] && !$unchecked['disableSnat'] && str_contains($unchecked['reason'], 'Check Disable SNAT'),
         'The setup message must identify the unchecked SNAT option.');
     $tailnetConfig->OPNsense->tailscale->settings->disableSNAT = '1';
-    $checked = $tailnetDiagnostics->nativeTailnetSetup($status);
+    $missingDaemonFlag = $tailnetDiagnostics->nativeTailnetSetup($status, false);
+    check(!$missingDaemonFlag['ready'] && $missingDaemonFlag['disableSnat'] &&
+        str_contains($missingDaemonFlag['reason'], '--snat-subnet-routes=false'),
+        'The plugin checkbox alone must not report Tailscale peer routing ready when daemon SNAT remains enabled.');
+    $checked = $tailnetDiagnostics->nativeTailnetSetup($status, true);
     check(!$checked['ready'] && $checked['disableSnat'] && str_contains($checked['reason'], 'kernel interface'),
         'Saved SNAT setting must be separate from the live kernel status.');
 
