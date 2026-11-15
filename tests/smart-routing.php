@@ -506,6 +506,14 @@ namespace {
     checkRouting($good->rules[$smartScope]['quick'] === false && $good->rules[$smartScope]['to_not'], 'Local exceptions must not short-circuit the service rules.');
     checkRouting($good->nat[0]['to'] === '<' . $table . '>' && $good->nat[0]['from'] === 'lan', 'Scope Multi-Path NAT by destination and source network.');
     checkRouting(count($good->dns) === 2, 'Capture regular DNS over IPv4 and IPv6 on the selected interface.');
+    foreach ($good->dns as $redirect) {
+        checkRouting($redirect['to'] === 'any' && $redirect['to_port'] === '53',
+            'The OPNsense forward rule must match destination port 53, not the client source port.');
+    }
+    $nativeDns = new Plugin();
+    (new ReflectionMethod(Firewall::class, 'bypassSmartDns'))->invoke(null, $nativeDns, 'lan', '192.168.2.20', 'inet');
+    checkRouting($nativeDns->dns[0]['to'] === 'any' && $nativeDns->dns[0]['to_port'] === '53',
+        'The DNS bypass exception must also match the destination port.');
     $down = new Plugin();
     $compileSmart->invoke(null, $down, $settings, $interfaces, $services, $profiles, ['jp' => ['reachable' => false]]);
     checkRouting(!isset($down->rules[Policy::marker('service', 'streaming:lan')]) &&

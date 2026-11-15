@@ -1057,7 +1057,7 @@ final class Firewall
         if (self::dnsRedirectionAvailable()) {
             $firewall->registerDestinationNatRule(55, [
                 'nordr' => true, 'interface' => $interface, 'ipprotocol' => $family,
-                'from' => $ip, 'protocol' => 'tcp/udp', 'to_port' => '53', 'natreflection' => 'disable',
+                'from' => $ip, 'to' => 'any', 'protocol' => 'tcp/udp', 'to_port' => '53', 'natreflection' => 'disable',
                 'descr' => 'Blank VPN & Proxy uses regular DNS for this address'
             ]);
         }
@@ -1102,7 +1102,7 @@ final class Firewall
         $target = $family === 'inet6' ? '::1' : '127.0.0.1';
         $firewall->registerDestinationNatRule($priority, [
             'interface' => $interface, 'ipprotocol' => $family, 'protocol' => 'tcp/udp',
-            'from' => $ip, 'to_port' => '53', 'target' => $target, 'local-port' => (string)$port,
+            'from' => $ip, 'to' => 'any', 'to_port' => '53', 'target' => $target, 'local-port' => (string)$port,
             'tag' => $tag, 'natreflection' => 'disable', 'descr' => 'Blank VPN & Proxy DNS redirection'
         ]);
         $firewall->registerFilterRule(Policy::PRIORITY + ($default ? 6 : 5), [

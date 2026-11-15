@@ -101,4 +101,5 @@
 ## 0.8.30
 
 - Preserve the WireGuard source address for provider DNS over UDP and TCP before outbound WAN NAT. Protected Mullvad DNS now follows the selected tunnel.
+- Match the client DNS destination port in OPNsense redirect rules, so Whole-Network and device queries reach the selected VPN or proxy resolver instead of the Kill Switch DNS block.
 - Reset existing LAN internet sessions when activating Whole-Network protection, including sessions already translated to a WAN or VPN address. Accept OPNsense's native PF state-kill response while keeping local and Tailscale states outside the reset.

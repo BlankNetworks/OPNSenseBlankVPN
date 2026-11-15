@@ -274,6 +274,19 @@ check_dns_nat_isolation() {
     fi
 }
 
+check_client_dns_redirect() {
+    cat >"$stage/pf.conf" <<EOF
+set skip on lo0
+rdr on $ingress inet proto udp from $client_addr to any port 53 tag client_dns_redirect -> 127.0.0.1 port 47060
+block all
+pass in quick on $ingress inet proto udp from $client_addr to 127.0.0.1 port 47060 tagged client_dns_redirect keep state label "client_dns_redirected"
+EOF
+    pf -f "$stage/pf.conf"
+    pf -F states
+    printf 'client-dns-fixture\n' | timeout -k 2 4 jexec "$client" nc -u -w 1 -s "$client_addr" "$client_gateway" 53 || :
+    rule_matched client_dns_redirected
+}
+
 pf -e
 check_forwarding
 if jexec "$router" sysctl -n net.pf.share_forward >/dev/null 2>&1; then
@@ -287,6 +300,8 @@ check_probe_isolation
 echo 'WAN source NAT reproduced the false positive. Probe-specific NAT exclusion keeps the tunnel test on WireGuard and blocks WAN fallback.'
 check_dns_nat_isolation
 echo 'Provider DNS kept its tunnel source and crossed WireGuard after the targeted NAT exclusion.'
+check_client_dns_redirect
+echo 'A LAN DNS request with an ephemeral source port reached the protected listener redirect.'
 
 wireguard_port=53
 jexec "$exit_node" wg set "$exit_wg" listen-port "$wireguard_port"
