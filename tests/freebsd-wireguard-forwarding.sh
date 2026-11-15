@@ -1,0 +1,167 @@
+#!/bin/sh
+set -eu
+
+# Exercise the actual WireGuard data path without a network connection outside the VM.
+if [ "${1:-}" != --isolated-vm ] || [ "$(uname -s)" != FreeBSD ] ||
+    [ "$(id -u)" -ne 0 ] || [ "$(sysctl -n security.jail.jailed)" != 0 ] ||
+    [ "$(sysctl -in kern.features.vimage)" != 1 ]; then
+    echo 'The WireGuard forwarding test needs root in an isolated FreeBSD VM with VNET.' >&2
+    exit 1
+fi
+
+kldstat -q -m pf || kldload -n pf
+kldstat -q -n if_epair.ko || kldload -n if_epair
+kldstat -q -n if_wg.ko || kldload -n if_wg
+command -v wg >/dev/null
+
+router="bvwg-router-$$"
+client="bvwg-client-$$"
+exit_node="bvwg-exit-$$"
+ingress=''
+underlay=''
+router_wg=''
+exit_wg=''
+stage=$(mktemp -d)
+
+cleanup() {
+    status=$?
+    trap - EXIT HUP INT TERM
+    if [ "$status" -ne 0 ]; then
+        jexec "$router" pfctl -vvsr >&2 || :
+        jexec "$router" pfctl -vvs nat >&2 || :
+        jexec "$router" pfctl -ss >&2 || :
+        jexec "$router" wg show >&2 || :
+        jexec "$exit_node" wg show >&2 || :
+    fi
+    if [ -n "$router_wg" ]; then
+        jexec "$router" ifconfig "$router_wg" destroy 2>/dev/null || :
+    fi
+    if [ -n "$exit_wg" ]; then
+        jexec "$exit_node" ifconfig "$exit_wg" destroy 2>/dev/null || :
+    fi
+    for interface in "$ingress" "$underlay"; do
+        if [ -n "$interface" ]; then
+            ifconfig -j "$router" "$interface" destroy 2>/dev/null || :
+        fi
+    done
+    for jail_name in "$client" "$exit_node" "$router"; do
+        jail -r "$jail_name" 2>/dev/null || :
+    done
+    for interface in "$ingress" "$underlay"; do
+        if [ -n "$interface" ]; then
+            ifconfig "$interface" destroy 2>/dev/null || :
+        fi
+    done
+    rm -rf "$stage"
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+ingress=$(ifconfig epair create)
+underlay=$(ifconfig epair create)
+client_link="${ingress%a}b"
+exit_link="${underlay%a}b"
+jail -c "name=$router" persist vnet "vnet.interface=$ingress" "vnet.interface=$underlay"
+jail -c "name=$client" persist vnet "vnet.interface=$client_link"
+jail -c "name=$exit_node" persist vnet "vnet.interface=$exit_link"
+
+client_addr=100.73.204.22
+client_gateway=100.73.204.1
+router_underlay=192.0.2.1
+exit_underlay=192.0.2.2
+router_tunnel=10.130.65.41
+exit_tunnel=10.130.65.42
+service=198.18.20.1
+service_port=8443
+probe_port=9443
+
+jexec "$router" ifconfig "$ingress" inet "$client_gateway/24" up -txcsum -txcsum6
+jexec "$client" ifconfig "$client_link" inet "$client_addr/24" up -txcsum -txcsum6
+jexec "$router" ifconfig "$underlay" inet "$router_underlay/24" up -txcsum -txcsum6
+jexec "$exit_node" ifconfig "$exit_link" inet "$exit_underlay/24" up -txcsum -txcsum6
+jexec "$exit_node" ifconfig lo0 inet "$service/32" alias up
+jexec "$router" route -n add default "$exit_underlay"
+jexec "$client" route -n add default "$client_gateway"
+jexec "$router" sysctl net.inet.ip.forwarding=1
+
+router_wg=$(jexec "$router" ifconfig wg create)
+exit_wg=$(jexec "$exit_node" ifconfig wg create)
+umask 077
+wg genkey >"$stage/router.key"
+wg genkey >"$stage/exit.key"
+router_key=$(wg pubkey <"$stage/router.key")
+exit_key=$(wg pubkey <"$stage/exit.key")
+jexec "$router" wg set "$router_wg" private-key "$stage/router.key" listen-port 51821 \
+    peer "$exit_key" endpoint "$exit_underlay:51820" allowed-ips 0.0.0.0/0
+jexec "$exit_node" wg set "$exit_wg" private-key "$stage/exit.key" listen-port 51820 \
+    peer "$router_key" allowed-ips "$router_tunnel/32"
+jexec "$router" ifconfig "$router_wg" inet "$router_tunnel/32" mtu 1420 up
+jexec "$exit_node" ifconfig "$exit_wg" inet "$exit_tunnel/24" mtu 1420 up
+
+pf() {
+    jexec "$router" pfctl "$@"
+}
+
+write_rules() {
+    scope=$1
+    # The tunnel has no gateway address. Its WireGuard peer lookup uses the packet destination.
+    cat >"$stage/pf.conf" <<EOF
+set skip on lo0
+table <connected> const { 100.64.0.0/10, 192.0.2.0/24 }
+nat on $router_wg inet from $scope to any -> $router_tunnel
+block all
+block out quick on $underlay inet tagged vpn_client label "plain_wan_guard"
+pass out quick on $underlay inet proto udp from $router_underlay to $exit_underlay port 51820 keep state
+pass out quick route-to $router_wg inet proto tcp from $router_tunnel to $service port $probe_port keep state label "router_probe"
+block out quick inet proto tcp from $router_tunnel to $service port $probe_port
+pass in quick on $ingress route-to $router_wg inet from $scope to ! <connected> scrub (max-mss 1240) tag vpn_client keep state (if-bound) label "client_ingress"
+block in quick on $ingress inet from $scope to ! <connected>
+pass out on $router_wg inet from $router_tunnel scrub (max-mss 1240) tagged vpn_client keep state (floating) label "translated_egress"
+EOF
+    pf -f "$stage/pf.conf"
+    pf -F states
+}
+
+check_tcp() {
+    source_jail=$1 source_addr=$2 port=$3 expected=$4
+    jexec "$exit_node" sh -c 'printf "%s\n" "$3" | nc -N -w 5 -l "$1" "$2"' \
+        sh "$service" "$port" "$expected" &
+    listener=$!
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        if jexec "$exit_node" sockstat -4l | grep -Fq "$service:$port"; then
+            break
+        fi
+        sleep 0.1
+    done
+    actual=$(jexec "$source_jail" nc -N -w 4 -s "$source_addr" "$service" "$port" </dev/null) || {
+        echo "TCP request failed for $expected." >&2
+        exit 1
+    }
+    wait "$listener"
+    if [ "$actual" != "$expected" ]; then
+        echo "Expected TCP response \"$expected\", got \"$actual\"." >&2
+        exit 1
+    fi
+}
+
+check_forwarding() {
+    write_rules 100.64.0.0/10
+    check_tcp "$router" "$router_tunnel" "$probe_port" 'router probe'
+    check_tcp "$client" "$client_addr" "$service_port" 'Whole-Network WireGuard'
+    pf -s labels | awk '$1 == "translated_egress" && $3 > 0 { found=1 } END { exit !found }'
+
+    write_rules "$client_addr"
+    check_tcp "$client" "$client_addr" "$service_port" 'per-device WireGuard'
+    pf -s labels | awk '$1 == "translated_egress" && $3 > 0 { found=1 } END { exit !found }'
+}
+
+pf -e
+check_forwarding
+if jexec "$router" sysctl -n net.pf.share_forward >/dev/null 2>&1; then
+    for enabled in 0 1; do
+        jexec "$router" sysctl "net.pf.share_forward=$enabled"
+        check_forwarding
+    done
+fi
+echo 'Whole-Network and per-device TCP passed through policy routing, source NAT and two real WireGuard peers.'
