@@ -1015,7 +1015,9 @@
                     const name = cell(row, profile.name || profile.relay, '', used + ' device assignment' + (used === 1 ? '' : 's')
                         + ' · ' + services + ' service' + (services === 1 ? '' : 's'));
                     name.dataset.serverName = profile.id;
-                    cell(row, providerName(profile), '', profile.relay || profile.providerServer || profile.gateway || profile.protocol || 'Imported WireGuard');
+                    name.querySelector('small').title = name.querySelector('small').textContent;
+                    const server = cell(row, providerName(profile), '', profile.relay || profile.providerServer || profile.gateway || profile.protocol || 'Imported WireGuard');
+                    server.querySelector('small').title = server.querySelector('small').textContent;
                     const status = cell(row, vpnStatus(profile), 'Status');
                     status.className = 'bv-vpn-status';
                     status.dataset.vpnStatus = profile.id;
@@ -1658,6 +1660,7 @@
                 name.dataset.serverName = node.id;
                 const address = endpoint(node.host, node.port);
                 const server = cell(row, node.serverName || node.host, 'Server', address);
+                server.querySelector('small').title = address;
                 if (node.legacy) {
                     const warning = document.createElement('span');
                     warning.textContent = 'Legacy';
