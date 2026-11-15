@@ -109,3 +109,9 @@
 
 - Tailscale readiness checks the daemon's live no-SNAT preference. os-tailscale 1.4 can enable its kernel interface without setting this preference; Blank VPN now explains the missing step instead of reporting peer routing ready.
 - Document the protected Tailscale exit-node setup and physical iPhone tests through both a Swiss proxy and Mullvad WireGuard, including the distinction between Tailscale's direct-WAN userspace path and Blank VPN's PF path.
+
+## 0.8.32
+
+- Tailscale base and per-device route tests now identify offline peers when no completed client connection is observed. The result tells the operator to reconnect the test device, select OPNsense as its exit node, and retry. A router HTTPS probe still remains separate from client forwarding evidence.
+- Multi-Path route-test and route-detail popups use explicit Close buttons, so the WebGUI can dismiss them even if it intercepts form submissions.
+- Record physical iPhone verification of Chicago Whole-Network + Multi-Path routing with YouTube through Stockholm, including the offline-peer incident and recovery. Both WireGuard exits used UDP 51820; the Tailscale management connection and kill switch remained active.

@@ -2249,11 +2249,18 @@
                     const reachability = result.reachable === true
                         ? target + ' · router HTTPS ' + result.milliseconds + ' ms'
                         : target + ' · ' + (result.detail || 'router HTTPS failed');
+                    const offlinePeers = Array.isArray(result.offlinePeers)
+                        ? result.offlinePeers.filter(name => typeof name === 'string' && name !== '').slice(0, 5) : [];
+                    const unseen = offlinePeers.length
+                        ? 'No completed connection observed from the device. Offline Tailscale peers: '
+                            + offlinePeers.join(', ') + '. Connect the test device, select OPNsense as its exit node, '
+                            + 'open a new page, and try again.'
+                        : 'No completed connection observed from the device. Open a new page on the device and try again.';
                     const observation = {
                         seen: 'Recent device traffic seen in both directions',
                         partial: 'Some recent device connections received replies. Other TCP attempts have no observed reply.',
                         oneway: 'Recent TCP attempts reached the selected route. OPNsense saw no reply for those attempts.',
-                        unseen: 'No completed connection observed from the device. Open a new page on the device and try again.',
+                        unseen,
                         inactive: result.forwardingIssue || 'Device rule has no active VPN path',
                         unavailable: 'Device traffic status unavailable'
                     };
@@ -2453,6 +2460,8 @@
                 root.querySelector('[data-bv-section][aria-pressed="true"]')?.focus();
             }
         });
+        byId('close-ping-dialog').addEventListener('click', () => byId('ping-dialog').close());
+        byId('close-service-test-dialog').addEventListener('click', () => byId('service-test-dialog').close());
         byId('refresh').addEventListener('click', async (event) => {
             const control = event.currentTarget;
             state.deviceRefreshRunning = true;

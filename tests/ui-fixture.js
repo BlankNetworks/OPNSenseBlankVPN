@@ -47,6 +47,11 @@ const reply = {
     refreshRelays: {ok:true, relays:[{id:'ca-test-wg-003',country:'Canada',countryCode:'ca',cityCode:'yyz',city:'Test',hostname:'ca-test-wg-003',active:true}], stale:true, error:'Provider unavailable'}
 };
 window.confirm = () => true;
+// OPNsense and third-party WebGUI code can intercept form submissions globally.
+// Closing route dialogs must work without relying on method="dialog" submission.
+document.addEventListener('submit', (event) => {
+    if (event.target.closest('dialog')) event.preventDefault();
+}, true);
 window.jQuery = (ready) => document.addEventListener('DOMContentLoaded', ready);
 window.jQuery.ajax = async (request) => {
     const [, , , controller, action] = request.url.split('/');
@@ -190,10 +195,11 @@ window.jQuery.ajax = async (request) => {
         reply.dashboard.assignments.find(row => row.id === data.id).paused = !data.enabled;
     }
     if (action === 'testTailnetBase') {
-        return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:'unseen'};
+        return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:'unseen', offlinePeers:['iPhone']};
     }
     if (action === 'testDeviceRoute') {
-        return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:data.id === 'tailnet1' ? tailnetTraffic : 'seen', usingBackup:false};
+        return {ok:true, reachable:true, milliseconds:22.4, deviceTraffic:data.id === 'tailnet1' ? tailnetTraffic : 'seen',
+            offlinePeers:data.id === 'tailnet1' && tailnetTraffic === 'unseen' ? ['Remote iPad'] : [], usingBackup:false};
     }
     if (action === 'testExit' && exitTestError) {
         return {ok:true, reachable:false, detail:exitTestError};
@@ -428,7 +434,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     vpnError.click();
     assert(bv('ping-dialog').open && bv('ping-dialog-detail').textContent === exitTestError,
         'The Ping result must retain the complete error details.');
-    bv('ping-dialog').close();
+    bv('close-ping-dialog').click();
+    assert(!bv('ping-dialog').open, 'The route details Close button must dismiss its modal.');
     renamedVpn.querySelector('.bv-test-dismiss').click();
     assert(vpnError.hidden && renamedVpn.querySelector('[data-test-result] span').textContent === '—' &&
         vpnStatus('vpn1') === 'Error' && steady(renamedVpn, renamedGeometry),
@@ -823,8 +830,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     const baseResult = bv('tailnet-base-test').querySelector('[data-test-result]');
     assert(requests.some(x => x.action === 'testTailnetBase') && baseResult.dataset.result === 'unverified' &&
-        baseResult.textContent.includes('router HTTPS') && baseResult.textContent.includes('No completed connection'),
-        'A successful Tailscale base probe with no observed peer traffic stays unverified.');
+        baseResult.textContent.includes('router HTTPS') && baseResult.textContent.includes('Offline Tailscale peers: iPhone') &&
+        baseResult.textContent.includes('select OPNsense as its exit node'),
+        'A successful Tailscale base probe must identify an offline peer and keep client forwarding unverified.');
     bv('tailnet-coverage').value = 'device';
     bv('tailnet-coverage').dispatchEvent(new Event('input', {bubbles:true}));
     bv('tailnet-coverage-form').requestSubmit(bv('save-tailnet-routing'));
@@ -905,8 +913,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         requests.some(x => x.action === 'testDeviceRoute' && x.data.id === 'tailnet1'),
         'Tailscale Test must update the existing Ping cell even without a completed peer connection.');
     latency.click();
-    assert(bv('ping-dialog').open && bv('ping-dialog-detail').textContent.includes('No completed connection observed'),
-        'Clicking the measured latency explains the separate peer traffic result.');
+    assert(bv('ping-dialog').open && bv('ping-dialog-detail').textContent.includes('Offline Tailscale peers: Remote iPad'),
+        'Clicking the measured latency identifies the offline peer before a route test.');
     bv('ping-dialog').close();
     tailnetTraffic = 'oneway';
     tailnetTable.querySelector('[aria-label="Test Remote iPad"]').click();
@@ -1185,7 +1193,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         bv('service-test-dialog').open && bv('service-test-detail').textContent.includes('www.youtube.com') &&
         bv('service-test-detail').textContent.includes('DNS and firewall match New York'),
         'The Multi-Path test reports its hostname and result without changing the service row layout.');
-    bv('service-test-dialog').close();
+    bv('close-service-test-dialog').click();
+    assert(!bv('service-test-dialog').open, 'The Multi-Path route test Close button must dismiss its modal.');
     const downRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('Unavailable route'));
     assert(downRow.cells[2].textContent.includes('Selected server unavailable · Matching traffic blocked') &&
         !youtubeRow.cells[2].textContent.includes('Matching traffic blocked'),
@@ -1194,7 +1203,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(bv('service-test-detail').textContent.includes('Selected server unavailable. Matching traffic is blocked'),
         'The route test should display service-specific blocking.');
-    bv('service-test-dialog').close();
+    bv('close-service-test-dialog').click();
+    assert(!bv('service-test-dialog').open, 'The failed Multi-Path route test must also close.');
     reply.dashboard.settings.networkRouting.lan = {gateway:null, outage:true, statusKnown:true, blockedServices:0};
     bv('refresh').click();
     await wait();

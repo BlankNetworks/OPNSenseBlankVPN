@@ -9,14 +9,12 @@
     <dialog id="bv-ping-dialog" class="bv-panel bv-ping-dialog" aria-labelledby="bv-ping-dialog-title">
         <h2 id="bv-ping-dialog-title">Test details</h2>
         <p id="bv-ping-dialog-detail"></p>
-        <form method="dialog">
-            <button type="submit" class="btn btn-default">Close</button>
-        </form>
+        <button id="bv-close-ping-dialog" type="button" class="btn btn-default">Close</button>
     </dialog>
     <dialog id="bv-service-test-dialog" class="bv-panel bv-ping-dialog" aria-labelledby="bv-service-test-title">
         <h2 id="bv-service-test-title">Multi-Path route test</h2>
         <div id="bv-service-test-detail" class="bv-route-test-detail" role="status"></div>
-        <form method="dialog"><button type="submit" class="btn btn-default">Close</button></form>
+        <button id="bv-close-service-test-dialog" type="button" class="btn btn-default">Close</button>
     </dialog>
 
     <nav class="bv-navigation" aria-label="Blank VPN &amp; Proxy pages">

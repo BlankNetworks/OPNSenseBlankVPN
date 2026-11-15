@@ -369,6 +369,21 @@ final class Diagnostics
         return $peers;
     }
 
+    public static function offlineTailnetPeers(array $status, ?string $ip = null): array
+    {
+        $names = [];
+        foreach (self::tailnetPeers($status) as $peer) {
+            if ($peer['online'] || ($ip !== null && $peer['ipv4'] !== $ip)) {
+                continue;
+            }
+            $names[] = $peer['name'] ?: $peer['ipv4'];
+            if (count($names) === 5) {
+                break;
+            }
+        }
+        return $names;
+    }
+
     public function probeLanNeighbors(array $selected): array
     {
         $commands = [];

@@ -417,8 +417,16 @@ class ServiceController extends ApiControllerBase
             if ($assigned === null) {
                 throw new \DomainException('The assigned VPN or proxy is unavailable.');
             }
-            return $this->testAppliedRoute($model, $assigned, $assignment['ip'], [Policy::marker('device', $id)],
+            $result = $this->testAppliedRoute($model, $assigned, $assignment['ip'], [Policy::marker('device', $id)],
                 $assignment['failure'] === 'backup' ? ($routes[$assignment['backup']] ?? null) : null);
+            if ($result['deviceTraffic'] === 'unseen' && ($assignment['kind'] ?? '') === 'tailnet' &&
+                $assignment['interface'] === Policy::TAILSCALE_DEVICE) {
+                $diagnostics = new Diagnostics();
+                $result['offlinePeers'] = Diagnostics::offlineTailnetPeers(
+                    $diagnostics->tailnetStatus(), $assignment['ip']
+                );
+            }
+            return $result;
         }), true, true);
     }
 
@@ -434,10 +442,15 @@ class ServiceController extends ApiControllerBase
             if ($profile === null) {
                 throw new \DomainException('The Tailscale base server is unavailable.');
             }
-            return $this->testAppliedRoute($model, $profile, Policy::TAILSCALE_V4, array_map(
+            $result = $this->testAppliedRoute($model, $profile, Policy::TAILSCALE_V4, array_map(
                 static fn (string $interface): string => Policy::marker('device', 'network:' . $interface),
                 $scope['interfaces']
             ));
+            if ($result['deviceTraffic'] === 'unseen') {
+                $diagnostics = new Diagnostics();
+                $result['offlinePeers'] = Diagnostics::offlineTailnetPeers($diagnostics->tailnetStatus());
+            }
+            return $result;
         }), true, true);
     }
 

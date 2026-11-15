@@ -59,6 +59,17 @@ namespace {
     ]]);
     check(count($peers) === 2 && $peers[0]['ipv4'] === '100.100.1.2' && $peers[0]['ipv6'] === ['fd7a:115c:a1e0::2'] &&
         $peers[1]['name'] === 'laptop', 'Display only known peers and their actual Tailscale addresses.');
+    $peerStatus = ['BackendState' => 'Running', 'Peer' => [
+        ['HostName' => 'Travel iPad', 'Online' => true, 'TailscaleIPs' => ['100.100.1.2']],
+        ['HostName' => 'iPhone', 'Online' => false, 'TailscaleIPs' => ['100.100.1.5']],
+        ['HostName' => '', 'Online' => false, 'TailscaleIPs' => ['100.100.1.6']],
+    ]];
+    $offline = Diagnostics::offlineTailnetPeers($peerStatus);
+    check(count($offline) === 2 && in_array('iPhone', $offline, true) && in_array('100.100.1.6', $offline, true) &&
+        Diagnostics::offlineTailnetPeers($peerStatus, '100.100.1.5') === ['iPhone'] &&
+        Diagnostics::offlineTailnetPeers($peerStatus, '100.100.1.2') === [] &&
+        Diagnostics::offlineTailnetPeers([]) === [],
+        'Route tests identify only offline Tailscale peers, without treating unavailable status as offline.');
 
     $node = ['Name' => 'travel-ipad.example.ts.net.', 'Addresses' => [
         '100.100.1.4/32', 'fd7a:115c:a1e0::4/128', '100.100.0.0/16'
