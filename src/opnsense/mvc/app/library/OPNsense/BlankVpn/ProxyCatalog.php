@@ -62,6 +62,7 @@ final class ProxyCatalog
         $public = array_intersect_key($node, array_flip([
             'id', 'name', 'core', 'protocol', 'host', 'port', 'legacy', 'sources', 'disabled',
         ]));
+        $public['serverName'] = self::originalServerName($node);
         if (self::isManagedNord($node)) {
             $public += array_intersect_key($node, array_flip(['provider', 'providerLocation', 'providerServer']));
         }
@@ -192,9 +193,58 @@ final class ProxyCatalog
         if (!isset($data['nodes'][$id])) {
             throw new DomainException('This proxy server is no longer saved.');
         }
+        $data['nodes'][$id]['serverName'] = self::originalServerName($data['nodes'][$id]);
         $data['nodes'][$id]['name'] = self::serverName($name);
         $data['nodes'][$id]['customName'] = true;
         self::save($data);
+    }
+
+    private static function originalServerName(array $node): string
+    {
+        // Older custom aliases did not retain the upstream label. Do not present
+        // the edited name as though it were the original server name.
+        return (string)($node['serverName'] ?? $node['providerServer'] ??
+            $node['config']['name'] ?? $node['config']['tag'] ??
+            (empty($node['customName']) ? ($node['name'] ?? $node['host'] ?? '') : ($node['host'] ?? '')));
+    }
+
+    /** Build the entire edit before writing anything; callers hold Operations::exclusive. */
+    public static function prepareRemoval(array $ids, array $pinned, bool $managedNord = false): array
+    {
+        $before = self::read();
+        $after = $before;
+        foreach ($ids as $id) {
+            if (!is_string($id) || !isset($before['nodes'][$id])) {
+                throw new DomainException('A selected server is no longer saved. Refresh the list and try again.');
+            }
+            if (in_array($id, $pinned, true)) {
+                throw new DomainException('Remove the selected servers from their proxy exits before deleting them.');
+            }
+            if ($managedNord) {
+                self::dropManagedNord($after, $id);
+            } else {
+                if (self::isManagedNord($before['nodes'][$id])) {
+                    throw new DomainException('Remove managed VPN servers from the VPN server list.');
+                }
+                unset($after['nodes'][$id]);
+            }
+        }
+        foreach ($after['feeds'] as $feedId => &$feed) {
+            $feed['count'] = count(array_filter($after['nodes'], static fn (array $node): bool =>
+                in_array($feedId, $node['sources'] ?? [], true)));
+        }
+        unset($feed);
+        return compact('before', 'after');
+    }
+
+    public static function applyRemoval(array $plan): void
+    {
+        if (self::read() !== $plan['before']) {
+            throw new DomainException('The server list changed. Refresh the list and try again.');
+        }
+        // writeState replaces the private catalog atomically. No fallible work
+        // follows this write in the configuration transaction.
+        self::save($plan['after']);
     }
 
     public static function addFeed(string $name, string $url, bool $auto, array $pinned): array
@@ -382,6 +432,7 @@ final class ProxyCatalog
         unset($entry);
         foreach ($nodes as $id => $node) {
             $existing = $data['nodes'][$id] ?? [];
+            $node['serverName'] = self::originalServerName($node);
             if ($source !== self::MANAGED_NORD) {
                 if (self::isManagedNord($existing)) {
                     // A generic import of the same endpoint cannot replace the managed exit.

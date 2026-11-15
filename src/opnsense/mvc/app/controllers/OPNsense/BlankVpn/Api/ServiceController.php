@@ -1212,6 +1212,73 @@ class ServiceController extends ApiControllerBase
         }), true, true);
     }
 
+    public function removeProfilesAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $selection = $this->removalSelection(true);
+            $ids = $selection['profiles'];
+            $nodes = $selection['nodes'];
+            Operations::change(function (BlankVpn $model) use ($ids, $nodes) {
+                $routes = Policy::routes($model);
+                $selected = [];
+                foreach ($ids as $id) {
+                    $route = $routes[$id] ?? null;
+                    if ($route === null || ($route['kind'] ?? '') === 'proxy') {
+                        throw new \DomainException('A selected VPN server is no longer saved. Refresh the list and try again.');
+                    }
+                    $selected[$id] = $route;
+                }
+                $catalogRemoval = $nodes === [] ? null : ProxyCatalog::prepareRemoval($nodes, [], true);
+                foreach (ProxyRuntime::routes($model) as $id => $route) {
+                    if (in_array($route['node'], $nodes, true)) {
+                        $selected[$id] = $route;
+                    }
+                }
+
+                // Validate the whole selection, including disabled policies and
+                // native interface references, before staging any deletion.
+                $assignments = Policy::assignments($model);
+                $keys = [];
+                foreach ($selected as $id => $profile) {
+                    foreach ($assignments as $assignment) {
+                        if (in_array($id, [$assignment['profile'], $assignment['backup']], true)) {
+                            throw new \DomainException('Remove the selected servers from every device policy before deleting them.');
+                        }
+                    }
+                    $this->requireUnusedByRouting($model, $id);
+                    if (!in_array($profile['kind'] ?? '', ['native', 'proxy'], true)) {
+                        WireGuard::validateRemoval($profile);
+                        if ($profile['relay'] !== '' && !empty($profile['accountBinding'])) {
+                            $keys[$id] = WireGuard::ownedPrivateKey($profile);
+                        }
+                    }
+                }
+                $removedProfiles = [];
+                $reload = false;
+                foreach ($selected as $id => $profile) {
+                    if (($profile['kind'] ?? '') === 'proxy') {
+                        $model->proxyRoutes->route->del($id);
+                        $reload = $reload || Policy::anyEnabled(Policy::settings($model));
+                    } elseif (($profile['kind'] ?? '') === 'native') {
+                        $model->nativeRoutes->route->del($id);
+                        $reload = true;
+                    } else {
+                        if (isset($keys[$id])) {
+                            (new Mullvad())->rememberRouterKey($profile['accountBinding'], $keys[$id]);
+                        }
+                        WireGuard::remove($profile);
+                        $model->profiles->profile->del($id);
+                        $removedProfiles[] = $profile;
+                        $reload = true;
+                    }
+                }
+                return compact('removedProfiles', 'reload') +
+                    ($catalogRemoval === null ? [] : ['catalogRemoval' => $catalogRemoval]);
+            });
+            return ['removed' => count($ids) + count($nodes)];
+        }), true, true);
+    }
+
     public function settingsAction()
     {
         return $this->respond(fn () => Operations::exclusive(function () {
@@ -2196,6 +2263,16 @@ class ServiceController extends ApiControllerBase
         }), true, true);
     }
 
+    public function removeProxyNodesAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $ids = $this->removalSelection(false);
+            $plan = ProxyCatalog::prepareRemoval($ids, array_column(ProxyRuntime::routes(new BlankVpn()), 'node'));
+            ProxyCatalog::applyRemoval($plan);
+            return ['removed' => count($ids)];
+        }), true, true);
+    }
+
     public function enableProxyExitAction()
     {
         return $this->respond(fn () => Operations::exclusive(function () {
@@ -2324,6 +2401,41 @@ class ServiceController extends ApiControllerBase
             }
         }
         return array_values(array_unique($items));
+    }
+
+    private function removalSelection(bool $vpn): array
+    {
+        // One JSON field keeps large selections intact under PHP max_input_vars.
+        // The bound covers all twelve subscriptions at their maximum size.
+        $json = $this->input('selection', 3145728);
+        $selection = json_decode($json, true, 4);
+        if (!is_array($selection) || ($vpn &&
+            (array_diff(array_keys($selection), ['profiles', 'nodes']) !== [] ||
+             !isset($selection['profiles'], $selection['nodes'])))) {
+            throw new \DomainException('The removal selection is invalid. Refresh the list and try again.');
+        }
+        $groups = $vpn ? $selection : ['nodes' => $selection];
+        $total = 0;
+        foreach ($groups as $kind => &$ids) {
+            if (!is_array($ids) || !array_is_list($ids)) {
+                throw new \DomainException('The removal selection must be a list of saved servers.');
+            }
+            $pattern = $kind === 'profiles'
+                ? '/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/D'
+                : '/^[a-f0-9]{64}$/D';
+            foreach ($ids as $id) {
+                if (!is_string($id) || preg_match($pattern, $id) !== 1) {
+                    throw new \DomainException('The removal selection contains an invalid server identifier.');
+                }
+            }
+            $ids = array_values(array_unique($ids));
+            $total += count($ids);
+        }
+        unset($ids);
+        if ($total < 1 || $total > 32768) {
+            throw new \DomainException('Select between 1 and 32768 saved servers to remove.');
+        }
+        return $vpn ? $groups : $groups['nodes'];
     }
 
     private function flag(string $field): bool

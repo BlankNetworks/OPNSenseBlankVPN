@@ -91,3 +91,9 @@
 - Managed WireGuard tests report a missing handshake and the upgrade discards older unverified positive tunnel results. Protected routes retain their fail-closed behavior.
 - Saved Mullvad exits support UDP 51820 and 53. Changing a port reuses the existing WireGuard key and keeps the saved routing assignments.
 - FreeBSD CI exercises Whole-Network and per-device TCP through real WireGuard peers and checks that a failed tunnel probe cannot fall back to the WAN.
+
+## 0.8.29
+
+- Saved VPN and proxy servers have selection checkboxes, Select all, and Remove selected. Proxy selection covers every page. Removal validates the selection and protects servers referenced by routing settings or device rules.
+- Saved VPN servers show Port between Status and Ping.
+- Proxy columns are Name, Server, Protocol, Core, Ping, and Action. Edit changes the display name while keeping the original server details and connection settings. Custom names survive subscription refreshes.

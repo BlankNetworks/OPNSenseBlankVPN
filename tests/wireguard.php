@@ -46,6 +46,16 @@ function proc_close($process): int
 final class WireGuardBackendFixture
 {
     public static array $records = [];
+    public static array $applies = [];
+
+    public function configdpRun(string $action, array $arguments): string
+    {
+        if (!in_array([$action, $arguments], [['template reload', ['OPNsense/Wireguard']], ['wireguard configure', []]], true)) {
+            throw new RuntimeException('Unexpected WireGuard apply operation.');
+        }
+        self::$applies[] = [$action, $arguments];
+        return 'OK';
+    }
 
     public function configdRun(string $action, bool $raiseOnFailure, int $timeout): string
     {
@@ -132,5 +142,18 @@ $second = $routeLookup->invoke(null);
 $underlay->invoke(null, '192.0.2.1', $second);
 checkWireGuard(count(RouteFixture::$lookups) === 35 && $second('default') === 'igc1',
     'The next dashboard batch must see a new WAN route.');
+
+WireGuardBackendFixture::$records = [['type' => 'interface', 'if' => 'wg99']];
+WireGuard::applyRemovals([['interface' => 'wg1'], ['interface' => 'wg2']]);
+checkWireGuard(count(WireGuardBackendFixture::$applies) === 2,
+    'A batch of retired tunnels must render and configure WireGuard once, retaining unrelated devices.');
+WireGuardBackendFixture::$records[] = ['type' => 'interface', 'if' => 'wg2'];
+try {
+    WireGuard::applyRemovals([['interface' => 'wg1'], ['interface' => 'wg2']]);
+    throw new RuntimeException('The second retired interface was not checked.');
+} catch (RuntimeException $error) {
+    checkWireGuard(str_contains($error->getMessage(), 'still present'),
+        'A failed retirement anywhere in the batch must fail apply so the transaction can roll back.');
+}
 
 fwrite(STDOUT, "WireGuard diagnostics tests passed.\n");

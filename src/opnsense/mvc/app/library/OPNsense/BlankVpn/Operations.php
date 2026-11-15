@@ -58,6 +58,9 @@ final class Operations
             if (isset($result['removed'])) {
                 WireGuard::applyRemoval($result['removed']);
             }
+            if (!empty($result['removedProfiles'])) {
+                WireGuard::applyRemovals($result['removedProfiles']);
+            }
             if (!empty($result['reload'])) {
                 self::sync($model, $result['killSwitchReset'] ?? []);
             }
@@ -72,13 +75,16 @@ final class Operations
                     self::resetKillSwitch($ip);
                 }
             }
+            if (isset($result['catalogRemoval'])) {
+                ProxyCatalog::applyRemoval($result['catalogRemoval']);
+            }
         } catch (\Throwable $error) {
             try {
                 self::rollback($original, $expected);
                 if (!empty($result['dhcpProvider'])) {
                     self::applyDhcpReservation($result['dhcpProvider']);
                 }
-                if (isset($result['added']) || isset($result['removed'])) {
+                if (isset($result['added']) || isset($result['removed']) || !empty($result['removedProfiles'])) {
                     WireGuard::apply();
                 }
                 self::sync(new BlankVpn());

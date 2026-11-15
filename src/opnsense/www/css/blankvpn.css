@@ -631,8 +631,39 @@
     table-layout: fixed;
 }
 
+.blankvpn .bv-server-selection-column {
+    width: 3em;
+}
+
+.blankvpn .bv-server-port-column {
+    width: 5em;
+}
+
 .blankvpn .bv-server-status-column {
     width: 6.5em;
+}
+
+.blankvpn .bv-server-selection-cell input {
+    width: 1.1em;
+    height: 1.1em;
+    margin: 0;
+    accent-color: var(--bv-accent);
+    vertical-align: middle;
+}
+
+.blankvpn .bv-select-all {
+    display: inline-flex;
+    align-items: center;
+    gap: .5em;
+    margin: 0;
+}
+
+.blankvpn .bv-select-all span {
+    display: none;
+}
+
+.blankvpn .bv-bulk-actions {
+    margin-block: .5em .75em;
 }
 
 .blankvpn .bv-server-protocol-column {
@@ -760,7 +791,7 @@
     overflow-wrap: anywhere;
 }
 
-@container server-list (max-width: 48em) {
+@container server-list (max-width: 56em) {
     .blankvpn .bv-server-table,
     .blankvpn .bv-server-table tbody,
     .blankvpn .bv-server-table td {
@@ -771,12 +802,22 @@
         display: none;
     }
 
-    .blankvpn .bv-server-table thead {
+    .blankvpn .bv-server-table thead th:not(.bv-server-selection-cell) {
         position: absolute;
         width: 1px;
         height: 1px;
         overflow: hidden;
         clip-path: inset(50%);
+    }
+
+    .blankvpn .bv-server-table thead,
+    .blankvpn .bv-server-table thead tr,
+    .blankvpn .bv-server-table thead .bv-server-selection-cell {
+        display: block;
+    }
+
+    .blankvpn .bv-select-all span {
+        display: inline;
     }
 
     .blankvpn .bv-server-table tbody tr {

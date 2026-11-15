@@ -33,6 +33,8 @@
         const testDisplays = new WeakMap();
         const state = {
             profiles: [],
+            selectedVpns: new Set(),
+            selectedProxies: new Set(),
             assignments: [],
             devices: [],
             tailnetDevices: [],
@@ -268,9 +270,10 @@
                     render();
                 });
             });
-            row.cells[0].append(form);
+            const nameCell = row.querySelector('[data-server-name]');
+            nameCell.append(form);
             if (renderDetails) {
-                row.cells[0].append(renderDetails(current));
+                nameCell.append(renderDetails(current));
             }
             return null;
         }
@@ -868,35 +871,164 @@
             return 'Standby';
         }
 
+        function vpnServers() {
+            return state.profiles.filter((profile) => profile.kind !== 'proxy' || profile.provider === 'nord').sort(compareServers);
+        }
+
+        function proxyServers() {
+            return state.proxyNodes.filter((node) => node.provider !== 'nord');
+        }
+
+        function profileInUse(id) {
+            return state.settings?.networkProfile === id || state.settings?.tailnetNetworkProfile === id
+                || state.assignments.some((assignment) => [assignment.profile, assignment.backup].includes(id))
+                || state.services.some((service) => service.profile === id);
+        }
+
+        function removalReason(kind, item) {
+            if (!state.canManage) {
+                return 'You do not have permission to remove servers.';
+            }
+            if (kind === 'vpn') {
+                return profileInUse(item.id) ? 'Remove this server from routing policies first.' : '';
+            }
+            return state.profiles.some((profile) => profile.node === item.id)
+                ? 'Disable this server before removing it.' : '';
+        }
+
+        function serverSelection(kind) {
+            return kind === 'vpn' ? state.selectedVpns : state.selectedProxies;
+        }
+
+        function selectionItems(kind) {
+            return kind === 'vpn' ? vpnServers() : proxyServers();
+        }
+
+        function updateServerSelection(kind) {
+            const selected = serverSelection(kind);
+            const items = selectionItems(kind);
+            const removable = new Set(items.filter((item) => !removalReason(kind, item)).map((item) => item.id));
+            for (const id of selected) {
+                if (!removable.has(id)) {
+                    selected.delete(id);
+                }
+            }
+            const all = byId(kind + '-select-all');
+            all.checked = removable.size > 0 && selected.size === removable.size;
+            all.indeterminate = selected.size > 0 && selected.size < removable.size;
+            all.disabled = state.busy || removable.size === 0;
+            byId(kind + '-remove-selected').disabled = state.busy || selected.size === 0;
+            const protectedCount = items.length - removable.size;
+            byId(kind + '-selected-count').textContent = selected.size + ' selected'
+                + (kind === 'proxy' && items.length > 50 ? ' across all pages' : '')
+                + (protectedCount ? ' · ' + protectedCount + ' unavailable for removal' : '');
+            for (const checkbox of root.querySelectorAll('[data-server-selection="' + kind + '"]')) {
+                checkbox.checked = selected.has(checkbox.value);
+                checkbox.disabled = state.busy || !removable.has(checkbox.value);
+            }
+        }
+
+        function serverSelectionCell(row, kind, item) {
+            const target = row.insertCell();
+            target.setAttribute('role', 'cell');
+            target.className = 'bv-server-selection-cell';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = item.id;
+            checkbox.dataset.serverSelection = kind;
+            const name = item.name || item.serverName || item.relay || item.id;
+            const reason = removalReason(kind, item);
+            checkbox.setAttribute('aria-label', 'Select ' + name + (reason ? '. ' + reason : ''));
+            checkbox.title = reason || 'Select ' + name;
+            checkbox.disabled = state.busy || Boolean(reason);
+            checkbox.checked = serverSelection(kind).has(item.id);
+            checkbox.addEventListener('change', () => {
+                if (checkbox.checked) {
+                    serverSelection(kind).add(item.id);
+                } else {
+                    serverSelection(kind).delete(item.id);
+                }
+                updateServerSelection(kind);
+            });
+            target.append(checkbox);
+        }
+
+        function toggleAllServers(kind, checked) {
+            const selected = serverSelection(kind);
+            selected.clear();
+            if (checked) {
+                for (const item of selectionItems(kind)) {
+                    if (!removalReason(kind, item)) {
+                        selected.add(item.id);
+                    }
+                }
+            }
+            updateServerSelection(kind);
+        }
+
+        async function removeSelectedServers(kind, control) {
+            if (state.busy) {
+                return;
+            }
+            updateServerSelection(kind);
+            const selected = serverSelection(kind);
+            const items = selectionItems(kind).filter((item) => selected.has(item.id));
+            const fromSubscription = kind === 'proxy' && items.some((item) =>
+                array(item.sources).some((source) => state.proxyFeeds.some((feed) => feed.id === source)));
+            if (!items.length || !window.confirm('Remove ' + items.length + ' selected '
+                + (kind === 'vpn' ? 'VPN' : 'proxy') + ' server' + (items.length === 1 ? '' : 's') + ' from this router?'
+                + (fromSubscription ? ' Their subscriptions will remain. Refreshing a subscription can import its servers again.' : ''))) {
+                return;
+            }
+            const selection = kind === 'vpn' ? {
+                profiles: items.filter((item) => !(item.node && item.provider === 'nord')).map((item) => item.id),
+                nodes: items.filter((item) => item.node && item.provider === 'nord').map((item) => item.node)
+            } : items.map((item) => item.id);
+            await mutate(control, () => api(kind === 'vpn' ? 'removeProfiles' : 'removeProxyNodes', {
+                selection: JSON.stringify(selection)
+            }), items.length + ' server' + (items.length === 1 ? '' : 's') + ' removed.', () => {
+                for (const item of items) {
+                    selected.delete(item.id);
+                    state.tests.delete(kind === 'proxy' || item.node ? 'proxy:' + (item.node || item.id) : 'exit:' + item.id);
+                    if (state.nameEditor?.id === (item.node || item.id)) {
+                        state.nameEditor = null;
+                    }
+                }
+                state.proxyCatalogLoaded = false;
+            });
+            updateServerSelection(kind);
+        }
+
         function renderProfiles() {
             const body = byId('profile-list');
-            const vpns = state.profiles.filter((profile) => profile.kind !== 'proxy' || profile.provider === 'nord').sort(compareServers);
+            const vpns = vpnServers();
             if (!vpns.length) {
-                empty(body, 'No VPN servers have been added.', 5);
+                empty(body, 'No VPN servers have been added.', 7);
             } else {
                 body.replaceChildren();
                 for (const profile of vpns) {
                     const row = body.insertRow();
                     const used = state.assignments.filter((assignment) =>
                         [assignment.profile, assignment.backup].includes(profile.id)).length;
-                    const network = state.settings?.networkProfile === profile.id;
                     const services = state.services.filter((service) => service.profile === profile.id).length;
-                    cell(row, profile.name || profile.relay, '', used + ' device assignment' + (used === 1 ? '' : 's')
+                    serverSelectionCell(row, 'vpn', profile);
+                    const name = cell(row, profile.name || profile.relay, '', used + ' device assignment' + (used === 1 ? '' : 's')
                         + ' · ' + services + ' service' + (services === 1 ? '' : 's'));
+                    name.dataset.serverName = profile.id;
                     cell(row, providerName(profile), '', profile.relay || profile.providerServer || profile.gateway || profile.protocol || 'Imported WireGuard');
                     const status = cell(row, vpnStatus(profile), 'Status');
                     status.className = 'bv-vpn-status';
                     status.dataset.vpnStatus = profile.id;
                     status.setAttribute('aria-live', 'polite');
+                    const port = profile.port || state.proxyNodes.find((node) => node.id === profile.node)?.port;
+                    cell(row, port || '—', 'Port');
                     const ping = cell(row, '—', 'Ping');
                     ping.className = 'bv-ping-cell';
                     const actions = serverControls(row);
                     const remove = button('Remove', (event) => removeProfile(profile, event.currentTarget),
                         'Remove ' + profileName(profile.id));
-                    remove.disabled = network || used > 0 || services > 0;
-                    if (remove.disabled) {
-                        remove.title = 'Remove this server from routing policies first.';
-                    }
+                    remove.disabled = Boolean(removalReason('vpn', profile));
+                    remove.title = removalReason('vpn', profile);
                     if (state.canManage) {
                         const dormant = profile.node && profile.id.startsWith('proxy-');
                         appendConnectionTest(actions, dormant ? 'testProxyNode' : 'testExit',
@@ -922,6 +1054,7 @@
                 }
             }
 
+            updateServerSelection('vpn');
             const choices = routingServers().map(exitChoice);
             const select = byId('profile');
             const selected = select.value;
@@ -1502,7 +1635,7 @@
                 }));
             }
 
-            const nodes = state.proxyNodes.filter((node) => node.provider !== 'nord');
+            const nodes = proxyServers();
             const pages = Math.max(1, Math.ceil(nodes.length / 50));
             state.proxyPage = Math.min(state.proxyPage, pages - 1);
             const offset = state.proxyPage * 50;
@@ -1516,12 +1649,15 @@
             const servers = byId('proxy-list');
             servers.replaceChildren();
             if (!results.length) {
-                empty(servers, 'Import a server or subscription to get started.', 5);
+                empty(servers, 'Import a server or subscription to get started.', 7);
             }
             for (const node of results) {
                 const row = servers.insertRow();
+                serverSelectionCell(row, 'proxy', node);
+                const name = cell(row, node.name || node.serverName || node.host, 'Name');
+                name.dataset.serverName = node.id;
                 const address = endpoint(node.host, node.port);
-                const server = cell(row, node.name, '', address);
+                const server = cell(row, node.serverName || node.host, 'Server', address);
                 if (node.legacy) {
                     const warning = document.createElement('span');
                     warning.textContent = 'Legacy';
@@ -1549,9 +1685,7 @@
                 const enable = button(disabled ? 'Enable' : 'Disable', (event) =>
                     void mutate(event.currentTarget, () => api(disabled ? 'enableProxyExit' : 'disableProxyNode', {id: node.id}),
                         disabled ? 'Proxy enabled.' : 'Proxy disabled.', () => void reloadProxyCatalog()));
-                const assigned = exit && (state.settings?.networkProfile === exit.id
-                    || state.assignments.some((item) => [item.profile, item.backup].includes(exit.id))
-                    || state.services.some((item) => item.profile === exit.id));
+                const assigned = exit && profileInUse(exit.id);
                 enable.disabled = !disabled && Boolean(assigned);
                 if (enable.disabled) {
                     enable.title = 'Remove this server from routing rules first.';
@@ -1563,12 +1697,11 @@
                             'Server removed.', () => void reloadProxyCatalog());
                     }
                 }, 'Remove ' + node.name);
-                remove.disabled = Boolean(exit);
-                if (exit) {
-                    remove.title = 'Disable this server before removing it.';
-                }
+                remove.disabled = Boolean(removalReason('proxy', node));
+                remove.title = removalReason('proxy', node);
                 actions.append(remove);
             }
+            updateServerSelection('proxy');
         }
 
         function proxyProtocol(node) {
@@ -1913,6 +2046,8 @@
                 return;
             }
             state.busy = true;
+            updateServerSelection('vpn');
+            updateServerSelection('proxy');
             control = control || byId('refresh');
             control.disabled = true;
             notice('Waiting for the router…');
@@ -1936,6 +2071,8 @@
             } finally {
                 state.busy = false;
                 control.disabled = false;
+                updateServerSelection('vpn');
+                updateServerSelection('proxy');
             }
         }
 
@@ -2806,6 +2943,14 @@
                 renderCores(result);
             });
         });
+        for (const kind of ['vpn', 'proxy']) {
+            byId(kind + '-select-all').addEventListener('change', (event) => {
+                toggleAllServers(kind, event.currentTarget.checked);
+            });
+            byId(kind + '-remove-selected').addEventListener('click', (event) => {
+                void removeSelectedServers(kind, event.currentTarget);
+            });
+        }
         byId('proxy-prev').addEventListener('click', () => {
             state.proxyPage--;
             renderProxyCatalog();

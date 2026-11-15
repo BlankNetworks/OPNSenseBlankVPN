@@ -294,6 +294,29 @@ final class WireGuard
     /** Stage removal of the owned objects. Native apply then removes the retired runtime instance. */
     public static function remove(array $profile): void
     {
+        [$servers, $peers, $gateways] = self::removalObjects($profile);
+        $config = Config::getInstance()->object();
+        $logical = $profile['logicalInterface'];
+        $servers->servers->server->del($profile['instance']);
+        self::serialize($servers, 'WireGuard instances');
+        $peers->clients->client->del($profile['peer']);
+        self::serialize($peers, 'WireGuard peers');
+        $gateways->gateway_item->del($profile['gatewayId']);
+        if (!empty($profile['gateway6Id'])) {
+            $gateways->gateway_item->del($profile['gateway6Id']);
+        }
+        self::serialize($gateways, 'WireGuard gateways');
+        unset($config->interfaces->$logical);
+        (new InterfaceField())->resetStaticOptions();
+    }
+
+    public static function validateRemoval(array $profile): void
+    {
+        self::removalObjects($profile);
+    }
+
+    private static function removalObjects(array $profile): array
+    {
         [$servers, $peers, $gateways] = self::ownedObjects($profile);
         $config = Config::getInstance()->object();
         $logical = $profile['logicalInterface'];
@@ -313,17 +336,7 @@ final class WireGuard
             throw new RuntimeException('Apply or discard the pending native interface change before removing this profile.');
         }
 
-        $servers->servers->server->del($profile['instance']);
-        self::serialize($servers, 'WireGuard instances');
-        $peers->clients->client->del($profile['peer']);
-        self::serialize($peers, 'WireGuard peers');
-        $gateways->gateway_item->del($profile['gatewayId']);
-        if (!empty($profile['gateway6Id'])) {
-            $gateways->gateway_item->del($profile['gateway6Id']);
-        }
-        self::serialize($gateways, 'WireGuard gateways');
-        unset($config->interfaces->$logical);
-        (new InterfaceField())->resetStaticOptions();
+        return [$servers, $peers, $gateways];
     }
 
     public static function apply(?array $profile = null): void
@@ -353,9 +366,15 @@ final class WireGuard
 
     public static function applyRemoval(array $profile): void
     {
+        self::applyRemovals([$profile]);
+    }
+
+    public static function applyRemovals(array $profiles): void
+    {
         self::apply();
+        $interfaces = array_column($profiles, 'interface');
         foreach (self::runtimeRecords() as $record) {
-            if (($record['type'] ?? '') === 'interface' && ($record['if'] ?? '') === $profile['interface']) {
+            if (($record['type'] ?? '') === 'interface' && in_array($record['if'] ?? '', $interfaces, true)) {
                 throw new RuntimeException('The retired WireGuard device is still present in the kernel.');
             }
         }

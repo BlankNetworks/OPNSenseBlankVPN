@@ -1,6 +1,7 @@
 const requests = [];
 let settingsError = null;
 let exitTestError = null;
+let bulkRemoveError = null;
 let tailnetTraffic = 'unseen';
 const updateStatus = {ok:true, supported:true, enabled:false, running:false, installed:'0.1.39',
     available:'', message:'Check for a Blank VPN & Proxy update.'};
@@ -10,7 +11,7 @@ const reply = {
     dashboard: {
         devices: [{ipv4: '10.0.0.20', ipv4Addresses: ['10.0.0.20', '10.0.0.21'], ipv6: ['fd00::20'], mac:'02:00:00:00:00:20', interface:'lan', interfaceName:'LAN', name:'<b>Device</b>', lastSeen:'2026-11-12T13:30:00Z', stable:true}],
         tailnetDevices: [{kind:'tailnet', name:'Remote iPad', ipv4:'100.101.102.104', ipv6:['fd7a:115c:a1e0::104'], online:true}],
-        profiles: [{id:'vpn1', name:'Canada', relay:'ca-test-wg-001', interface:'wg1', dns:['10.64.0.1'], latestHandshake:1794490200, status:'Recent handshake', receivedBytes:4096, sentBytes:2048}],
+        profiles: [{id:'vpn1', name:'Canada', relay:'ca-test-wg-001', port:51820, interface:'wg1', dns:['10.64.0.1'], latestHandshake:1794490200, status:'Recent handshake', receivedBytes:4096, sentBytes:2048}],
         assignments: [{id:'device1',ip:'10.0.0.20',mac:'02:00:00:00:00:20',interface:'lan',
             label:'<b>Device rule</b>',mode:'disabled',profile:'',kind:'lan'}],
         services: [],
@@ -35,8 +36,8 @@ const reply = {
         storage:{freeBytes:1073741824,coreBytes:0,catalogBytes:1024,reserveBytes:67108864}},
     check: {ok:true, cores:[], storage:{freeBytes:1073741824,coreBytes:0,catalogBytes:1024,reserveBytes:67108864}},
     account: {ok:true, devices:[{name:'Test router'}], maxDevices:5, expiresAt:'2027-01-01'},
-    proxyCatalog: {nodes:[{id:'proxy-1', name:'Example proxy', host:'192.0.2.9', port:1080, core:'mihomo',
-        protocol:'socks5', legacy:true, sources:['feed-1']}], feeds:[{id:'feed-1', name:'Test feed', count:1, auto:true, usage:{upload:1024,download:1024,total:1048576,expire:1798761600}}]},
+    proxyCatalog: {nodes:[{id:'proxy-1', name:'Example proxy', serverName:'Example proxy', host:'192.0.2.9', port:1080, core:'mihomo',
+        protocol:'socks5', legacy:true, sources:['feed-1'], options:{udp:true, tls:{serverName:'proxy.example.test'}}}], feeds:[{id:'feed-1', name:'Test feed', count:1, auto:true, usage:{upload:1024,download:1024,total:1048576,expire:1798761600}}]},
     importProxies: {ok:true, imported:1, skipped:0},
     mullvadAccountStatus: {ok:true, devices:[{name:'Test router'}], maxDevices:5, availableSlots:1, canAddDevices:true},
     providerServers: {ok:true, servers:[{id:'chicago',name:'Chicago'}]},
@@ -134,6 +135,18 @@ window.jQuery.ajax = async (request) => {
         reply.dashboard.profiles.push({id:'vpn2',name:data.name,provider:'mullvad',relay:data.relay,
             interface:'wg3',port:data.port,dns:['10.64.0.1']});
         return {ok:true, profile:'vpn2'};
+    }
+    if (action === 'removeProfiles' || action === 'removeProxyNodes') {
+        if (bulkRemoveError) return {ok:false, error:bulkRemoveError};
+        const selected = JSON.parse(data.selection);
+        if (action === 'removeProfiles') {
+            reply.dashboard.profiles = reply.dashboard.profiles.filter(profile =>
+                !selected.profiles.includes(profile.id) && !selected.nodes.includes(profile.node));
+            reply.proxyCatalog.nodes = reply.proxyCatalog.nodes.filter(node => !selected.nodes.includes(node.id));
+            return {ok:true, removed:selected.profiles.length + selected.nodes.length};
+        }
+        reply.proxyCatalog.nodes = reply.proxyCatalog.nodes.filter(node => !selected.includes(node.id));
+        return {ok:true, removed:selected.length};
     }
     if (action === 'removeProfile') {
         reply.dashboard.profiles = reply.dashboard.profiles.filter(profile => profile.id !== data.id);
@@ -327,8 +340,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const vpnStatus = (id) => bv('profile-list').querySelector('[data-vpn-status="' + id + '"]')?.textContent;
     const vpnPing = vpnRow.querySelector('[data-test-result]');
     assert(vpnTest.textContent === 'Test' && vpnStatus('vpn1') === 'Standby' &&
-        bv('profile-list').closest('table').tHead.rows[0].cells[2].textContent === 'Status' &&
-        bv('profile-list').closest('table').tHead.rows[0].cells[3].textContent === 'Ping' &&
+        bv('profile-list').closest('table').tHead.rows[0].cells[3].textContent === 'Status' &&
+        bv('profile-list').closest('table').tHead.rows[0].cells[4].textContent === 'Port' &&
+        bv('profile-list').closest('table').tHead.rows[0].cells[5].textContent === 'Ping' &&
+        vpnRow.cells[4].textContent.includes('51820') &&
         vpnPing.closest('td') !== vpnTest.closest('td') && vpnPing.firstElementChild.textContent === '—',
         'The VPN Ping column must be separate from the Test action and available before testing.');
     const geometry = (row) => [row, ...row.cells, row.querySelector('[data-test-key]')].map((element) => {
@@ -364,13 +379,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         const presentation = getComputedStyle(table).display;
         if (document.documentElement.clientWidth >= 1200) {
-            const alignment = getComputedStyle(row.cells[0]).textAlign;
+            const alignment = getComputedStyle(row.cells[1]).textAlign;
             assert(presentation === 'table' && ['left', 'start'].includes(alignment),
                 name + ' must align server names with their desktop table heading.');
             assert(buttons.every(button => Math.abs(button.top - buttons[0].top) < 1),
                 name + ' must keep its desktop actions in one row.');
-            const identityStyle = getComputedStyle(row.cells[0]);
-            const detailStyle = getComputedStyle(row.cells[0].querySelector('small'));
+            const identityStyle = getComputedStyle(row.cells[1]);
+            const detailStyle = getComputedStyle(row.querySelector('small'));
             const expectedContent = parseFloat(identityStyle.lineHeight) + parseFloat(detailStyle.lineHeight) +
                 parseFloat(detailStyle.marginTop);
             const expectedHeight = Math.max(buttons[0].height, expectedContent) +
@@ -379,7 +394,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 name + ' must keep its desktop row compact (' +
                 Math.round(row.getBoundingClientRect().height) + 'px, expected up to ' + Math.ceil(expectedHeight + 4) + 'px).');
         } else {
-            const identity = row.cells[0].getBoundingClientRect();
+            const identity = row.cells[1].getBoundingClientRect();
             assert(presentation !== 'table' && buttons[0].top >= identity.bottom - 1,
                 name + ' must stack its details and actions when the available space is narrow.');
         }
@@ -447,6 +462,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'setMullvadPort' && x.data.id === 'vpn1' && x.data.port === 53) &&
         bv('profile-list').querySelector('.bv-mullvad-port select').value === '53' &&
+        bv('profile-list').rows[0].cells[4].textContent.includes('53') &&
         bv('profile-list').querySelector('[data-test-result]').firstElementChild.textContent === '—' &&
         JSON.stringify(reply.dashboard.assignments) === assignmentBeforePort,
         'Saving a Mullvad port must keep the assigned tunnel and clear its old Ping result.');
@@ -561,6 +577,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'check' && x.method === 'POST'), 'approved catalog check did not run');
     assert(bv('proxy-list').textContent.includes('Example proxy'), 'proxy catalog not displayed');
     const proxyRow = bv('proxy-list').rows[0];
+    assert([...proxyRow.closest('table').tHead.rows[0].cells].slice(1).map(cell => cell.textContent.trim()).join(',') ===
+        'Name,Server,Protocol,Core,Ping,Action' && proxyRow.cells[1].textContent.includes('Example proxy') &&
+        proxyRow.cells[2].textContent.includes('192.0.2.9:1080') && proxyRow.cells[2].textContent.includes('Legacy'),
+        'Proxy name and server details must be separate and retain the requested column order and transport warning.');
     const proxyTest = proxyRow.querySelector('[data-test-key]');
     const proxyPing = proxyRow.querySelector('[data-test-result]');
     checkServerLayout(proxyRow, 'Proxy servers');
@@ -579,6 +599,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         'proxy row actions must use simple labels');
     assert(getComputedStyle(failedTest).color === 'rgb(142, 39, 60)',
         'Failed test result lost its warning color.');
+    const proxySettingsBeforeRename = structuredClone(reply.proxyCatalog.nodes[0]);
     bv('proxy-list').querySelector('[aria-label="Edit name for Example proxy"]').click();
     const proxyName = bv('proxy-list').querySelector('.bv-name-editor');
     proxyName.querySelector('input').value = 'SOCKS5 office';
@@ -587,6 +608,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'renameProxyNode' && x.data.id === 'proxy-1' && x.data.name === 'SOCKS5 office') &&
         bv('proxy-list').textContent.includes('SOCKS5 office') &&
         bv('proxy-list').querySelector('.bv-ping-error').title.includes('timed out'), 'Proxy rename lost the row or its result');
+    const renamedProxyRequest = requests.findLast(x => x.action === 'renameProxyNode');
+    assert(Object.keys(renamedProxyRequest.data).sort().join(',') === 'id,name' &&
+        JSON.stringify({...reply.proxyCatalog.nodes[0], name:proxySettingsBeforeRename.name}) === JSON.stringify(proxySettingsBeforeRename) &&
+        bv('proxy-list').rows[0].cells[1].textContent.includes('SOCKS5 office') &&
+        bv('proxy-list').rows[0].cells[2].textContent.includes('Example proxy') &&
+        bv('proxy-list').rows[0].cells[2].textContent.includes('192.0.2.9:1080'),
+        'Renaming must change only the display name and retain original server identity, endpoint, transport, sources, and options.');
     assert(bv('subscription-list').textContent.includes('Test feed'), 'proxy subscription not displayed');
     assert(bv('subscription-list').textContent.includes('2.0 KiB used / 1.0 MiB'), 'subscription quota not displayed');
     assert(bv('subscription-auto').checked, 'auto-refresh should default on for new subscriptions');
@@ -1424,6 +1452,158 @@ document.addEventListener('DOMContentLoaded', async () => {
             x.data.backup === backupText && x.data.confirmation === 'fixture-confirmation') &&
         backupFile.files.length === 0 && bv('backup-restore').disabled && reply.dashboard.settings.enabled === false,
         'Restore must send the reviewed backup and confirmation, clear the file and leave routing off.');
+    // Exercise list selection independently of the routing scenarios above.
+    const savedDashboard = structuredClone(reply.dashboard);
+    const savedCatalog = structuredClone(reply.proxyCatalog);
+    const selectionInput = (kind, id) => document.querySelector('[data-server-selection="' + kind + '"][value="' + id + '"]');
+    const bulkRequests = (action) => requests.filter(request => request.action === action);
+    const refreshLists = async (catalog = false) => {
+        bv('refresh').click();
+        await wait();
+        if (catalog) {
+            buttonByText('subscription-list', 'Refresh').click();
+            await wait();
+        }
+    };
+    const nordBulkId = 'nord-bulk-node';
+    reply.dashboard.profiles = [
+        {id:'bulk-vpn-a', name:'Alpha VPN', relay:'alpha-wg-001', port:53, interface:'wg1'},
+        {id:'bulk-vpn-b', name:'Beta VPN', relay:'beta-wg-001', port:51820, interface:'wg2'},
+        {id:'bulk-vpn-held', name:'Protected VPN', relay:'held-wg-001', port:51820, interface:'wg3'},
+        {id:'proxy-' + nordBulkId, name:'Nord bulk VPN', kind:'proxy', provider:'nord', node:nordBulkId, port:443},
+        {id:'proxy-held', name:'Protected proxy', kind:'proxy', node:'bulk-proxy-held', interface:'tun200'}
+    ];
+    reply.dashboard.assignments = [{id:'held-assignment', mode:'full', profile:'bulk-vpn-held'},
+        {id:'held-proxy-assignment', mode:'full', profile:'proxy-held'}];
+    reply.dashboard.services = [];
+    Object.assign(reply.dashboard.settings, {networkProfile:'', tailnetNetworkProfile:'', coverage:'device',
+        tailnetCoverage:'device', enabled:false, tailnetEnabled:false});
+    reply.proxyCatalog.nodes = [
+        {id:'bulk-proxy-held', name:'Protected proxy', serverName:'Held original', host:'192.0.2.7', port:443, protocol:'trojan', core:'mihomo'},
+        ...Array.from({length:56}, (_, index) => ({id:'bulk-proxy-' + index, name:'Proxy ' + String(index).padStart(2, '0'),
+            serverName:'Imported ' + index, host:'192.0.2.6', port:443, protocol:'trojan', core:'mihomo'})),
+        {id:nordBulkId, name:'Nord bulk VPN', provider:'nord', host:'jp100.nordvpn.com', port:443, protocol:'wireguard', core:'sing-box'}
+    ];
+    await refreshLists(true);
+    document.querySelector('[data-bv-section="vpns"]').click();
+    assert(bv('vpn-remove-selected').disabled && !bv('vpn-select-all').checked &&
+        selectionInput('vpn', 'bulk-vpn-held').disabled && !selectionInput('vpn', 'bulk-vpn-a').disabled &&
+        selectionInput('vpn', 'bulk-vpn-a').closest('td').cellIndex === 0,
+        'VPN selection must start empty in the far-left column and protect assigned profiles.');
+    selectionInput('vpn', 'bulk-vpn-a').click();
+    assert(bv('vpn-select-all').indeterminate && !bv('vpn-remove-selected').disabled &&
+        bulkRequests('removeProfiles').length === 0, 'Selecting VPNs must not remove anything and must set the partial header state.');
+    await refreshLists();
+    assert(selectionInput('vpn', 'bulk-vpn-a').checked && bv('vpn-select-all').indeterminate,
+        'VPN selection must survive a dashboard refresh by profile identity.');
+    reply.dashboard.settings.tailnetNetworkProfile = 'bulk-vpn-a';
+    await refreshLists();
+    assert(selectionInput('vpn', 'bulk-vpn-a').disabled && !selectionInput('vpn', 'bulk-vpn-a').checked &&
+        bv('vpn-remove-selected').disabled, 'A newly assigned Tailscale base must be protected and removed from the pending selection.');
+    reply.dashboard.settings.tailnetNetworkProfile = '';
+    await refreshLists();
+    selectionInput('vpn', 'bulk-vpn-a').click();
+    selectionInput('vpn', 'bulk-vpn-b').click();
+    assert(bv('vpn-selected-count').textContent.includes('2'), 'The VPN selected count must track individual checks.');
+    let bulkConfirmation = '';
+    window.confirm = (message) => { bulkConfirmation = message; return false; };
+    bv('vpn-remove-selected').click();
+    await wait();
+    assert(bulkConfirmation.includes('2') && bulkRequests('removeProfiles').length === 0 &&
+        selectionInput('vpn', 'bulk-vpn-a').checked, 'Cancelling VPN bulk removal must keep both records and selection.');
+    window.confirm = () => true;
+    bulkRemoveError = 'The selected VPN is now assigned. Remove it from routing policies first.';
+    bv('vpn-remove-selected').click();
+    await wait();
+    assert(reply.dashboard.profiles.some(profile => profile.id === 'bulk-vpn-a') &&
+        selectionInput('vpn', 'bulk-vpn-a').checked && !bv('vpn-remove-selected').disabled &&
+        bv('message-detail').textContent.includes('now assigned'),
+        'A failed VPN bulk removal must retain its selection and report the backend error.');
+    bulkRemoveError = null;
+    bv('vpn-remove-selected').click();
+    await wait();
+    const vpnBatch = bulkRequests('removeProfiles').at(-1);
+    const vpnSelected = JSON.parse(vpnBatch.data.selection);
+    assert(vpnBatch.method === 'POST' && vpnSelected.profiles.sort().join(',') === 'bulk-vpn-a,bulk-vpn-b' &&
+        vpnSelected.nodes.length === 0 && !selectionInput('vpn', 'bulk-vpn-a') && !selectionInput('vpn', 'bulk-vpn-b') &&
+        selectionInput('vpn', 'bulk-vpn-held').disabled && bv('vpn-remove-selected').disabled,
+        'One VPN batch request must remove only the checked profiles and clear its selection after success.');
+    bv('vpn-select-all').click();
+    assert(bv('vpn-select-all').checked && !bv('vpn-select-all').indeterminate &&
+        selectionInput('vpn', 'proxy-' + nordBulkId).checked && !selectionInput('vpn', 'bulk-vpn-held').checked,
+        'Select all VPNs must include managed Nord profiles and exclude assigned profiles.');
+    bv('vpn-remove-selected').click();
+    await wait();
+    const nordBatch = JSON.parse(bulkRequests('removeProfiles').at(-1).data.selection);
+    assert(nordBatch.profiles.length === 0 && nordBatch.nodes.join(',') === nordBulkId &&
+        bv('vpn-select-all').disabled && bv('vpn-remove-selected').disabled,
+        'Managed Nord bulk removal must send its node identity and leave assigned VPNs intact.');
+    reply.dashboard.assignments = reply.dashboard.assignments.filter(assignment => assignment.id !== 'held-assignment');
+    await refreshLists();
+    bv('vpn-select-all').click();
+    bv('vpn-remove-selected').click();
+    await wait();
+    assert(bv('profile-list').textContent.includes('No VPN servers') && bv('vpn-select-all').disabled &&
+        !bv('vpn-select-all').checked && !bv('vpn-select-all').indeterminate && bv('vpn-remove-selected').disabled &&
+        bv('profile-list').rows[0].cells[0].colSpan === 7,
+        'Removing every eligible VPN must produce a correctly spanned empty list and reset all selection controls.');
+    document.querySelector('[data-bv-section="proxies"]').click();
+    assert(bv('proxy-count').textContent.includes('1–50 of 57') && selectionInput('proxy', 'bulk-proxy-held').disabled,
+        'Proxy pagination must exclude managed VPN nodes and protect the active proxy.');
+    selectionInput('proxy', 'bulk-proxy-0').click();
+    assert(bv('proxy-select-all').indeterminate && bulkRequests('removeProxyNodes').length === 0,
+        'Proxy selection must set the partial header without removing a server.');
+    bv('proxy-next').click();
+    selectionInput('proxy', 'bulk-proxy-55').click();
+    assert(bv('proxy-selected-count').textContent.includes('2'), 'Proxy selected count must span both pages.');
+    bv('proxy-prev').click();
+    assert(selectionInput('proxy', 'bulk-proxy-0').checked, 'Changing proxy pages must preserve selected node identities.');
+    await refreshLists(true);
+    assert(selectionInput('proxy', 'bulk-proxy-0').checked && bv('proxy-selected-count').textContent.includes('2'),
+        'Proxy selections must survive a catalog reload.');
+    bv('proxy-select-all').click();
+    assert(bv('proxy-select-all').checked && !bv('proxy-select-all').indeterminate &&
+        bv('proxy-selected-count').textContent.includes('56') && !selectionInput('proxy', 'bulk-proxy-held').checked,
+        'Proxy select all must select every removable server across pages and exclude protected servers.');
+    bv('proxy-next').click();
+    assert(selectionInput('proxy', 'bulk-proxy-55').checked, 'Select all must include proxy nodes outside the current page.');
+    window.confirm = (message) => { bulkConfirmation = message; return false; };
+    bv('proxy-remove-selected').click();
+    await wait();
+    assert(bulkConfirmation.includes('56') && bulkRequests('removeProxyNodes').length === 0 &&
+        selectionInput('proxy', 'bulk-proxy-55').checked,
+        'Cancelling proxy bulk removal must leave the full catalog and selection intact.');
+    window.confirm = () => true;
+    bulkRemoveError = 'A selected proxy is in use. Refresh its routing policies.';
+    bv('proxy-remove-selected').click();
+    await wait();
+    assert(reply.proxyCatalog.nodes.length === 57 && selectionInput('proxy', 'bulk-proxy-55').checked &&
+        !bv('proxy-remove-selected').disabled && bv('message-detail').textContent.includes('in use'),
+        'A failed proxy batch must preserve selection and show the returned error.');
+    bulkRemoveError = null;
+    bv('proxy-remove-selected').click();
+    await wait();
+    const proxyBatch = bulkRequests('removeProxyNodes').at(-1);
+    const proxySelected = JSON.parse(proxyBatch.data.selection);
+    assert(proxyBatch.method === 'POST' && proxySelected.length === 56 && new Set(proxySelected).size === 56 &&
+        proxySelected.includes('bulk-proxy-55') && !proxySelected.includes('bulk-proxy-held') &&
+        reply.proxyCatalog.nodes.length === 1 && bv('proxy-pages').hidden && bv('proxy-select-all').disabled &&
+        bv('proxy-remove-selected').disabled && selectionInput('proxy', 'bulk-proxy-held').disabled,
+        'A single proxy batch must remove selections from every page, preserve assigned servers, and reset pagination.');
+    reply.dashboard.profiles = [];
+    reply.dashboard.assignments = [];
+    await refreshLists();
+    bv('proxy-select-all').click();
+    bv('proxy-remove-selected').click();
+    await wait();
+    assert(reply.proxyCatalog.nodes.length === 0 && bv('proxy-list').textContent.includes('Import a server') &&
+        bv('proxy-list').rows[0].cells[0].colSpan === 7 && bv('proxy-select-all').disabled &&
+        !bv('proxy-select-all').checked && !bv('proxy-select-all').indeterminate && bv('proxy-remove-selected').disabled,
+        'Removing all proxy servers must leave a correctly spanned empty list with disabled selection controls.');
+    reply.dashboard = savedDashboard;
+    reply.proxyCatalog = savedCatalog;
+    await refreshLists(true);
+    system.click();
     reply.dashboard.canManageUpdates = false;
     bv('refresh').click();
     await wait();
@@ -1440,6 +1620,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(getComputedStyle(bv('add-device')).display === 'none', 'management controls were visible to read-only user');
     assert(!bv('device-list').querySelector('button') && !bv('tailnet-device-list').querySelector('button'),
         'Read-only device controls must exclude rule editing.');
+    assert(bv('vpn-select-all').disabled && bv('proxy-select-all').disabled &&
+        bv('vpn-remove-selected').disabled && bv('proxy-remove-selected').disabled &&
+        [...document.querySelectorAll('[data-server-selection]')].every(input => input.disabled),
+        'Read-only access must disable every server selection and bulk removal control.');
     document.body.setAttribute('data-fixture-result', 'PASS');
   } catch (error) {
     document.body.setAttribute('data-fixture-result', 'FAIL ' + error.message);

@@ -204,20 +204,28 @@
         <section class="bv-panel" aria-labelledby="bv-saved-vpn-title">
             <h2 id="bv-saved-vpn-title">Saved VPN servers</h2>
             <p class="text-muted">Use Network Settings to assign a saved server to devices or a whole network.</p>
+            <div class="bv-actions bv-bulk-actions" data-manage-only>
+                <button id="bv-vpn-remove-selected" type="button" class="btn btn-default" disabled>Remove selected</button>
+                <span id="bv-vpn-selected-count" class="text-muted" role="status">0 selected</span>
+            </div>
             <div class="bv-scroll bv-server-scroll">
                 <table class="table bv-table bv-server-table" role="table">
                     <colgroup>
+                        <col class="bv-server-selection-column">
                         <col>
                         <col>
                         <col class="bv-server-status-column">
+                        <col class="bv-server-port-column">
                         <col class="bv-server-ping-column">
                         <col class="bv-server-actions-column">
                     </colgroup>
                     <thead role="rowgroup">
                         <tr role="row">
+                            <th scope="col" role="columnheader" class="bv-server-selection-cell"><label class="bv-select-all"><input id="bv-vpn-select-all" type="checkbox" aria-label="Select all removable VPN servers" title="Select all removable VPN servers"><span>Select all</span></label></th>
                             <th scope="col" role="columnheader">Profile</th>
                             <th scope="col" role="columnheader">VPN service and server</th>
                             <th scope="col" role="columnheader">Status</th>
+                            <th scope="col" role="columnheader">Port</th>
                             <th scope="col" role="columnheader">Ping</th>
                             <th scope="col" role="columnheader" class="bv-server-actions-cell">Actions</th>
                         </tr>
@@ -314,9 +322,15 @@
             </table>
         </div>
         <p id="bv-proxy-count" class="text-muted" role="status"></p>
+        <div class="bv-actions bv-bulk-actions">
+            <button id="bv-proxy-remove-selected" type="button" class="btn btn-default" disabled>Remove selected</button>
+            <span id="bv-proxy-selected-count" class="text-muted" role="status">0 selected</span>
+        </div>
         <div class="bv-scroll bv-server-scroll">
             <table class="table bv-table bv-server-table" role="table">
                 <colgroup>
+                    <col class="bv-server-selection-column">
+                    <col>
                     <col>
                     <col class="bv-server-protocol-column">
                     <col class="bv-server-core-column">
@@ -325,11 +339,13 @@
                 </colgroup>
                 <thead role="rowgroup">
                     <tr role="row">
+                        <th scope="col" role="columnheader" class="bv-server-selection-cell"><label class="bv-select-all"><input id="bv-proxy-select-all" type="checkbox" aria-label="Select all removable proxy servers on every page" title="Select all removable proxy servers on every page"><span>Select all</span></label></th>
+                        <th scope="col" role="columnheader">Name</th>
                         <th scope="col" role="columnheader">Server</th>
                         <th scope="col" role="columnheader">Protocol</th>
                         <th scope="col" role="columnheader">Core</th>
                         <th scope="col" role="columnheader">Ping</th>
-                        <th scope="col" role="columnheader" class="bv-server-actions-cell">Actions</th>
+                        <th scope="col" role="columnheader" class="bv-server-actions-cell">Action</th>
                     </tr>
                 </thead>
                 <tbody id="bv-proxy-list" role="rowgroup"></tbody>

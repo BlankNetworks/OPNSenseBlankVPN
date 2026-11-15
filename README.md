@@ -127,7 +127,9 @@ The GitHub release includes Mihomo, tun2socks, Xray, sing-box, and the Clash YAM
 2. For a provider feed, add its direct HTTPS subscription URL. The router follows public HTTPS redirects after validating each destination and reports DNS, TLS, HTTP, timeout, or format errors. The list shows reported traffic allowance, usage, and expiry when the provider sends those fields. New subscriptions enable automatic refresh every six hours. Change the setting per saved subscription. An enabled exit retains its server if a later refresh removes it.
 3. Choose **Test** to check HTTPS through a proxy. The **Ping** column shows the result. Imported servers are enabled by default and appear in the server picker. Assign a server in **Network Settings** or **Multi-Path Settings** to start its tunnel once routing is enabled. **Disable** hides an unused server from the picker. Each subscription supports up to 2,048 entries and 4 MiB.
 
-Use **Edit** beside a saved VPN exit or proxy server. Proxy names also appear in routing choices and survive subscription refreshes when the same server configuration returns.
+Use **Edit** beside a saved VPN exit or proxy server. Proxy names default to the imported server name and can be changed independently. The **Server** column keeps the original server name and endpoint visible; renaming keeps the protocol, credentials, core, and connection options. Custom names also appear in routing choices and survive subscription refreshes when the same server configuration returns. Saved VPN servers show their configured **Port** between Status and Ping when that information is available.
+
+Use the far-left checkboxes in either saved server list, then **Remove selected**, to remove several unused servers together. The header checkbox selects all removable servers, including proxy servers on other pages. Review the selected count before confirming. Servers still referenced by routing settings or device rules must be unassigned first. Removing saved proxy servers does not remove their subscription; a later subscription refresh can import them again.
 
 ## Update proxy cores
 

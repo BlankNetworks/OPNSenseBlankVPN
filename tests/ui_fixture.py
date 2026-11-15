@@ -56,7 +56,7 @@ def main():
             result = subprocess.run(
                 [args.chromium, *sandbox_flags, "--headless", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run",
                  "--no-default-browser-check", f"--user-data-dir={root / 'profile'}",
-                 "--virtual-time-budget=3500", f"--window-size={size}", "--dump-dom", path.as_uri()],
+                 "--virtual-time-budget=5000", f"--window-size={size}", "--dump-dom", path.as_uri()],
                 capture_output=True,
                 text=True,
                 timeout=30,

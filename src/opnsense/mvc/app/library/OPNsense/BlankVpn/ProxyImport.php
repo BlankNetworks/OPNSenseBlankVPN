@@ -469,8 +469,9 @@ final class ProxyImport
         $canonical = self::canonical($config);
         $id = hash('sha256', $core . "\0" . json_encode($canonical, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE));
         $cipher = $config['cipher'] ?? $config['method'] ?? '';
+        $serverName = trim($shortLabel[0] ?? '') ?: $server . ':' . $port;
         return [
-            'id' => $id, 'name' => trim($shortLabel[0] ?? '') ?: $server . ':' . $port,
+            'id' => $id, 'name' => $serverName, 'serverName' => $serverName,
             'core' => $core, 'protocol' => $protocol === 'socks'
                 ? (($config['version'] ?? '5') === '4' ? 'socks4' : (($config['version'] ?? '') === '4a' ? 'socks4a' : 'socks5'))
                 : $protocol,
