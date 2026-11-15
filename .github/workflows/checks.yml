@@ -31,6 +31,7 @@ jobs:
           node --check tests/ui-fixture.js
           python3 tests/ui_fixture.py --no-sandbox "$(command -v google-chrome)"
           python3 tests/core-archive.py
+          python3 tests/ssh-install.py
       - name: Validate generated configurations with the upstream proxy cores
         run: sh tests/check-proxy-cores.sh
       - name: Build and verify package archive

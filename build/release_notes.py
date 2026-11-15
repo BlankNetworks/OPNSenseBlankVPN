@@ -10,6 +10,10 @@ from package import LEGACY_ARCHES, NAME, ROOT, SERIES, VERSION, abi
 
 def install_instructions(directory, repository):
     release = f"https://github.com/{repository}/releases"
+    installer = ROOT / "scripts/install.sh"
+    installer_name = f"blankvpn-install-{VERSION}.sh"
+    installer_url = f"https://raw.githubusercontent.com/{repository}/v{VERSION}/scripts/install.sh"
+    installer_digest = hashlib.sha256(installer.read_bytes()).hexdigest()
     commands = [
         "## Install or upgrade",
         "",
@@ -22,6 +26,19 @@ def install_instructions(directory, repository):
         f"`opnsense-version -a` reports `{SERIES}`. Run `pkg config ABI` and use the matching section below.",
         "Save a configuration backup under **System → Configuration → Backups** before installing or upgrading.",
         "Keep console access available when testing routing.",
+        "",
+        "### Simple SSH install",
+        "",
+        "From your computer, replace `root@ROUTER` with your existing SSH target and run this one command. "
+        "It checks the installer digest, detects the router's package ABI, verifies the package checksum, "
+        "saves a protected configuration backup, and installs the matching package.",
+        "",
+        "```sh",
+        f"ssh root@ROUTER 'fetch -o /tmp/{installer_name} {installer_url} && "
+        f"sha256 -c {installer_digest} /tmp/{installer_name} && sh /tmp/{installer_name}'",
+        "```",
+        "",
+        "The architecture-specific package and checksum commands remain below for manual installation.",
         "",
     ]
     for arch in LEGACY_ARCHES:
@@ -42,7 +59,8 @@ def install_instructions(directory, repository):
             "**Install downloaded files**",
             "",
             "From your computer, open a terminal in the folder containing both files. Replace "
-            "`USER@ROUTER` with your existing OPNsense SSH user and LAN address or hostname.",
+            "`USER@ROUTER` with your existing OPNsense SSH user and an address reachable from your computer, "
+            "such as its LAN or Tailscale address.",
             "",
             "```sh",
             f"scp {package} {checksum} USER@ROUTER:/tmp/",

@@ -115,3 +115,8 @@
 - Tailscale base and per-device route tests now identify offline peers when no completed client connection is observed. The result tells the operator to reconnect the test device, select OPNsense as its exit node, and retry. A router HTTPS probe still remains separate from client forwarding evidence.
 - Multi-Path route-test and route-detail popups use explicit Close buttons, so the WebGUI can dismiss them even if it intercepts form submissions.
 - Record physical iPhone verification of Chicago Whole-Network + Multi-Path routing with YouTube through Stockholm, including the offline-peer incident and recovery. Both WireGuard exits used UDP 51820; the Tailscale management connection and kill switch remained active.
+
+## 0.8.33
+
+- Add a version-pinned SSH installer for first installs and upgrades. It checks OPNsense and the package ABI, verifies the release package checksum, saves a protected configuration backup, and installs the matching architecture.
+- Add a one-command SSH path to each release page while retaining the explicit package download, checksum, and installation steps.

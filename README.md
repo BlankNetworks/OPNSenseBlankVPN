@@ -19,7 +19,7 @@ OPNsense officially distributes x86-64 images. For NanoPi R4S/R4SE and R5S, star
 
 If Blank VPN & Proxy already has **System Settings → Package updates**, follow [Update from the WebGUI](#update-from-the-webgui). For a first install or to bootstrap WebGUI updates from 0.8.14 or earlier, install one release package. You can upgrade over your existing Blank VPN & Proxy installation.
 
-Use an existing SSH connection or choose **8) Shell** on the local console. For SSH, run `ssh USER@ROUTER` from your computer using your configured SSH account and the router’s LAN address or hostname. Run the install commands from a root shell on the router. Check the edition, version series, and package ABI first. [OPNsense console and SSH](https://docs.opnsense.org/manual/install.html)
+Use an existing SSH connection or choose **8) Shell** on the local console. For SSH, use your configured credentials and a router address reachable from your computer. The simple SSH command below checks the edition, version series, and package ABI for you. For a manual install, check them in a root shell on the router first. [OPNsense console and SSH](https://docs.opnsense.org/manual/install.html)
 
 ```sh
 opnsense-version -n
@@ -29,10 +29,20 @@ pkg config ABI
 
 Choose a release that matches the edition, series, and ABI shown above under [Compatibility](#compatibility). Save an OPNsense configuration backup under **System → Configuration → Backups** before installing or upgrading. Keep console access available when testing routing.
 
+### Simple SSH install
+
+From your computer, replace `root@ROUTER` with your router's SSH target and run this one command using your existing SSH credentials. It installs release **0.8.33** on a supported amd64 or aarch64 OPNsense router. The command verifies the installer digest; the installer verifies the package checksum and saves a protected configuration backup before `pkg add`.
+
+```sh
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.33.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.33/scripts/install.sh && sha256 -c 4be046161c8c67c7b489d2be2bb0936ade83cdc9ca334a0784a5dec36bdec97e /tmp/blankvpn-install-0.8.33.sh && sh /tmp/blankvpn-install-0.8.33.sh'
+```
+
+For a later release, copy its updated **Simple SSH install** command from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). The package install steps below remain available if you prefer to download and inspect the files yourself.
+
 ### Download on your computer
 
-1. Open [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases) and choose a published **Blank VPN & Proxy** release. Its install section lists both architectures and links to each `.pkg` and its `.pkg.sha256` file.
-2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense. The release page gives the exact filenames and copy command.
+1. Open the [0.8.33 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.33), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 
 ### Download from the router over SSH or console
