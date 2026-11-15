@@ -693,9 +693,46 @@ final class Operations
         $local = Policy::localNetworks($settings);
         $backend = new Backend();
         $raw = $backend->configdpRun('filter list states', ['', '2001', '0', '', ''], false, 12);
-        $data = json_decode($raw, true);
+        $states = self::scopedStateIds(json_decode($raw, true), $networks, $local);
+        foreach ($states as $state) {
+            $response = $backend->configdpRun('filter kill state', $state, false, 5);
+            if (self::killedStateCount($response) === null) {
+                throw new \RuntimeException('An existing managed-segment session could not be reset.');
+            }
+        }
+    }
+
+    public static function resetManagedSource(string $source): void
+    {
+        $network = Policy::cidr(str_contains($source, '/') ? $source :
+            $source . (str_contains($source, ':') ? '/128' : '/32'));
+        if ($network === null) {
+            throw new \InvalidArgumentException('Invalid managed client address or network.');
+        }
+        $address = explode('/', $network, 2)[0];
+        foreach ([Policy::TAILSCALE_V4, Policy::TAILSCALE_V6] as $tailnet) {
+            $tailnetAddress = explode('/', $tailnet, 2)[0];
+            if (Policy::contains($tailnet, $address) || Policy::contains($network, $tailnetAddress)) {
+                throw new \InvalidArgumentException('Tailscale management requires its separate state reset.');
+            }
+        }
+        // This runs inside a configd action, so call the native state tools
+        // directly instead of making a nested request to the configd worker.
+        $raw = Resolver::command(['/usr/local/opnsense/scripts/filter/list_states.py',
+            '--filter=', '--limit=2001', '--offset=0', '--label=', '--sort_by=']);
+        $local = Policy::localNetworks(Policy::settings(new BlankVpn()));
+        $states = self::scopedStateIds(json_decode($raw, true), [$network], $local);
+        foreach ($states as [$id, $creator]) {
+            // pfctl reports its count on stderr. The required command checks
+            // its exit status, and a state can disappear between list and kill.
+            Resolver::command(['/sbin/pfctl', '-k', 'id', '-k', $id . '/' . $creator]);
+        }
+    }
+
+    private static function scopedStateIds(mixed $data, array $networks, array $local): array
+    {
         if (!is_array($data['details'] ?? null) || ($data['total_entries'] ?? 2001) > 2000) {
-            throw new \RuntimeException('Too many firewall states to verify a scoped managed-segment activation.');
+            throw new \RuntimeException('Too many firewall states to verify a scoped reset.');
         }
         $states = [];
         foreach ($data['details'] as $state) {
@@ -714,14 +751,9 @@ final class Operations
             $states[] = [$match[1], $match[2]];
         }
         if (count($states) > 128) {
-            throw new \RuntimeException('Too many existing internet sessions on the newly managed segment.');
+            throw new \RuntimeException('Too many existing internet sessions in the managed scope.');
         }
-        foreach ($states as $state) {
-            $response = $backend->configdpRun('filter kill state', $state, false, 5);
-            if (self::killedStateCount($response) === null) {
-                throw new \RuntimeException('An existing managed-segment session could not be reset.');
-            }
-        }
+        return $states;
     }
 
     private static function killedStateCount(string $response): ?int

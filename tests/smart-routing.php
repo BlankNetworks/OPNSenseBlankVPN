@@ -253,6 +253,33 @@ namespace {
         checkRouting(str_contains($error->getMessage(), 'could not be reset'),
             'Reject a malformed state reset response.');
     }
+    $deviceStates = ['total_entries' => 5, 'details' => [
+        ['src_addr' => '203.0.113.9', 'nat_addr' => '192.168.2.20',
+            'dst_addr' => '1.1.1.1', 'dst_port' => 443,
+            'id' => 'aaaaaaaaaaaaaaaa/aaaaaaaa'],
+        ['src_addr' => '203.0.113.9', 'nat_addr' => '192.168.2.21',
+            'dst_addr' => '1.1.1.1', 'dst_port' => 443,
+            'id' => 'bbbbbbbbbbbbbbbb/bbbbbbbb'],
+        ['src_addr' => '127.0.0.1', 'nat_addr' => '192.168.2.20',
+            'dst_addr' => '192.168.2.1', 'dst_port' => 53,
+            'id' => 'cccccccccccccccc/cccccccc'],
+        ['src_addr' => '192.168.2.20', 'dst_addr' => '192.168.2.1', 'dst_port' => 22,
+            'id' => 'dddddddddddddddd/dddddddd'],
+        ['src_addr' => '100.100.1.2', 'dst_addr' => '1.1.1.1', 'dst_port' => 443,
+            'id' => 'eeeeeeeeeeeeeeee/eeeeeeee']
+    ]];
+    $selectDeviceStates = new ReflectionMethod(Operations::class, 'scopedStateIds');
+    checkRouting($selectDeviceStates->invoke(null, $deviceStates, ['192.168.2.20/32'],
+        ['192.168.2.0/24', Policy::TAILSCALE_V4]) === [
+            ['aaaaaaaaaaaaaaaa', 'aaaaaaaa'], ['cccccccccccccccc', 'cccccccc']
+        ], 'A device policy reset closes its translated internet and DNS sessions without touching another device, local SSH, or Tailscale.');
+    try {
+        Operations::resetManagedSource('100.109.125.31');
+        throw new LogicException('The LAN reset must not touch Tailscale management.');
+    } catch (InvalidArgumentException $error) {
+        checkRouting(str_contains($error->getMessage(), 'Tailscale'),
+            'Tailscale states use their dedicated reset path.');
+    }
     \OPNsense\Core\Backend::$stateList = null;
     \OPNsense\Core\Backend::$stateKills = [];
     $pathSettings = [

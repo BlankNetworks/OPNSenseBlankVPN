@@ -70,7 +70,7 @@ try {
             if (!filter_var($ip, FILTER_VALIDATE_IP) && $network === null) {
                 exit(64);
             }
-            Resolver::command(['/sbin/pfctl', '-k', $network ?? $ip]);
+            Operations::resetManagedSource($network ?? $ip);
             echo "ok\n";
             break;
         case 'reset_tailnet':
