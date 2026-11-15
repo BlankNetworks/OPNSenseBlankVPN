@@ -348,7 +348,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         'The VPN Ping column must be separate from the Test action and available before testing.');
     const geometry = (row) => [row, ...row.cells, row.querySelector('[data-test-key]')].map((element) => {
         const {x, y, width, height} = element.getBoundingClientRect();
-        return [x, y, width, height];
+        // Keyboard focus may scroll an offscreen control into view; compare document geometry.
+        return [x + window.scrollX, y + window.scrollY, width, height];
     });
     const steady = (row, before) => geometry(row).every((rect, index) =>
         rect.every((value, dimension) => Math.abs(value - before[index][dimension]) < .5));
@@ -431,7 +432,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     renamedVpn.querySelector('.bv-test-dismiss').click();
     assert(vpnError.hidden && renamedVpn.querySelector('[data-test-result] span').textContent === '—' &&
         vpnStatus('vpn1') === 'Error' && steady(renamedVpn, renamedGeometry),
-        'Dismissing the error details must preserve the server status and layout.');
+        'Dismissing the error details must preserve the server status and layout. ' +
+        JSON.stringify({hidden:vpnError.hidden, status:vpnStatus('vpn1'), before:renamedGeometry, after:geometry(renamedVpn)}));
     exitTestError = null;
     [...bv('profile-list').querySelectorAll('button')].find(button => button.textContent === 'Disable').click();
     await wait();
