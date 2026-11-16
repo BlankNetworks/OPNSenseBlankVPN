@@ -90,23 +90,25 @@ Choose a release that matches the edition, series, and ABI shown above under [Co
 
 To install the newest published release on a supported router, run this from your computer with your existing SSH credentials. The latest-release helper selects the package for the router's architecture, checks the selected release's published installer SHA-256, and then the installer checks the package checksum and saves a protected configuration backup. Review the [helper source](scripts/install-latest.sh) before running it if desired.
 
+If you connect through Tailscale SSH and its access policy uses **check** mode, Tailscale may ask you to approve a fresh SSH connection periodically (12 hours by default). The installer cannot change that tailnet access policy. To stop repeated approval prompts, a tailnet administrator can change the specific SSH rule from `check` to `accept`; this removes the periodic identity check for that rule while retaining Tailscale access control. Review the rule's source, destination, and allowed users before changing it. [Tailscale SSH check mode](https://tailscale.com/docs/features/tailscale-ssh#check-mode)
+
 ```sh
 ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/main/scripts/install-latest.sh && sh /tmp/blankvpn-install-latest.sh'
 ```
 
 To pin this release instead, use the following command. It also checks the installer digest before running it.
 
-Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.44** on a supported amd64 or aarch64 OPNsense router.
+Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.45** on a supported amd64 or aarch64 OPNsense router.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.44.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.44/scripts/install.sh && sha256 -c ffcfb3413c1daf7bfc91a47735674e9681baa3caee4a4c5160b7ba93dfb242a1 /tmp/blankvpn-install-0.8.44.sh && sh /tmp/blankvpn-install-0.8.44.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.45.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.45/scripts/install.sh && sha256 -c 1b1cbb2e52f19530786a2ba75049390ee6e12301c01db1e60fca9e46484f1cc1 /tmp/blankvpn-install-0.8.45.sh && sh /tmp/blankvpn-install-0.8.45.sh'
 ```
 
 The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.
 
 ### Download on your computer
 
-1. Open the [0.8.44 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.44), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+1. Open the [0.8.45 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.45), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
 2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 
@@ -269,6 +271,8 @@ Blank VPN & Proxy can route Tailscale peers only when their decrypted packets re
 Local Whole-Network coverage does not include Tailscale exit-node clients. In a physical os-tailscale 1.4 test with **Disable SNAT** off and Blank VPN's Tailscale scope disabled, an iPhone selected OPNsense as its exit node and reached the internet through the router's direct WAN address while the LAN proxy remained active. That is a working Tailscale exit node, but it is not a protected Blank VPN route. Confirm the public exit address from the peer itself before claiming VPN or proxy coverage.
 
 In Blank VPN & Proxy, open **Tailscale Settings** to check readiness. After confirming the kernel/PF forwarding path, use **Network Settings → Routing coverage** to choose **Tailscale**, then **Whole-Network coverage** or **Only Devices I choose**. Choose Whole-Network to set a base or Multi-Path policy for all peers using the exit node. For individual coverage, select a peer in the table or use **Add by Tailscale IP**. For a separate Tailscale gateway on Ethernet or VLAN, select its dedicated interface under **Tailscale Settings → Use a separate Tailscale gateway**. Use **Disable** beside a saved peer rule to pause the rule and its Kill Switch.
+
+With **Only Devices I choose**, a peer without an active rule uses the local ISP through the exit node, subject to ordinary OPNsense firewall rules. A paused peer rule has the same default. Other peers' Full, Multi-Path, and Kill Switch settings do not apply to it. The router source-NATs that peer's IPv4 traffic on the WAN. If the WAN has no IPv6 gateway, public IPv6 is unavailable; clients should use IPv4. In a live iPhone test on 0.8.44, pausing its Full rule produced an ISP exit address and successfully loaded both a numeric-IP page and `example.com`; restoring the rule reinstated its VPN route. The FreeBSD PF regression test covers a Full peer, a Multi-Path peer, and an unassigned peer together.
 
 For a domain-based test, configure the peer to send ordinary UDP/TCP port 53 DNS directly to the OPNsense Tailscale IP. To do this in the Tailscale admin console, add that IP as a nameserver and enable **Use with exit node**. A restricted nameserver for a test suffix limits the change to that suffix. For a single client, you can instead set DNS on the client and turn off **Use Tailscale DNS settings** there. Disable browser Secure DNS for the test. Tailscale's default exit-node DNS may use its internal proxy, which hides the peer DNS request from the Blank VPN firewall redirect. Use **Test base route** to check the selected server and look for bidirectional peer traffic under its loaded PF rule. If the test names an offline peer, reconnect Tailscale on that device, confirm OPNsense is selected as its exit node, open a new page, and retry. An offline peer has sent no packets to the router; the server's own WireGuard handshake cannot establish client forwarding. Use **Ping** beside a Multi-Path list to check its server, then make a fresh request on the peer to verify actual egress. IP and CIDR lists work without DNS. [Tailscale nameservers with exit nodes](https://tailscale.com/docs/reference/dns-in-tailscale#nameservers-and-exit-nodes)
 

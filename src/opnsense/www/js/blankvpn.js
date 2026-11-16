@@ -749,6 +749,8 @@
                         ? 'Saved · Routing off' : waitingForAddress ? 'Waiting for DHCP' : assignment.appliedRoute || 'Rule saved';
                 } else if (!canUseInterface) {
                     status = tailnet ? 'Exit node setup needed' : 'Interface outside coverage';
+                } else if (tailnet && !wholeTailnet) {
+                    status = 'No VPN or Proxy · local ISP';
                 } else if (!tailnet && device?.addressConflict) {
                     status = 'DHCP address conflict';
                 } else if (macBindingSupported && reserved) {
@@ -1422,7 +1424,7 @@
                 disabled: 'Devices use your normal OPNsense routing.'
             };
             field('coverage-note').textContent = network ? summary[mode]
-                : tailnet ? 'Assign routing rules to individual Tailscale peers below.'
+                : tailnet ? 'Unassigned Tailscale peers use the local ISP with no VPN or proxy, subject to OPNsense firewall rules. Assign individual rules below.'
                     : 'Select the interfaces to manage, then assign routing rules to individual LAN devices below.';
             const saved = coverageSettings(tailnet);
             const ipv6Interfaces = list(saved?.killSwitchIpv6Interfaces).map(networkName);
@@ -2837,7 +2839,9 @@
             const id = state.editing?.id;
             const strict = list(state.settings?.strictInterfaces).includes(state.editing?.interface);
             const explanation = strict ? ' This strict interface blocks unassigned clients.'
-                : ' The device will use the normal network policy and any Multi-Path rules.';
+                : state.editing?.kind === 'tailnet' && state.settings?.tailnetCoverage === 'device'
+                    ? ' This peer will use the local ISP with no Blank VPN or proxy rule.'
+                    : ' The device will use the normal network policy and any Multi-Path rules.';
             if (id && window.confirm('Remove this device assignment?' + explanation)) {
                 void mutate(event.currentTarget, () => api('removeAssignment', {id}), 'Device assignment removed.', () => {
                     byId('assignment').hidden = true;

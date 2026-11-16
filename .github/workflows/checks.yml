@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: Verify policy routing over kernel WireGuard
+      - name: Verify policy routing over kernel WireGuard and PF
         uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
         with:
           release: "15.1"
@@ -63,10 +63,11 @@ jobs:
           copyback: false
           prepare: |
             env ASSUME_ALWAYS_YES=yes pkg bootstrap
-            env ASSUME_ALWAYS_YES=yes pkg install wireguard-tools
+            env ASSUME_ALWAYS_YES=yes pkg install wireguard-tools dnsmasq bind-tools
           run: |
             sh tests/freebsd-wireguard-forwarding.sh --isolated-vm
             sh tests/freebsd-shared-mullvad-key.sh --isolated-vm
+            sh tests/freebsd-kill-switch.sh --isolated-vm
 
   packages:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[publish release]')
@@ -98,7 +99,7 @@ jobs:
           cp "$RUNNER_TEMP/blankvpn-runtime/bin/sing-box" "dist/sing-box-$ARCH"
           cd dist
           sha256sum -c "os-blank-vpn-$PACKAGE_VERSION-$ARCH.pkg.sha256"
-      - name: Verify package, cores, and PF in FreeBSD 15.1
+      - name: Verify package and cores in FreeBSD 15.1
         uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
         env:
           PACKAGE_ARCH: ${{ matrix.arch }}
@@ -111,10 +112,6 @@ jobs:
           run: |
             set -eu
             sh tests/freebsd-package.sh "dist/os-blank-vpn-$PACKAGE_VERSION-$PACKAGE_ARCH.pkg" "$PACKAGE_ARCH"
-            if [ "$PACKAGE_ARCH" = amd64 ]; then
-              env ASSUME_ALWAYS_YES=yes pkg install dnsmasq bind-tools
-              sh tests/freebsd-kill-switch.sh --isolated-vm
-            fi
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: blank-vpn-release-${{ matrix.arch }}

@@ -996,6 +996,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(bv('toggle-tailnet-routing').textContent === 'Disable VPN' &&
         reply.dashboard.settings.tailnetEnabled === true, 'Tailscale Enable VPN must restore its saved scope.');
+    assert(bv('tailnet-coverage-note').textContent.includes('Unassigned Tailscale peers use the local ISP') &&
+        bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').closest('tr').textContent.includes('No VPN or Proxy · local ISP'),
+        'Device coverage must show local ISP as the default for unassigned Tailscale peers.');
     bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
     assert(bv('ip').value === '100.101.102.104' && bv('ipv6').value === 'fd7a:115c:a1e0::104' &&
         bv('interface').value === 'opt2' && bv('device-kind').value === 'tailnet', 'Existing gateway link rules must remain available.');

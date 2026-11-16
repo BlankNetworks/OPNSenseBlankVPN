@@ -326,10 +326,12 @@ jexec "$router" ifconfig "$lan_link" name tailscale0
 lan_link=tailscale0
 peer4=100.101.102.2
 other4=100.101.102.3
+multi4=100.101.102.4
 jexec "$router" ifconfig "$lan_link" inet 100.101.102.1/24 alias
 jexec "$router" ifconfig lo0 inet 127.0.0.1/8 up
 jexec "$client" ifconfig "$client_link" inet "$peer4/24" alias
 jexec "$client" ifconfig "$client_link" inet "$other4/32" alias
+jexec "$client" ifconfig "$client_link" inet "$multi4/32" alias
 jexec "$client" route -n change default 100.101.102.1
 for upstream in "$wan" "$vpn" "$override"; do
     jexec "$upstream" route -n delete default
@@ -352,8 +354,12 @@ jexec "$router" /usr/local/sbin/dnsmasq --conf-file="$stage/dns.conf"
 write_tailnet_rules() {
     mode=$1 base=$2 override_status=$3
     scope=100.64.0.0/10
-    if [ "$mode" = device ]; then
+    if [ "$mode" = device ] || [ "$mode" = mixed ]; then
         scope=$peer4
+    fi
+    service_scope=$scope
+    if [ "$mode" = mixed ]; then
+        service_scope=$multi4
     fi
     {
         printf 'set state-policy floating\n'
@@ -363,7 +369,7 @@ write_tailnet_rules() {
         printf 'table <service> const { %s }\n' "$override4"
         printf 'nat on %s inet from 100.64.0.0/10 to any -> 203.0.113.1\n' "$wan_link"
         printf 'nat on %s inet from %s to any -> 198.51.100.1\n' "$vpn_link" "$scope"
-        printf 'nat on %s inet from %s to <service> -> 10.220.1.1\n' "$override_link" "$scope"
+        printf 'nat on %s inet from %s to <service> -> 10.220.1.1\n' "$override_link" "$service_scope"
         if [ "$base" = up ] && [ "$mode" != multi ]; then
             printf 'rdr on %s inet proto { tcp udp } from %s to any port 53 tag ts_dns -> 127.0.0.1 port %s\n' \
                 "$lan_link" "$scope" "$dns_port"
@@ -372,15 +378,15 @@ write_tailnet_rules() {
         write_egress_guard
         printf 'pass in quick on %s inet proto { tcp udp } from %s to 127.0.0.1 port %s keep state (floating) tagged ts_dns\n' \
             "$lan_link" "$scope" "$dns_port"
-        if [ "$mode" = combined ] || [ "$mode" = multi ]; then
-            printf 'match in on %s inet from %s to ! <connected> tag ts_service\n' "$lan_link" "$scope"
+        if [ "$mode" = combined ] || [ "$mode" = multi ] || [ "$mode" = mixed ]; then
+            printf 'match in on %s inet from %s to ! <connected> tag ts_service\n' "$lan_link" "$service_scope"
             if [ "$override_status" = up ]; then
                 printf 'pass in quick on %s route-to (%s 10.220.1.2) inet to <service> scrub (max-mss 1240) tag %s tagged ts_service keep state (if-bound) label "ts_override"\n' \
                     "$lan_link" "$override_link" "$tunnel_tag"
             fi
             printf 'block in quick on %s inet to <service> tagged ts_service label "ts_override_guard"\n' "$lan_link"
         fi
-        if [ "$mode" = whole ] || [ "$mode" = device ] || [ "$mode" = combined ]; then
+        if [ "$mode" = whole ] || [ "$mode" = device ] || [ "$mode" = combined ] || [ "$mode" = mixed ]; then
             if [ "$base" = up ]; then
                 printf 'pass in quick on %s route-to (%s 198.51.100.2) inet from %s to ! <connected> scrub (max-mss 1240) tag %s keep state (if-bound) label "ts_base"\n' \
                     "$lan_link" "$vpn_link" "$scope" "$tunnel_tag"
@@ -435,6 +441,17 @@ rule_matched ts_base_output
 reachable 4 "$other4" "$wan4"
 rule_matched ts_wan_output
 blocked 4 "$peer4" "$wan4"
+
+# One exit-node peer uses Full, another uses Multi-Path, and an unassigned
+# peer must still reach the ISP without inheriting either peer's kill switch.
+write_tailnet_rules mixed up up
+reachable 4 "$peer4" "$vpn4"
+blocked 4 "$peer4" "$wan4"
+reachable 4 "$multi4" "$override4"
+rule_matched ts_override_output
+reachable 4 "$multi4" "$wan4"
+reachable 4 "$other4" "$wan4"
+rule_matched ts_wan_output
 
 write_tailnet_rules multi up up
 reachable 4 "$peer4" "$override4"

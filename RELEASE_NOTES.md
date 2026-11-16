@@ -184,3 +184,10 @@
 ## 0.8.44
 
 - Rename the Proxy server-list column to **Name / Group**. Servers imported by a subscription show its saved group name above the server's display name; manually added servers continue to show their own name. Existing server identity, endpoint, subscription membership, and edit behavior remain unchanged.
+
+## 0.8.45
+
+- Show **No VPN or Proxy · local ISP** on unassigned Tailscale peers under **Only Devices I choose**, and explain this default beside the coverage selector. Removing a peer rule now explains its ISP fallback.
+- Confirm on the live router that pausing an iPhone's Full rule sends fresh IPv4 traffic through WAN source NAT and returns the ISP address, while both a numeric-IP site and `example.com` load. Restore the Full rule after the test. No forwarding rule change was needed for this path.
+- Exercise Full, Multi-Path, and unassigned Tailscale peers together in the isolated FreeBSD PF regression test. Run that test on every repository push alongside the WireGuard forwarding tests.
+- Document Tailscale SSH check mode and its periodic reapproval under the SSH install instructions.
