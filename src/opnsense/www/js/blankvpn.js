@@ -42,8 +42,10 @@
             discoveryTruncated: false,
             proxyPage: 0,
             proxySortByPing: false,
-            proxySortRunning: false,
-            proxySortStop: false,
+            vpnSortByPing: false,
+            vpnFixedOrder: null,
+            proxyFixedOrder: null,
+            bulkPing: {kind: '', sort: false, stop: false},
             proxyCatalogLoaded: false,
             proxyCatalogRequest: null,
             services: [],
@@ -553,8 +555,8 @@
         }
 
         function showSection(section) {
-            if (section !== 'proxies' && state.proxySortRunning) {
-                state.proxySortStop = true;
+            if (state.bulkPing.kind && section !== state.bulkPing.kind) {
+                state.bulkPing.stop = true;
             }
             state.section = section;
             for (const button of root.querySelectorAll('[data-bv-section]')) {
@@ -899,22 +901,41 @@
         }
 
         function vpnServers() {
-            return state.profiles.filter((profile) => profile.kind !== 'proxy' || profile.provider === 'nord').sort(compareServers);
+            const servers = state.profiles.filter((profile) => profile.kind !== 'proxy' || profile.provider === 'nord');
+            if (state.vpnFixedOrder) {
+                return servers.sort((a, b) => fixedPosition(state.vpnFixedOrder, a.id)
+                    - fixedPosition(state.vpnFixedOrder, b.id) || compareServers(a, b));
+            }
+            if (!state.vpnSortByPing) {
+                return servers.sort(compareServers);
+            }
+            return servers.sort((a, b) =>
+                testLatency(a.node ? 'proxy:' + a.node : 'exit:' + a.id)
+                - testLatency(b.node ? 'proxy:' + b.node : 'exit:' + b.id) || compareServers(a, b));
+        }
+
+        function testLatency(key) {
+            const test = state.tests.get(key);
+            return test?.kind === 'pass' && Number.isFinite(test.milliseconds) ? test.milliseconds : Infinity;
+        }
+
+        function fixedPosition(order, id) {
+            const position = order.indexOf(id);
+            return position < 0 ? Infinity : position;
         }
 
         function proxyServers() {
             const nodes = state.proxyNodes.filter((node) => node.provider !== 'nord');
+            if (state.proxyFixedOrder) {
+                return nodes.sort((a, b) => fixedPosition(state.proxyFixedOrder, a.id)
+                    - fixedPosition(state.proxyFixedOrder, b.id));
+            }
             if (!state.proxySortByPing) {
                 return nodes;
             }
             return nodes.sort((a, b) => {
-                const latency = (node) => {
-                    const test = state.tests.get('proxy:' + node.id);
-                    return test?.kind === 'pass' && Number.isFinite(test.milliseconds)
-                        ? test.milliseconds : Infinity;
-                };
-                const left = latency(a);
-                const right = latency(b);
+                const left = testLatency('proxy:' + a.id);
+                const right = testLatency('proxy:' + b.id);
                 return left === right ? 0 : left - right;
             });
         }
@@ -1039,9 +1060,19 @@
             updateServerSelection(kind);
         }
 
+        function renderBulkPingControls(kind, count) {
+            for (const mode of ['all', 'sort']) {
+                const control = byId(kind === 'vpns' ? 'vpn-ping-' + mode : 'proxy-ping-' + mode);
+                const active = state.bulkPing.kind === kind && state.bulkPing.sort === (mode === 'sort');
+                control.textContent = (active ? 'Stop ' : '') + (mode === 'sort' ? 'Ping & Sort' : 'Ping All');
+                control.disabled = !count || (Boolean(state.bulkPing.kind) && !active);
+            }
+        }
+
         function renderProfiles() {
             const body = byId('profile-list');
             const vpns = vpnServers();
+            renderBulkPingControls('vpns', vpns.length);
             if (!vpns.length) {
                 empty(body, 'No VPN servers have been added.', 7);
             } else {
@@ -1707,8 +1738,7 @@
             }
 
             const nodes = proxyServers();
-            byId('proxy-ping-sort').textContent = state.proxySortRunning ? 'Stop Ping & Sort' : 'Ping & Sort';
-            byId('proxy-ping-sort').disabled = !nodes.length;
+            renderBulkPingControls('proxies', nodes.length);
             const pages = Math.max(1, Math.ceil(nodes.length / 50));
             state.proxyPage = Math.min(state.proxyPage, pages - 1);
             const offset = state.proxyPage * 50;
@@ -2291,7 +2321,7 @@
             const {status, detail, dismiss, error, name} = testDisplays.get(control);
             const result = state.tests.get(control.dataset.testKey);
             control.disabled = control.dataset.disabled === 'true' || result?.kind === 'pending' ||
-                (control.dataset.proxyTest === 'true' && (state.proxyTestRunning || state.proxySortRunning));
+                Boolean(state.bulkPing.kind) || (control.dataset.proxyTest === 'true' && state.proxyTestRunning);
             const failed = result?.kind === 'fail' && result.dismissed !== true;
             if (error) {
                 const routeTest = result?.routeTest === true && !result.dismissed && Boolean(result.latency);
@@ -3128,45 +3158,79 @@
             state.proxyPage++;
             renderProxyCatalog();
         });
-        byId('proxy-ping-sort').addEventListener('click', async () => {
-            if (state.proxySortRunning) {
-                state.proxySortStop = true;
-                byId('proxy-ping-sort-status').textContent = 'Stopping after the current server…';
+        async function bulkPing(kind, sort) {
+            const status = byId(kind === 'vpns' ? 'vpn-ping-status' : 'proxy-ping-status');
+            if (state.bulkPing.kind) {
+                if (state.bulkPing.kind === kind && state.bulkPing.sort === sort) {
+                    state.bulkPing.stop = true;
+                    status.textContent = 'Stopping after the current server…';
+                }
                 return;
             }
             if (state.proxyTestRunning) {
-                byId('proxy-ping-sort-status').textContent = 'Wait for the current server test to finish.';
+                status.textContent = 'Wait for the current server test to finish.';
                 return;
             }
-            const nodes = proxyServers();
-            if (!nodes.length) {
+            const items = kind === 'vpns' ? vpnServers() : proxyServers();
+            if (!items.length) {
                 return;
             }
-            state.proxySortRunning = true;
-            state.proxySortStop = false;
-            state.proxySortByPing = false;
-            renderProxyCatalog();
+            state.bulkPing = {kind, sort, stop: false};
+            if (kind === 'vpns') {
+                state.vpnFixedOrder = items.map((item) => item.id);
+            } else {
+                state.proxyFixedOrder = items.map((item) => item.id);
+            }
+            kind === 'vpns' ? renderProfiles() : renderProxyCatalog();
             let checked = 0;
             try {
-                for (const node of nodes) {
-                    if (state.proxySortStop) {
+                for (const item of items) {
+                    if (state.bulkPing.stop) {
                         break;
                     }
-                    byId('proxy-ping-sort-status').textContent = 'Testing ' + (checked + 1) + ' of ' + nodes.length + ' servers…';
-                    const exit = state.profiles.find((profile) => profile.node === node.id);
-                    await testConnection(exit ? 'testExit' : 'testProxyNode', exit?.id || node.id,
-                        'proxy:' + node.id, true);
+                    status.textContent = 'Testing ' + (checked + 1) + ' of ' + items.length + ' servers…';
+                    const exit = kind === 'vpns' ? item : state.profiles.find((profile) => profile.node === item.id);
+                    const dormant = kind === 'vpns' && item.node && item.id.startsWith('proxy-');
+                    const action = !exit || dormant ? 'testProxyNode' : 'testExit';
+                    const id = action === 'testProxyNode' ? item.node || item.id : exit.id;
+                    const key = kind === 'proxies' || item.node ? 'proxy:' + (item.node || item.id) : 'exit:' + item.id;
+                    await testConnection(action, id, key, kind === 'proxies' || Boolean(item.node));
                     checked++;
                 }
             } finally {
-                state.proxySortRunning = false;
-                state.proxySortByPing = true;
-                byId('proxy-ping-sort-status').textContent = (state.proxySortStop ? 'Stopped after ' : 'Sorted ') +
-                    checked + ' of ' + nodes.length + ' servers by HTTPS latency; failed tests appear last.';
-                state.proxyPage = 0;
-                renderProxyCatalog();
+                const stopped = state.bulkPing.stop;
+                state.bulkPing = {kind: '', sort: false, stop: false};
+                if (sort && !stopped) {
+                    if (kind === 'vpns') {
+                        state.vpnFixedOrder = null;
+                        state.vpnSortByPing = true;
+                    } else {
+                        state.proxyFixedOrder = null;
+                        state.proxySortByPing = true;
+                    }
+                }
+                status.textContent = (stopped ? 'Stopped after ' : sort ? 'Sorted ' : 'Tested ') +
+                    checked + ' of ' + items.length + ' servers.' +
+                    (stopped ? '' : sort ? ' Lowest HTTPS latency first; failed tests last.' : ' Order unchanged.');
+                if (sort && !stopped) {
+                    if (kind === 'vpns') {
+                        renderProfiles();
+                    } else {
+                        state.proxyPage = 0;
+                        renderProxyCatalog();
+                    }
+                } else {
+                    renderBulkPingControls(kind, items.length);
+                    for (const control of root.querySelectorAll('[data-test-key]')) {
+                        updateConnectionTest(control);
+                    }
+                }
             }
-        });
+        }
+        byId('vpn-ping-all').addEventListener('click', () => void bulkPing('vpns', false));
+        byId('vpn-ping-sort').addEventListener('click', () => void bulkPing('vpns', true));
+        byId('proxy-ping-all').addEventListener('click', () => void bulkPing('proxies', false));
+        byId('proxy-ping-sort').addEventListener('click', () => void bulkPing('proxies', true));
         byId('proxy-import').addEventListener('submit', (event) => {
             event.preventDefault();
             const body = byId('proxy-body').value.trim();
@@ -3321,7 +3385,7 @@
             });
         });
         window.addEventListener('pagehide', () => {
-            state.proxySortStop = true;
+            state.bulkPing.stop = true;
             byId('account').value = '';
             byId('proxy-body').value = '';
             byId('subscription-url').value = '';

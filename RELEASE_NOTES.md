@@ -138,3 +138,11 @@
 
 - Keep native Tailscale exit-node traffic on the local ISP WAN when Blank VPN's Tailscale scope is manually disabled, whether or not Local Blank VPN routing remains enabled.
 - Install only the peer WAN pass, reply state, and source NAT for that disabled scope. A missing ISP WAN gateway still leaves internet unavailable.
+
+## 0.8.37
+
+- Fix a WebGUI dashboard error caused by calling OPNsense's console-dependent locale helper from PHP CGI. Offer all 20 OPNsense 26.7 locales without that call.
+- Add Ping All and Ping & Sort to saved VPN and proxy lists. Explain why pre-add Mullvad ICMP and saved-tunnel HTTPS timings differ, and why proxy Ping does not verify client TUN forwarding.
+- Add a latest-release SSH installer that verifies the selected release's published installer digest before running its checksum-checked package installer. Keep version-pinned and manual package commands in every release.
+- Remind Mullvad users to review and delete unused tokens or device registrations while keeping active router devices.
+- Confirm on a physical iPhone using OPNsense as a Tailscale exit node that disabling Blank VPN's Tailscale scope restores local ISP HTTPS and DNS. A fresh WebGUI reload no longer shows the locale error after the live hotfix.

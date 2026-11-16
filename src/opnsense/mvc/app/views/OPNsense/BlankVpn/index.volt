@@ -63,6 +63,7 @@
                     <label class="bv-check bv-save-login"><input id="bv-save-login" type="checkbox" checked> <span data-bv-i18n="Save login on this router">Save login on this router</span></label>
                 </form>
                 <div id="bv-account-status" class="bv-account-status" role="status" aria-live="polite"></div>
+                <p class="text-muted">Mullvad sign-in obtains a short-lived API token. Review your Mullvad account and remove unused tokens or device registrations if shown. Keep registrations used by active tunnels.</p>
 
                 <form id="bv-register-form" hidden>
                     <div class="bv-heading bv-relay-heading">
@@ -197,7 +198,11 @@
         <section class="bv-panel" aria-labelledby="bv-saved-vpn-title">
             <h2 id="bv-saved-vpn-title">Saved VPN servers</h2>
             <p class="text-muted">Use Network Settings to assign a saved server to devices or a whole network.</p>
+            <p class="text-muted">Saved VPN Ping measures HTTPS through the tunnel. Mullvad’s pre-add Ping server measures ICMP to its public relay, so the values are not directly comparable.</p>
             <div class="bv-actions bv-bulk-actions" data-manage-only>
+                <button id="bv-vpn-ping-all" type="button" class="btn btn-default">Ping All</button>
+                <button id="bv-vpn-ping-sort" type="button" class="btn btn-default">Ping &amp; Sort</button>
+                <span id="bv-vpn-ping-status" class="text-muted" role="status"></span>
                 <button id="bv-vpn-remove-selected" type="button" class="btn btn-default" disabled>Remove selected</button>
                 <span id="bv-vpn-selected-count" class="text-muted" role="status">0 selected</span>
             </div>
@@ -315,9 +320,11 @@
             </table>
         </div>
         <p id="bv-proxy-count" class="text-muted" role="status"></p>
+        <p class="text-muted">Proxy Ping measures HTTPS through the router’s local SOCKS listener. It does not verify client TUN forwarding; cold starts and network conditions can change the timing.</p>
         <div class="bv-actions bv-bulk-actions">
+            <button id="bv-proxy-ping-all" type="button" class="btn btn-default">Ping All</button>
             <button id="bv-proxy-ping-sort" type="button" class="btn btn-default">Ping &amp; Sort</button>
-            <span id="bv-proxy-ping-sort-status" class="text-muted" role="status"></span>
+            <span id="bv-proxy-ping-status" class="text-muted" role="status"></span>
             <button id="bv-proxy-remove-selected" type="button" class="btn btn-default" disabled>Remove selected</button>
             <span id="bv-proxy-selected-count" class="text-muted" role="status">0 selected</span>
         </div>

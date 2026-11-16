@@ -29,7 +29,15 @@ def install_instructions(directory, repository):
         "",
         "### Simple SSH install",
         "",
-        "From your computer, replace `root@ROUTER` with your existing SSH target and run this one command. "
+        "For the newest published release, use this version-independent command from your computer:",
+        "",
+        "```sh",
+        f"ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubusercontent.com/{repository}/main/scripts/install-latest.sh && sh /tmp/blankvpn-install-latest.sh'",
+        "```",
+        "",
+        "The helper selects the matching architecture and verifies the selected release's published installer digest.",
+        "",
+        "For a version-pinned install, replace `root@ROUTER` with your existing SSH target. This command "
         "It checks the installer digest, detects the router's package ABI, verifies the package checksum, "
         "saves a protected configuration backup, and installs the matching package.",
         "",

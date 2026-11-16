@@ -4,9 +4,19 @@ namespace OPNsense\BlankVpn;
 
 use OPNsense\Core\Config;
 
-/** Follow the WebGUI language list instead of maintaining a second locale allowlist. */
+/** Dashboard translations for the OPNsense 26.7 WebGUI locales. */
 class Language
 {
+    // get_locale_list() calls product::development(), which is unavailable in php-cgi API requests.
+    private const LOCALES = [
+        'en_US' => 'English', 'zh_CN' => 'Chinese (Simplified)', 'zh_TW' => 'Chinese (Traditional)',
+        'cs_CZ' => 'Czech', 'fr_FR' => 'French', 'de_DE' => 'German', 'el_GR' => 'Greek',
+        'it_IT' => 'Italian', 'ja_JP' => 'Japanese', 'ko_KR' => 'Korean', 'no_NO' => 'Norwegian',
+        'fa_IR' => 'Persian', 'pl_PL' => 'Polish', 'pt_BR' => 'Portuguese (Brazil)',
+        'pt_PT' => 'Portuguese (Portugal)', 'ru_RU' => 'Russian', 'es_ES' => 'Spanish',
+        'tr_TR' => 'Turkish', 'uk_UA' => 'Ukrainian', 'vi_VN' => 'Vietnamese'
+    ];
+
     private const STRINGS = [
         'Sign in', 'Sign in and save', 'Sign out', 'Save', 'Apply', 'Refresh',
         'Country', 'City', 'Server', 'Choose a server', 'Refresh servers',
@@ -30,10 +40,10 @@ class Language
 
     public static function dashboard(): array
     {
-        if (!function_exists('get_locale_list')) {
-            require_once 'system.inc';
+        $available = [];
+        foreach (self::LOCALES as $code => $name) {
+            $available[$code] = gettext($name);
         }
-        $available = function_exists('get_locale_list') ? get_locale_list() : ['en_US' => 'English'];
         $configured = (string)(Config::getInstance()->object()->system->language ?? 'en_US');
         $locale = self::resolve($configured, $available);
         $translations = [];

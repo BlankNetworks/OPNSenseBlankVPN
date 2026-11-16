@@ -31,17 +31,25 @@ Choose a release that matches the edition, series, and ABI shown above under [Co
 
 ### Simple SSH install
 
-From your computer, replace `root@ROUTER` with your router's SSH target and run this one command using your existing SSH credentials. It installs release **0.8.36** on a supported amd64 or aarch64 OPNsense router. The command verifies the installer digest; the installer verifies the package checksum and saves a protected configuration backup before `pkg add`.
+To install the newest published release on a supported router, run this from your computer with your existing SSH credentials. The latest-release helper selects the package for the router's architecture, checks the selected release's published installer SHA-256, and then the installer checks the package checksum and saves a protected configuration backup. Review the [helper source](scripts/install-latest.sh) before running it if desired.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.36.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.36/scripts/install.sh && sha256 -c 5efd85e3a8724813c8fe5e692c7d910d47f73b9095477b4996ffe324c0b18503 /tmp/blankvpn-install-0.8.36.sh && sh /tmp/blankvpn-install-0.8.36.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/main/scripts/install-latest.sh && sh /tmp/blankvpn-install-latest.sh'
 ```
 
-For a later release, copy its updated **Simple SSH install** command from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). The package install steps below remain available if you prefer to download and inspect the files yourself.
+To pin this release instead, use the following command. It also checks the installer digest before running it.
+
+Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.37** on a supported amd64 or aarch64 OPNsense router.
+
+```sh
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.37.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.37/scripts/install.sh && sha256 -c 72d621cd43864e512fa072c7d623711be165280b733940cc3285796c90d734a9 /tmp/blankvpn-install-0.8.37.sh && sh /tmp/blankvpn-install-0.8.37.sh'
+```
+
+The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.
 
 ### Download on your computer
 
-1. Open the [0.8.36 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.36), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+1. Open the [0.8.37 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.37), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
 2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 
@@ -102,7 +110,7 @@ Choose a service in **VPN Service** and select **Apply**. Sign in or add a compa
 
 Account-based setup requires the HTTPS WebGUI. Saved logins belong to your WebGUI user and persist across provider changes and plug-in upgrades. Blank VPN & Proxy keeps login credentials in private router files outside the OPNsense configuration export. Provider credentials and sessions can expire or be revoked.
 
-The dashboard reads the router's selected language and the supported locale list from OPNsense. Sign-in controls, dates, and server sorting follow that locale; the backend passes available OPNsense gettext translations to the browser. Plugin-specific text without a catalog translation remains in English. Change the WebGUI language in OPNsense settings, then reload the dashboard.
+The dashboard reads the router's selected language and supports all 20 OPNsense 26.7 WebGUI locales. Sign-in controls, dates, and server sorting follow that locale; the backend passes available OPNsense gettext translations to the browser. Plugin-specific text without a catalog translation remains in English. Change the WebGUI language in OPNsense settings, then reload the dashboard.
 
 | Service | Setup in Blank VPN & Proxy |
 | --- | --- |
@@ -123,13 +131,15 @@ VPN and proxy servers appear together in **Network Settings**, grouped alphabeti
 2. Pick a country, city, server and WireGuard UDP port, then choose **Add server**. The default port is 51820.
 3. Test the saved server, then open **Network Settings** to assign it. Each simultaneously saved Mullvad tunnel uses its own device key. Removing a tunnel makes its registered key available for another server. Mullvad allows up to five registered devices per account. [Mullvad device limits](https://mullvad.net/en/help/using-mullvad-vpn-app#too-many-devices)
 
+Mullvad sign-in obtains a short-lived API token; package updates reuse saved WireGuard registrations rather than making a new device each time. Review your Mullvad account and delete unused tokens or device registrations if shown. Keep any device registration used by an active Blank VPN tunnel. [Manage Mullvad devices](https://mullvad.net/account/devices)
+
 If an exit has no recent handshake on UDP 51820, open **Edit** beside that Mullvad server, choose **53**, and select **Save port**. The tunnel reconnects with the same registered Mullvad key. You can run **Test** while routing is off. [Mullvad WireGuard port options](https://mullvad.net/en/help/connecting-to-mullvad-vpn-from-restrictive-locations)
 
 ### Test servers
 
 In **Saved VPN servers**, a new server shows **Standby**. Select **Test** to check HTTPS from the router through that server. A passing test shows **Ready**, with latency in the server’s **Ping** column. A failed test shows **Error**. Select **Failed** in the Ping column for details or use **×** to dismiss the result. Routing is configured separately in **Network Settings**.
 
-Use **Ping server** next to a selected Mullvad relay to check ICMP from OPNsense. **Test** can run with device routing off. A successful VPN test requires HTTPS with traffic observed in both directions on the selected tunnel. A managed WireGuard server also needs a recent handshake. Proxy tests try HTTPS targets in different regions. For basic SOCKS5 servers, a failed test can also report upstream TCP, SOCKS5 authentication or TLS errors.
+Use **Ping server** next to a selected Mullvad relay to check ICMP from OPNsense. Saved VPN **Ping All** checks HTTPS through each tunnel without changing row order; **Ping & Sort** places the fastest successful tests first. Pre-add ICMP and saved-tunnel HTTPS times measure different paths and are not directly comparable. **Test** can run with device routing off. A successful VPN test requires HTTPS with traffic observed in both directions on the selected tunnel. A managed WireGuard server also needs a recent handshake. Proxy **Ping All** and **Ping & Sort** likewise check HTTPS through each local SOCKS listener; they do not prove client TUN forwarding. For basic SOCKS5 servers, a failed test can also report upstream TCP, SOCKS5 authentication or TLS errors.
 
 ## Add proxy servers and subscriptions
 

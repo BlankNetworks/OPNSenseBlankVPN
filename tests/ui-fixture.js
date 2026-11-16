@@ -215,6 +215,9 @@ window.jQuery.ajax = async (request) => {
     if (action === 'testExit' && exitTestError) {
         return {ok:true, reachable:false, detail:exitTestError};
     }
+    if (action === 'testExit' && data.id === 'vpn2') {
+        return {ok:true, reachable:true, milliseconds:9.6};
+    }
     if (action === 'testProxyNode' && data.id === 'sort-fast') {
         return {ok:true, reachable:true, milliseconds:8.4};
     }
@@ -518,6 +521,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         [...bv('network-profile').options].some(option => option.value === 'vpn2') &&
         JSON.stringify(routingBeforeAdd) === JSON.stringify({assignments:reply.dashboard.assignments, settings:reply.dashboard.settings}),
         'Adding a server must preserve the prior server and routing assignments.');
+    bv('vpn-ping-all').click();
+    await wait();
+    assert(bv('vpn-ping-status').textContent.includes('Tested 2 of 2') &&
+        bv('profile-list').rows[0].cells[1].textContent.includes('Canada home') &&
+        requests.some(x => x.action === 'testExit' && x.data.id === 'vpn2'),
+        'VPN Ping All must test saved servers without sorting them.');
+    bv('vpn-ping-sort').click();
+    await wait();
+    assert(bv('vpn-ping-status').textContent.includes('Sorted 2 of 2') &&
+        bv('profile-list').rows[0].cells[1].textContent.includes('Japan home') &&
+        bv('profile-list').rows[0].querySelector('[data-test-result]').textContent.includes('9.6 ms'),
+        'VPN Ping & Sort must place the lowest successful HTTPS latency first.');
+    bv('vpn-ping-all').click();
+    await wait();
+    assert(bv('profile-list').rows[0].cells[1].textContent.includes('Japan home'),
+        'VPN Ping All must retain the current order even after a prior sort.');
     bv('profile-list').querySelector('[aria-label="Remove Japan home"]').click();
     await wait();
     assert(requests.some(x => x.action === 'removeProfile' && x.data.id === 'vpn2') &&
@@ -684,18 +703,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         protocol:'socks5', core:'mihomo'});
     buttonByText('subscription-list', 'Refresh').click();
     await wait();
+    const proxyOrder = [...bv('proxy-list').rows].map(row => row.cells[1].textContent);
+    bv('proxy-ping-all').click();
+    await wait();
+    assert(bv('proxy-ping-status').textContent.includes('Tested 2 of 2') &&
+        JSON.stringify([...bv('proxy-list').rows].map(row => row.cells[1].textContent)) === JSON.stringify(proxyOrder),
+        'Proxy Ping All must preserve the current server order.');
     bv('proxy-ping-sort').click();
     await wait();
     assert(requests.some(x => x.action === 'testProxyNode' && x.data.id === 'sort-fast') &&
         bv('proxy-list').rows[0].cells[1].textContent.includes('Fast proxy') &&
         bv('proxy-list').rows[0].querySelector('[data-test-result]').textContent.includes('8.4 ms') &&
-        bv('proxy-ping-sort-status').textContent.includes('Sorted 2 of 2'),
+        bv('proxy-ping-status').textContent.includes('Sorted 2 of 2'),
         'Ping & Sort must test every proxy serially and put the lowest successful latency first.');
+    bv('proxy-ping-all').click();
+    await wait();
+    assert(bv('proxy-list').rows[0].cells[1].textContent.includes('Fast proxy'),
+        'Proxy Ping All must retain the current order even after a prior sort.');
     bv('proxy-ping-sort').click();
     assert(bv('proxy-ping-sort').textContent === 'Stop Ping & Sort', 'A running sort needs a stop control.');
     bv('proxy-ping-sort').click();
     await wait();
-    assert(bv('proxy-ping-sort-status').textContent.includes('Stopped after 1 of 2'),
+    assert(bv('proxy-ping-status').textContent.includes('Stopped after 1 of 2'),
         'Stopping must prevent additional server tests.');
     reply.proxyCatalog.nodes.pop();
     buttonByText('subscription-list', 'Refresh').click();
