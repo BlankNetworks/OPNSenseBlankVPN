@@ -325,7 +325,14 @@
                 updateSave();
             });
             updateSave();
-            form.append(label, save);
+            const restore = button('Restore device', (event) =>
+                void mutate(event.currentTarget, () => api('restoreMullvadDevice', {id: profile.id}),
+                    'Mullvad device restored. Test this server again.', () => {
+                        state.tests.delete('exit:' + profile.id);
+                        state.nameEditor = null;
+                    }),
+            'Restore this saved WireGuard key in Mullvad if its registration was removed');
+            form.append(label, save, restore);
             form.addEventListener('submit', (event) => {
                 event.preventDefault();
                 const port = Number(select.value);

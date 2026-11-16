@@ -63,7 +63,7 @@
                     <label class="bv-check bv-save-login"><input id="bv-save-login" type="checkbox" checked> <span data-bv-i18n="Save login on this router">Save login on this router</span></label>
                 </form>
                 <div id="bv-account-status" class="bv-account-status" role="status" aria-live="polite"></div>
-                <p class="text-muted">Mullvad sign-in obtains a short-lived API token. Review your Mullvad account and remove unused tokens or device registrations if shown. Keep registrations used by active tunnels.</p>
+                <p class="text-muted">Mullvad sign-in obtains a short-lived API token. Review your Mullvad account and remove unused tokens or device registrations if shown. Keep registrations used by saved tunnels. If a saved device was removed, open Edit beside that server and select Restore device.</p>
 
                 <form id="bv-register-form" hidden>
                     <div class="bv-heading bv-relay-heading">

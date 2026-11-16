@@ -146,3 +146,8 @@
 - Add a latest-release SSH installer that verifies the selected release's published installer digest before running its checksum-checked package installer. Keep version-pinned and manual package commands in every release.
 - Remind Mullvad users to review and delete unused tokens or device registrations while keeping active router devices.
 - Confirm on a physical iPhone using OPNsense as a Tailscale exit node that disabling Blank VPN's Tailscale scope restores local ISP HTTPS and DNS. A fresh WebGUI reload no longer shows the locale error after the live hotfix.
+
+## 0.8.38
+
+- Add Edit → Restore device for saved Mullvad tunnels whose WireGuard keys were removed from the Mullvad account. It re-registers the existing public key, updates any newly assigned tunnel addresses in the owned OPNsense WireGuard configuration, and keeps the saved server ID, client rules, and Multi-Path assignments.
+- Keep the warning precise: a Mullvad device used by a saved tunnel is still needed even when Blank VPN routing is disabled. One live account had four such missing registrations; the remaining New Jersey registration passed a protected HTTPS test while the others had stale handshakes.

@@ -460,6 +460,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         vpnStatus('vpn1') === 'Error' && steady(renamedVpn, renamedGeometry),
         'Dismissing the error details must preserve the server status and layout. ' +
         JSON.stringify({hidden:vpnError.hidden, status:vpnStatus('vpn1'), before:renamedGeometry, after:geometry(renamedVpn)}));
+    const rulesBeforeRestore = structuredClone(reply.dashboard.assignments);
+    editMullvad('Canada home').click();
+    bv('profile-list').querySelector('[aria-label="Restore this saved WireGuard key in Mullvad if its registration was removed"]').click();
+    await wait();
+    assert(requests.some(x => x.action === 'restoreMullvadDevice' && x.data.id === 'vpn1') &&
+        JSON.stringify(reply.dashboard.assignments) === JSON.stringify(rulesBeforeRestore) &&
+        !bv('profile-list').querySelector('.bv-ping-error:not([hidden])'),
+        'Restoring a removed Mullvad device must keep its saved routing assignment and clear the stale Ping failure.');
     exitTestError = null;
     [...bv('profile-list').querySelectorAll('button')].find(button => button.textContent === 'Disable').click();
     await wait();

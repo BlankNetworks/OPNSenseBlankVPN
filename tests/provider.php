@@ -178,6 +178,19 @@ try {
         'An upgrade must recognize the existing Mullvad device.');
     check($provider->routerProfiles($token, ['unbound' => array_diff_key($profile, ['accountBinding' => true])])
         ['unbound']['accountBinding'] === $identity['accountBinding'], 'Recognize older tunnels by their registered public key.');
+    $restorer = new FixtureMullvad($directory);
+    $restorer->maxDevices = 1;
+    $restorer->deviceRecords = $provider->deviceRecords;
+    $present = $restorer->restoreDeviceWithToken($token, $profile);
+    check($restorer->creates === 0 && $present['publicKey'] === $profile['identityKey'],
+        'Restoration must reuse a device that Mullvad still lists.');
+    $restorer->deviceRecords = [];
+    $restored = $restorer->restoreDeviceWithToken($token, $profile);
+    check($restorer->creates === 1 && $restored['publicKey'] === $profile['identityKey'] &&
+        $restored['address'] !== '' && $restored['address6'] !== '',
+        'A deleted Mullvad registration must be recreated with the saved public key.');
+    expectFailure(fn () => $restorer->restoreDeviceWithToken($token,
+        array_replace($profile, ['accountBinding' => str_repeat('a', 64)])), 'different Mullvad account');
     $provider->rememberRouterKey($identity['accountBinding'], $identity['privateKey']);
     $restarted = new FixtureMullvad($directory);
     $restarted->deviceRecords = $provider->deviceRecords;

@@ -1122,6 +1122,54 @@ class ServiceController extends ApiControllerBase
         }), true, true);
     }
 
+    public function restoreMullvadDeviceAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $id = $this->input('id', 64);
+            $model = new BlankVpn();
+            $profile = Policy::profiles($model)[$id] ?? null;
+            if ($profile === null || $profile['relay'] === '') {
+                throw new \DomainException('Choose a saved Mullvad server.');
+            }
+            // Validate native ownership before asking Mullvad to create a remote device.
+            WireGuard::ownedPrivateKey($profile);
+            $mullvad = new Mullvad();
+            $token = $this->requireMullvadToken($mullvad);
+            $matched = $mullvad->routerProfiles($token, [$id => $profile])[$id] ?? null;
+            if ($matched === null) {
+                throw new \DomainException('This tunnel belongs to a different Mullvad account.');
+            }
+            $device = $mullvad->restoreDeviceWithToken($token, $matched);
+            if ($profile['identity'] === $device['id'] && $profile['address'] === $device['address'] &&
+                $profile['address6'] === $device['address6']) {
+                return ['profile' => $id, 'message' => 'This Mullvad device is already registered.'];
+            }
+            Operations::change(function (BlankVpn $model) use ($id, $profile, $device) {
+                $current = Policy::profiles($model)[$id] ?? null;
+                if ($current === null || !hash_equals($profile['identityKey'], $current['identityKey'])) {
+                    throw new \RuntimeException('The saved Mullvad tunnel changed during restoration. Retry.');
+                }
+                $source = explode('/', $device['address'], 2)[0];
+                foreach (Policy::localNetworks(Policy::settings($model)) as $network) {
+                    if (Policy::contains($network, $source)) {
+                        throw new \DomainException('Mullvad assigned an address overlapping a configured local network.');
+                    }
+                }
+                $updated = WireGuard::restoreMullvadDevice($current, $device);
+                $ownership = array_diff_key($updated, array_flip(['id', 'name', 'relay']));
+                $model->profiles->profile->getChild($id)->ownership =
+                    json_encode($ownership, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+                $health = Firewall::health();
+                unset($health[$id]);
+                Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
+                return empty($current['disabled'])
+                    ? ['added' => $ownership, 'reload' => true]
+                    : ['reload' => true];
+            });
+            return ['profile' => $id, 'message' => 'Mullvad device restored. Test this server again.'];
+        }), true, true, true);
+    }
+
     private function mullvadPort(?int $default = null): int
     {
         $port = $this->request->getPost('port', null, $default);

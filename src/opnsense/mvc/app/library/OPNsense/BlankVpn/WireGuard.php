@@ -224,6 +224,37 @@ final class WireGuard
         return array_replace($profile, ['port' => $port]);
     }
 
+    /** Update only the owned WireGuard addresses after Mullvad restores its device key. */
+    public static function restoreMullvadDevice(array $profile, array $device): array
+    {
+        if (empty($profile['relay']) || !hash_equals((string)($profile['identityKey'] ?? ''),
+            (string)($device['publicKey'] ?? ''))) {
+            throw new RuntimeException('The restored Mullvad device does not match this saved tunnel.');
+        }
+        [$servers, $peers] = self::ownedObjects($profile);
+        $address = self::hostAddress((string)($device['address'] ?? ''), false);
+        $address6 = self::hostAddress((string)($device['address6'] ?? ''), true);
+        self::checkUnderlay();
+        foreach ($servers->servers->server->iterateItems() as $id => $other) {
+            if ($id === self::instanceId($profile)) {
+                continue;
+            }
+            foreach ($other->tunneladdress->getValues() as $existing) {
+                if (in_array($existing, [$address, $address6], true)) {
+                    throw new RuntimeException('Mullvad assigned an address already used by another WireGuard tunnel.');
+                }
+            }
+        }
+        $instance = $servers->getNodeByReference('servers.server.' . self::instanceId($profile));
+        $instance->tunneladdress = $address . ',' . $address6;
+        self::serialize($servers, 'WireGuard instance');
+        $peer = $peers->getNodeByReference('clients.client.' . $profile['peer']);
+        $peer->tunneladdress = self::allowedAddresses($address6);
+        self::serialize($peers, 'WireGuard peer');
+        return array_replace($profile, ['address' => $address, 'address6' => $address6,
+            'identity' => (string)$device['id']]);
+    }
+
     public static function preflight(?string $endpoint = null): void
     {
         if ((string)(new General())->enabled !== '1') {

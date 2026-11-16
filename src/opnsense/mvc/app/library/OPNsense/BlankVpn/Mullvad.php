@@ -209,6 +209,42 @@ class Mullvad
         return $matched;
     }
 
+    /** Restore a deleted Mullvad device using the saved tunnel's existing public key. */
+    public function restoreDeviceWithToken(string $token, array $profile): array
+    {
+        $details = $this->accountDetails($token);
+        if (!hash_equals((string)($profile['accountBinding'] ?? ''), $this->binding($details['id']))) {
+            throw new RuntimeException('This tunnel belongs to a different Mullvad account.');
+        }
+        if ($details['expired']) {
+            throw new RuntimeException('The Mullvad account has expired. Add time before restoring its device.');
+        }
+        $key = (string)($profile['identityKey'] ?? '');
+        if (!$this->validKey($key)) {
+            throw new RuntimeException('The saved tunnel has no valid WireGuard public key.');
+        }
+        $devices = $this->devices($token);
+        $device = $this->findDevice($devices, $key);
+        if ($device === null) {
+            if (count($devices) >= $details['maxDevices'] || !$details['canAddDevices']) {
+                throw new RuntimeException('Mullvad has no free device slot. Remove an unused device in your Mullvad account.');
+            }
+            // If the response is lost after Mullvad accepts the key, the next retry finds it above.
+            $device = $this->normalizeDevice($this->request(self::DEVICES, $token,
+                ['pubkey' => $key, 'hijack_dns' => false]));
+            if (!hash_equals($key, $device['publicKey'])) {
+                throw new RuntimeException('Mullvad returned an unexpected device key.');
+            }
+        }
+        if ($device['address'] === '' || $device['address6'] === '') {
+            $device = $this->normalizeDevice($this->request(self::DEVICES . '/' . $device['id'], $token));
+            if (!hash_equals($key, $device['publicKey']) || $device['address'] === '' || $device['address6'] === '') {
+                throw new RuntimeException('Mullvad did not provide this device’s WireGuard addresses. Retry restoration.');
+            }
+        }
+        return array_intersect_key($device, array_flip(['id', 'publicKey', 'address', 'address6']));
+    }
+
     public function registerRouterWithToken(string $token, string $relay, array $occupiedKeys = []): array
     {
         return $this->registerWithToken($token, self::ROUTER_REGISTRATION, $relay, $occupiedKeys);
