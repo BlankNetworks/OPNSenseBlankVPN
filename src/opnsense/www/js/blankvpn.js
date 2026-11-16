@@ -1945,6 +1945,16 @@
                 const data = await api('dashboard');
                 applyLanguage(data.language);
                 state.profiles = array(data.profiles);
+                for (const profile of state.profiles) {
+                    if (profile.provider !== 'mullvad' || profile.reachability !== 'router probe succeeded') {
+                        continue;
+                    }
+                    const key = 'exit:' + profile.id;
+                    const test = state.tests.get(key);
+                    if (test?.kind === 'fail' && Number(profile.checkedAt) > Number(test.checkedAt || 0)) {
+                        state.tests.delete(key);
+                    }
+                }
                 state.assignments = array(data.assignments);
                 state.devices = array(data.devices);
                 state.tailnetDevices = array(data.tailnetDevices);
@@ -2497,9 +2507,11 @@
                     : result.reachable === true
                     ? {kind: 'pass', text: 'HTTPS passed · ' + result.milliseconds + ' ms',
                         latency: result.milliseconds + ' ms', milliseconds: Number(result.milliseconds)}
-                    : {kind: 'fail', text: result.detail || 'The HTTPS test did not complete.'});
+                    : {kind: 'fail', text: result.detail || 'The HTTPS test did not complete.',
+                        checkedAt: result.checkedAt || Math.floor(Date.now() / 1000)});
             } catch (error) {
-                state.tests.set(key, {kind: 'fail', text: errorMessage(error, 'The connection test could not be completed.')});
+                state.tests.set(key, {kind: 'fail', text: errorMessage(error, 'The connection test could not be completed.'),
+                    checkedAt: Math.floor(Date.now() / 1000)});
             } finally {
                 if (proxy) {
                     state.proxyTestRunning = false;

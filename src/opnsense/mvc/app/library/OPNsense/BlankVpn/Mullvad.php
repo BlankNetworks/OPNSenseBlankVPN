@@ -83,6 +83,12 @@ class Mullvad
         return $auth + ['account' => $this->accountWithToken($auth['token'])];
     }
 
+    /** Obtain a short-lived token for the root recovery worker without an extra account listing. */
+    public function tokenForRecovery(string $account): string
+    {
+        return $this->authorization($account)['token'];
+    }
+
     public function accountWithToken(string $token): array
     {
         $details = $this->accountDetails($token);
@@ -117,6 +123,38 @@ class Mullvad
             throw new RuntimeException('The saved Mullvad login could not be read. Sign in again.');
         }
         return $account;
+    }
+
+    /** Protected accounts opted in through Save login, for the root recovery worker. */
+    public function savedAccountsForRecovery(): array
+    {
+        if (!is_dir($this->dataDirectory)) {
+            return [];
+        }
+        $mode = @fileperms($this->dataDirectory);
+        if (is_link($this->dataDirectory) || $mode === false || ($mode & 0077) !== 0) {
+            throw new RuntimeException('The saved Mullvad login directory has unsafe permissions.');
+        }
+        $paths = glob($this->dataDirectory . '/mullvad-login-*.json');
+        if ($paths === false || count($paths) > 16) {
+            throw new RuntimeException('The saved Mullvad login list could not be checked safely.');
+        }
+        $accounts = [];
+        foreach ($paths as $path) {
+            $fileMode = @fileperms($path);
+            if (!preg_match('/^mullvad-login-[a-f0-9]{64}\.json$/D', basename($path)) || !is_file($path) ||
+                is_link($path) || $fileMode === false || ($fileMode & 0077) !== 0) {
+                throw new RuntimeException('A saved Mullvad login has unsafe permissions.');
+            }
+            $account = $this->readJson($path)['account'] ?? null;
+            if (!is_string($account) || !preg_match('/^[0-9]{16}$/D', $account)) {
+                throw new RuntimeException('A saved Mullvad login could not be read.');
+            }
+            if (!in_array($account, $accounts, true)) {
+                $accounts[] = $account;
+            }
+        }
+        return $accounts;
     }
 
     public function saveAccount(string $user, ?string $account): void
@@ -202,6 +240,8 @@ class Mullvad
             if ($device !== null || hash_equals($binding, $savedBinding)) {
                 $matched[$id] = array_replace($profile, ['accountBinding' => $binding]);
                 $matched[$id]['registered'] = $device !== null && $device['id'] === $profile['identity'];
+                $matched[$id]['registeredAddress'] = $device['address'] ?? '';
+                $matched[$id]['registeredAddress6'] = $device['address6'] ?? '';
             } elseif ($savedBinding === '') {
                 throw new RuntimeException('A saved Mullvad tunnel has no account binding. Check which Mullvad account registered it.');
             }

@@ -39,17 +39,17 @@ ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubuser
 
 To pin this release instead, use the following command. It also checks the installer digest before running it.
 
-Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.39** on a supported amd64 or aarch64 OPNsense router.
+Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.40** on a supported amd64 or aarch64 OPNsense router.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.39.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.39/scripts/install.sh && sha256 -c ad01c9f770361239ce8ff0f45743ce4cec061c0f5a526d25f49da329db9e196f /tmp/blankvpn-install-0.8.39.sh && sh /tmp/blankvpn-install-0.8.39.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.40.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.40/scripts/install.sh && sha256 -c 8812ca27b1fd5fc080f9ce0f16adeb872a0938afa635f6b5c0975d4548ef980d /tmp/blankvpn-install-0.8.40.sh && sh /tmp/blankvpn-install-0.8.40.sh'
 ```
 
 The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.
 
 ### Download on your computer
 
-1. Open the [0.8.39 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.39), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+1. Open the [0.8.40 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.40), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
 2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 
@@ -131,7 +131,7 @@ VPN and proxy servers appear together in **Network Settings**, grouped alphabeti
 2. Pick a country, city, server and WireGuard UDP port, then choose **Add server**. The default port is 51820.
 3. Test the saved server, then open **Network Settings** to assign it. Each simultaneously saved Mullvad tunnel uses its own device key. Removing a tunnel makes its registered key available for another server. Mullvad allows up to five registered devices per account. [Mullvad device limits](https://mullvad.net/en/help/using-mullvad-vpn-app#too-many-devices)
 
-Mullvad sign-in obtains a short-lived API token; package updates reuse saved WireGuard registrations rather than making a new device each time. Review your Mullvad account and delete unused tokens or device registrations if shown. Keep every registration used by a **saved** Blank VPN tunnel, even when routing is disabled. If a saved key was deleted from Mullvad, sign in to Blank VPN, open **Edit** beside that server, and select **Restore device**; it re-registers the same key and keeps the server's routing assignments. [Manage Mullvad devices](https://mullvad.net/account/devices)
+Mullvad sign-in obtains a short-lived API token; package updates reuse saved WireGuard registrations rather than making a new device each time. Review your Mullvad account and delete unused tokens or device registrations if shown. Keep every registration used by a **saved** Blank VPN tunnel, even when routing is disabled. With **Save login on this router**, background maintenance checks saved registrations every ten minutes and restores a missing key from the saved public key, one tunnel per run, when the account has a free device slot. A dashboard warning reports when recovery cannot finish. If the login is not saved, sign in to Blank VPN, open **Edit** beside that server, and select **Restore device**. Both methods keep the server's routing assignments. [Manage Mullvad devices](https://mullvad.net/account/devices)
 
 If an exit has no recent handshake on UDP 51820, open **Edit** beside that Mullvad server, choose **53**, and select **Save port**. The tunnel reconnects with the same registered Mullvad key. You can run **Test** while routing is off. [Mullvad WireGuard port options](https://mullvad.net/en/help/connecting-to-mullvad-vpn-from-restrictive-locations)
 

@@ -509,6 +509,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         vpnStatus('vpn1') === 'Error' && steady(renamedVpn, renamedGeometry),
         'Dismissing the error details must preserve the server status and layout. ' +
         JSON.stringify({hidden:vpnError.hidden, status:vpnStatus('vpn1'), before:renamedGeometry, after:geometry(renamedVpn)}));
+    reply.dashboard.profiles[0].provider = 'mullvad';
+    reply.dashboard.profiles[0].reachability = 'router probe succeeded';
+    reply.dashboard.profiles[0].checkedAt = Math.floor(Date.now() / 1000) + 10;
+    bv('refresh').click();
+    await wait();
+    assert(vpnStatus('vpn1') === 'Ready' && !bv('profile-list').querySelector('.bv-ping-error:not([hidden])'),
+        'A newer protected background probe must clear an old Mullvad Ping failure.');
+    reply.dashboard.profiles[0].reachability = 'unverified or stale';
+    delete reply.dashboard.profiles[0].checkedAt;
+    bv('profile-list').querySelector('[data-test-key]').click();
+    await wait();
+    assert(vpnStatus('vpn1') === 'Error', 'A new failed probe must still be visible after an earlier recovery.');
     const rulesBeforeRestore = structuredClone(reply.dashboard.assignments);
     editMullvad('Canada home').click();
     bv('profile-list').querySelector('[aria-label="Restore this saved WireGuard key in Mullvad if its registration was removed"]').click();

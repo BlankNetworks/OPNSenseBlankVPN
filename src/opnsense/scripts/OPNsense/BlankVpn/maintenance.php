@@ -7,6 +7,7 @@ use OPNsense\BlankVpn\DeviceBindings;
 use OPNsense\BlankVpn\Diagnostics;
 use OPNsense\BlankVpn\Firewall;
 use OPNsense\BlankVpn\Mullvad;
+use OPNsense\BlankVpn\MullvadRecovery;
 use OPNsense\BlankVpn\NativeVpn;
 use OPNsense\BlankVpn\OnDemand;
 use OPNsense\BlankVpn\Operations;
@@ -120,6 +121,11 @@ try {
         case 'maintain':
             Operations::exclusive(function () {
                 $model = new BlankVpn();
+                if (MullvadRecovery::due($model)) {
+                    // A restored identity changed native WireGuard configuration.
+                    // The next minute reads a fresh model and runtime snapshot.
+                    return;
+                }
                 $settings = Policy::effectiveRouting($model);
                 // The root maintenance worker can read PF directly, without an IPC timeout
                 // masquerading as an empty ruleset and failing every tunnel health check.

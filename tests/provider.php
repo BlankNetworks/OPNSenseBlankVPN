@@ -3,9 +3,11 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/Mullvad.php';
+require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/MullvadRecovery.php';
 require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/VpnProviders.php';
 
 use OPNsense\BlankVpn\Mullvad;
+use OPNsense\BlankVpn\MullvadRecovery;
 use OPNsense\BlankVpn\VpnProviders;
 
 final class FixtureMullvad extends Mullvad
@@ -147,8 +149,17 @@ try {
     check(count($stored) === 1 && (fileperms($stored[0]) & 0777) === 0600, 'The saved login must use a private file.');
     check($provider->hasSavedAccount('operator') && $provider->savedAccount('operator') === '0000000000000000' &&
         $provider->savedAccount('other-operator') === null, 'Saved accounts must be scoped to their WebGUI user.');
+    $provider->saveAccount('other-operator', $account);
+    check($provider->savedAccountsForRecovery() === ['0000000000000000'],
+        'Background recovery must deduplicate protected saved logins without exposing them.');
+    $provider->saveAccount('other-operator', null);
+    $provider->saveAccount('other-operator', '1234567890123456');
+    check(in_array('1234567890123456', $provider->savedAccountsForRecovery(), true),
+        'A numeric-looking Mullvad account must remain a string for background authentication.');
+    $provider->saveAccount('other-operator', null);
     $provider->saveAccount('operator', null);
-    check(!$provider->hasSavedAccount('operator'), 'Forgetting the login must remove the saved account.');
+    check(!$provider->hasSavedAccount('operator') && $provider->savedAccountsForRecovery() === [],
+        'Forgetting the login must stop background recovery.');
     check($provider->account($account)['availableSlots'] === 1, 'Account slot count is wrong.');
     $provider->expireAccount = true;
     check($provider->account($account)['expired'], 'Expired account should be visible.');
@@ -191,6 +202,42 @@ try {
         'A deleted Mullvad registration must be recreated with the saved public key.');
     expectFailure(fn () => $restorer->restoreDeviceWithToken($token,
         array_replace($profile, ['accountBinding' => str_repeat('a', 64)])), 'different Mullvad account');
+    $recovery = new FixtureMullvad($directory);
+    $recovery->maxDevices = 1;
+    $recoveryProfile = array_replace($profile,
+        ['address' => $identity['address'], 'address6' => $identity['address6']]);
+    $applied = [];
+    $recover = static function (string $id, array $saved, array $matched, string $bearer, Mullvad $mullvad)
+        use (&$applied): void {
+        $device = $mullvad->restoreDeviceWithToken($bearer, $matched);
+        $applied[] = [$id, $saved['identityKey'], $device['publicKey']];
+    };
+    $result = MullvadRecovery::reconcile(['saved' => $recoveryProfile], $recovery,
+        [$account], [], $recover);
+    check($result['restored'] === 'saved' && $result['missing'] && $recovery->creates === 1 &&
+        $applied === [['saved', $identity['publicKey'], $identity['publicKey']]],
+        'A deleted device must be re-registered with the saved key and retained rule identity.');
+    $recovery->deviceRecords = [];
+    $result = MullvadRecovery::reconcile(['saved' => $recoveryProfile], $recovery,
+        [$account], ['saved' => time()], $recover);
+    check($result['restored'] === null && $result['missing'] && $recovery->creates === 1,
+        'A recently retried key must not be registered repeatedly when Mullvad removes it again.');
+    $recovery->deviceRecords = $restorer->deviceRecords;
+    $result = MullvadRecovery::reconcile(['saved' => $recoveryProfile], $recovery,
+        [$account], [], $recover);
+    check($result['restored'] === null && !$result['missing'] && $recovery->creates === 1,
+        'A registered device must not consume another account slot.');
+    $changedAddress = array_replace($recoveryProfile, ['address' => '10.64.0.99/32']);
+    $result = MullvadRecovery::reconcile(['saved' => $changedAddress], $recovery,
+        [$account], [], $recover);
+    check($result['restored'] === 'saved' && $recovery->creates === 1,
+        'A changed provider address must repair the saved route without creating a new device.');
+    $recovery->deviceRecords = [array_replace($restorer->deviceRecords[0],
+        ['pubkey' => base64_encode(str_repeat('z', 32))])];
+    expectFailure(fn () => MullvadRecovery::reconcile(['saved' => $recoveryProfile], $recovery,
+        [$account], [], $recover), 'no free device slot');
+    check($recovery->creates === 1 && count($recovery->deviceRecords) === 1,
+        'Automatic recovery must never evict another Mullvad account device.');
     $provider->rememberRouterKey($identity['accountBinding'], $identity['privateKey']);
     $restarted = new FixtureMullvad($directory);
     $restarted->deviceRecords = $provider->deviceRecords;

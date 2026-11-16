@@ -156,3 +156,9 @@
 
 - Show **Offline** for discovered LAN devices even before a routing rule is saved. Keep offline LAN and Tailscale rows visible and their existing actions available.
 - Refresh device availability every 30 seconds while Devices and Routing has focus. Update only the availability labels and badges, so editing controls and drafts retain focus. A failed availability check shows **Unknown** instead of retaining an old Online result.
+
+## 0.8.40
+
+- Reconcile saved Mullvad WireGuard registrations with the account every ten minutes when a protected login is saved. If a registration disappears, restore its existing public key and update the owned native tunnel address, one server per maintenance run. This preserves server IDs and routing rules. A missing registration was confirmed on four live tunnels; the actor that removed them remains unknown.
+- Bound recovery retries and keep a per-key cooldown. Never remove another account device to make a slot. Show a dashboard warning when recovery cannot finish because the saved account is unavailable, a slot is full, or configuration apply fails.
+- Clear a stale failed Mullvad Ping result after a newer protected tunnel probe succeeds, while keeping fresh failures visible.

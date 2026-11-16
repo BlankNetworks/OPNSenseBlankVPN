@@ -13,6 +13,7 @@ use OPNsense\BlankVpn\Firewall;
 use OPNsense\BlankVpn\Ivpn;
 use OPNsense\BlankVpn\Language;
 use OPNsense\BlankVpn\Mullvad;
+use OPNsense\BlankVpn\MullvadRecovery;
 use OPNsense\BlankVpn\MystVpn;
 use OPNsense\BlankVpn\NativeVpn;
 use OPNsense\BlankVpn\Operations;
@@ -72,6 +73,20 @@ class ServiceController extends ApiControllerBase
             $health = Firewall::health();
             $loaded = $routing['enabled'] ? Firewall::loadedRules() : [];
             $warnings = $discovery['warnings'];
+            $recovery = MullvadRecovery::status();
+            if (time() - ($recovery['lastChecked'] ?? 0) < 3600) {
+                $warning = match ($recovery['outcome'] ?? '') {
+                    'waiting' => 'A saved Mullvad device registration is missing. Automatic recovery is waiting for its retry window.',
+                    'restored' => 'A missing Mullvad device registration was restored automatically. Check the account device list if this keeps happening.',
+                    'error' => 'Automatic Mullvad device recovery could not finish. Check the saved login and Mullvad account device slots.',
+                    'no-saved-login' => 'Save the Mullvad login on this router to enable automatic recovery of missing device registrations.',
+                    'no-matching-login' => 'Saved Mullvad tunnels do not match the available saved Mullvad login. Sign in with the account used to add them.',
+                    default => null,
+                };
+                if ($warning !== null) {
+                    $warnings[] = $warning;
+                }
+            }
             if ($routing['enabled'] && $loaded === null) {
                 $warnings[] = 'The active firewall rules are unavailable.';
             }
