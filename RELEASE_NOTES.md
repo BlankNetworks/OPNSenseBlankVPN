@@ -167,3 +167,10 @@
 
 - Retry a missing Mullvad device registration sooner after an HTTP 400 response. During live recovery, Mullvad briefly rejected a missing key, then accepted the same saved public key on retry. Keep a five-minute per-key cooldown and a separate longer backoff for other failures.
 - Show a specific retry warning for that response instead of suggesting the saved login or account slots are wrong. A subsequent healthy account check clears the warning.
+
+## 0.8.42
+
+- Reuse one registered Mullvad WireGuard device key and address across this router's saved relay profiles. Adding another server on the same account no longer consumes another device slot. An existing saved server with no registered key must be repaired or consolidated before adding more servers.
+- Route each tunnel's protected HTTPS probes and provider DNS with its own source-port range. This keeps simultaneously active relays distinguishable to PF even when they share the router's device address.
+- Stop automatic recovery from recreating deleted legacy per-server registrations when the account already has a registered router key. Preserve the existing per-key retry behavior if no router key remains.
+- Verify simultaneous shared-key forwarding across separate WireGuard exits in FreeBSD 15.1 and protected probes across five live Mullvad relays with one account device slot in use. Existing installations with multiple registered keys require consolidation of their saved profiles before those extra account devices can be removed.
