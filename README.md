@@ -39,17 +39,17 @@ ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubuser
 
 To pin this release instead, use the following command. It also checks the installer digest before running it.
 
-Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.43** on a supported amd64 or aarch64 OPNsense router.
+Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.44** on a supported amd64 or aarch64 OPNsense router.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.43.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.43/scripts/install.sh && sha256 -c 7ab8f6d36cf0fc9e771c5c13d1befda2fffe612f85bfebeb94a083c1456071fc /tmp/blankvpn-install-0.8.43.sh && sh /tmp/blankvpn-install-0.8.43.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.44.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.44/scripts/install.sh && sha256 -c ffcfb3413c1daf7bfc91a47735674e9681baa3caee4a4c5160b7ba93dfb242a1 /tmp/blankvpn-install-0.8.44.sh && sh /tmp/blankvpn-install-0.8.44.sh'
 ```
 
 The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.
 
 ### Download on your computer
 
-1. Open the [0.8.43 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.43), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+1. Open the [0.8.44 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.44), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
 2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 
@@ -149,7 +149,7 @@ The GitHub release includes Mihomo, tun2socks, Xray, sing-box, and the Clash YAM
 2. For a provider feed, add its direct HTTPS subscription URL. The router follows public HTTPS redirects after validating each destination and reports DNS, TLS, HTTP, timeout, or format errors. The list shows reported traffic allowance, usage, and expiry when the provider sends those fields. New subscriptions enable automatic refresh every six hours. Change the setting per saved subscription. An enabled exit retains its server if a later refresh removes it.
 3. Choose **Test** to check HTTPS through a proxy. The **Ping** column shows the result. **Ping & Sort** tests the visible proxy catalog one server at a time and orders successful results from lowest to highest HTTPS latency, with failures last. Press **Stop Ping & Sort** to stop after the current server. Imported servers are enabled by default and appear in the server picker. Assign a server in **Network Settings** or **Multi-Path Settings** to start its tunnel once routing is enabled. **Disable** hides an unused server from the picker. Each subscription supports up to 2,048 entries and 4 MiB.
 
-Use **Edit** beside a saved VPN exit or proxy server. Proxy names default to the imported server name and can be changed independently. The **Server** column keeps the original server name and endpoint visible; renaming keeps the protocol, credentials, core, and connection options. Custom names also appear in routing choices and survive subscription refreshes when the same server configuration returns. Saved VPN servers show their configured **Port** between Status and Ping when that information is available.
+Use **Edit** beside a saved VPN exit or proxy server. Proxy names default to the imported server name and can be changed independently. In **Name / Group**, subscription servers show their saved group name above the server's display name; manual servers show their own name. The **Server** column keeps the original server name and endpoint visible; renaming keeps the protocol, credentials, core, and connection options. Custom names also appear in routing choices and survive subscription refreshes when the same server configuration returns. Saved VPN servers show their configured **Port** between Status and Ping when that information is available.
 
 Use the far-left checkboxes in either saved server list, then **Remove selected**, to remove several unused servers together. The header checkbox selects all removable servers, including proxy servers on other pages. Review the selected count before confirming. Servers still referenced by routing settings or device rules must be unassigned first. Removing saved proxy servers does not remove their subscription; a later subscription refresh can import them again.
 

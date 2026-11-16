@@ -180,3 +180,7 @@
 
 - Retry post-install routing reconciliation up to two times after the OPNsense backend restarts. On the live 0.8.42 upgrade, the first reconciliation returned a generic maintenance warning and the immediate manual retry succeeded while all five tunnels and client routing remained healthy.
 - Confirm the migrated router's automatic Mullvad recovery reports healthy with only one registered account device and creates no additional keys.
+
+## 0.8.44
+
+- Rename the Proxy server-list column to **Name / Group**. Servers imported by a subscription show its saved group name above the server's display name; manually added servers continue to show their own name. Existing server identity, endpoint, subscription membership, and edit behavior remain unchanged.

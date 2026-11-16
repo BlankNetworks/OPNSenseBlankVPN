@@ -342,7 +342,7 @@
                 <thead role="rowgroup">
                     <tr role="row">
                         <th scope="col" role="columnheader" class="bv-server-selection-cell"><label class="bv-select-all"><input id="bv-proxy-select-all" type="checkbox" aria-label="Select all removable proxy servers on every page" title="Select all removable proxy servers on every page"><span>Select all</span></label></th>
-                        <th scope="col" role="columnheader">Name</th>
+                        <th scope="col" role="columnheader">Name / Group</th>
                         <th scope="col" role="columnheader">Server</th>
                         <th scope="col" role="columnheader">Protocol</th>
                         <th scope="col" role="columnheader">Core</th>

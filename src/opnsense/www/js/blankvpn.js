@@ -1849,10 +1849,14 @@
             if (!results.length) {
                 empty(servers, 'Import a server or subscription to get started.', 7);
             }
+            const feedNames = new Map(state.proxyFeeds.map((feed) => [feed.id, feed.name]));
             for (const node of results) {
                 const row = servers.insertRow();
                 serverSelectionCell(row, 'proxy', node);
-                const name = cell(row, node.name || node.serverName || node.host, 'Name');
+                const displayName = node.name || node.serverName || node.host;
+                const groups = [...new Set(array(node.sources).map((source) => feedNames.get(source)).filter(Boolean))];
+                const name = cell(row, groups.length ? groups.join(' · ') : displayName,
+                    'Name / Group', groups.length ? displayName : '');
                 name.dataset.serverName = node.id;
                 const address = endpoint(node.host, node.port);
                 const server = cell(row, node.serverName || node.host, 'Server', address);

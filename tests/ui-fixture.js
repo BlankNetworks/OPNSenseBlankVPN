@@ -691,9 +691,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('proxy-list').textContent.includes('Example proxy'), 'proxy catalog not displayed');
     const proxyRow = bv('proxy-list').rows[0];
     assert([...proxyRow.closest('table').tHead.rows[0].cells].slice(1).map(cell => cell.textContent.trim()).join(',') ===
-        'Name,Server,Protocol,Core,Ping,Action' && proxyRow.cells[1].textContent.includes('Example proxy') &&
+        'Name / Group,Server,Protocol,Core,Ping,Action' &&
+        proxyRow.cells[1].textContent.includes('Test feed') &&
+        proxyRow.cells[1].querySelector('small').textContent === 'Example proxy' &&
         proxyRow.cells[2].textContent.includes('192.0.2.9:1080') && proxyRow.cells[2].textContent.includes('Legacy'),
-        'Proxy name and server details must be separate and retain the requested column order and transport warning.');
+        'A subscribed proxy must show its group, server name, endpoint, and transport warning.');
     const proxyTest = proxyRow.querySelector('[data-test-key]');
     const proxyPing = proxyRow.querySelector('[data-test-result]');
     checkServerLayout(proxyRow, 'Proxy servers');
@@ -720,6 +722,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'renameProxyNode' && x.data.id === 'proxy-1' && x.data.name === 'SOCKS5 office') &&
         bv('proxy-list').textContent.includes('SOCKS5 office') &&
+        bv('proxy-list').rows[0].cells[1].textContent.includes('Test feed') &&
         bv('proxy-list').querySelector('.bv-ping-error').title.includes('timed out'), 'Proxy rename lost the row or its result');
     const renamedProxyRequest = requests.findLast(x => x.action === 'renameProxyNode');
     assert(Object.keys(renamedProxyRequest.data).sort().join(',') === 'id,name' &&
