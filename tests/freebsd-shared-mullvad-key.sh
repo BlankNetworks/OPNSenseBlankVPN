@@ -103,7 +103,7 @@ jexec "$exit2" wg set "$exit_wg2" private-key "$stage/exit2.key" listen-port 518
 jexec "$router" ifconfig "$router_wg1" inet "$router_tunnel/32" mtu 1420 up
 jexec "$router" ifconfig "$router_wg2" inet "$router_tunnel/32" mtu 1420 up
 jexec "$exit1" ifconfig "$exit_wg1" inet 10.130.65.42/24 mtu 1420 up
-jexec "$exit2" ifconfig "$exit_wg2" inet 10.130.66.42/24 mtu 1420 up
+jexec "$exit2" ifconfig "$exit_wg2" inet 10.130.65.43/24 mtu 1420 up
 test "$(jexec "$router" wg show "$router_wg1" public-key)" = \
     "$(jexec "$router" wg show "$router_wg2" public-key)"
 
