@@ -4,6 +4,7 @@
         <patterns>
             <pattern>ui/blankvpn/index*</pattern>
             <pattern>api/blankvpn/service/dashboard*</pattern>
+            <pattern>api/blankvpn/service/deviceAvailability*</pattern>
             <pattern>api/blankvpn/service/relays*</pattern>
             <pattern>api/blankvpn/service/connections*</pattern>
         </patterns>

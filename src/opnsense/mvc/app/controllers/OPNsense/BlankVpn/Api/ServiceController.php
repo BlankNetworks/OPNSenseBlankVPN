@@ -368,6 +368,36 @@ class ServiceController extends ApiControllerBase
         }), true, true);
     }
 
+    public function deviceAvailabilityAction()
+    {
+        return $this->respond(function () {
+            $settings = Policy::settings(new BlankVpn());
+            $diagnostics = new Diagnostics();
+            $lanInterfaces = array_diff(array_keys(Policy::availableInterfaces()), $settings['tailscaleInterfaces']);
+            $discovery = $diagnostics->devices(array_intersect($settings['interfaces'] ?: ['lan'], $lanInterfaces));
+            $devices = array_values(array_map(
+                static fn (array $device): array => [
+                    'interface' => $device['interface'], 'mac' => $device['mac'], 'online' => $device['online'],
+                ],
+                array_filter($discovery['devices'],
+                    static fn (array $device): bool => in_array($device['interface'], $lanInterfaces, true))
+            ));
+            $status = is_executable('/usr/local/bin/tailscale') ? $diagnostics->tailnetStatus() : [];
+            $peers = Diagnostics::tailnetPeers($status);
+            return [
+                'devices' => $devices,
+                'tailnetDevices' => array_map(static fn (array $peer): array => [
+                    'ipv4' => $peer['ipv4'], 'ipv6' => $peer['ipv6'], 'online' => $peer['online'],
+                ], $peers),
+                'truncated' => $discovery['truncated'],
+                'lanStatusAvailable' => !in_array('ARP table is unavailable.', $discovery['warnings'], true)
+                    || !in_array('Hostwatch history is unavailable.', $discovery['warnings'], true),
+                'tailnetStatusAvailable' => ($status['BackendState'] ?? '') === 'Running'
+                    && is_array($status['Peer'] ?? null) && count($status['Peer']) === count($peers),
+            ];
+        }, false, true);
+    }
+
     public function relaysAction()
     {
         return $this->respond(fn () => (new Mullvad())->relays(), false, true);

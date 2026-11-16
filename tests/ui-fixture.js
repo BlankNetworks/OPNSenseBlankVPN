@@ -12,7 +12,8 @@ const reply = {
     dashboard: {
         language: {locale:'fr_FR', available:{en_US:'English', fr_FR:'Français'},
             translations:{'Sign in':'Connexion', 'Sign in and save':'Se connecter et enregistrer'}},
-        devices: [{ipv4: '10.0.0.20', ipv4Addresses: ['10.0.0.20', '10.0.0.21'], ipv6: ['fd00::20'], mac:'02:00:00:00:00:20', interface:'lan', interfaceName:'LAN', name:'<b>Device</b>', lastSeen:'2026-11-12T13:30:00Z', stable:true}],
+        devices: [{ipv4: '10.0.0.20', ipv4Addresses: ['10.0.0.20', '10.0.0.21'], ipv6: ['fd00::20'], mac:'02:00:00:00:00:20', interface:'lan', interfaceName:'LAN', name:'<b>Device</b>', lastSeen:'2026-11-12T13:30:00Z', stable:true, online:true},
+            {ipv4:'10.0.0.199', mac:'02:00:00:00:00:99', interface:'lan', name:'Test iPad', online:false, leaseProvider:'Dnsmasq DHCP', macBindingSupported:true}],
         tailnetDevices: [{kind:'tailnet', name:'Remote iPad', ipv4:'100.101.102.104', ipv6:['fd7a:115c:a1e0::104'], online:true}],
         profiles: [{id:'vpn1', name:'Canada', relay:'ca-test-wg-001', port:51820, interface:'wg1', dns:['10.64.0.1'], latestHandshake:1794490200, status:'Recent handshake', receivedBytes:4096, sentBytes:2048}],
         assignments: [{id:'device1',ip:'10.0.0.20',mac:'02:00:00:00:00:20',interface:'lan',
@@ -50,6 +51,10 @@ const reply = {
     refreshRelays: {ok:true, relays:[{id:'ca-test-wg-003',country:'Canada',countryCode:'ca',cityCode:'yyz',city:'Test',hostname:'ca-test-wg-003',active:true}], stale:true, error:'Provider unavailable'}
 };
 window.confirm = () => true;
+window.setInterval = (callback, interval) => {
+    if (interval === 30000) window.blankvpnAvailabilityTick = callback;
+    return 1;
+};
 // OPNsense and third-party WebGUI code can intercept form submissions globally.
 document.addEventListener('submit', (event) => {
     if (['bv-login-form', 'bv-provider-login', 'bv-ivpn-login'].includes(event.target.id)) {
@@ -257,6 +262,11 @@ window.jQuery.ajax = async (request) => {
                 name:'Laptop', mac:'02:00:00:00:00:31', stable:false, leaseProvider:'Kea DHCPv4', macBindingSupported:true});
         }
     }
+    if (action === 'deviceAvailability') {
+        return {devices:reply.dashboard.devices.map(({interface:port, mac, online}) => ({interface:port, mac, online})),
+            tailnetDevices:reply.dashboard.tailnetDevices.map(({ipv4, ipv6, online}) => ({ipv4, ipv6, online})),
+            truncated:false, lanStatusAvailable:true, tailnetStatusAvailable:true};
+    }
     return structuredClone(reply[action] || {ok:true});
 };
 
@@ -293,6 +303,45 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(!requests.some(x => x.action === 'relays'), 'server list loaded before sign-in');
     assert(getComputedStyle(bv('appearance')).backgroundImage === 'none', 'host select decoration was not suppressed');
     document.querySelector('[data-bv-section="network"]').click();
+    const disconnectedIpad = bv('device-list').querySelector('[aria-label="Select Test iPad"]').closest('tr');
+    assert(disconnectedIpad.cells[0].querySelector('.bv-offline')?.textContent === 'Offline' &&
+        disconnectedIpad.querySelector('[aria-label="Select Test iPad"]'),
+        'A discovered but unassigned offline LAN device must stay visible and selectable.');
+    const lanIpadSelect = disconnectedIpad.querySelector('[aria-label="Select Test iPad"]');
+    lanIpadSelect.focus();
+    reply.dashboard.devices.find(device => device.name === 'Test iPad').online = true;
+    window.blankvpnAvailabilityTick();
+    await wait();
+    assert(disconnectedIpad.isConnected && document.activeElement === lanIpadSelect &&
+        !disconnectedIpad.cells[0].querySelector('.bv-offline'),
+        'A LAN device coming online must update without rebuilding the focused row.');
+    reply.dashboard.devices.find(device => device.name === 'Test iPad').online = false;
+    window.blankvpnAvailabilityTick();
+    await wait();
+    assert(disconnectedIpad.cells[0].querySelector('.bv-offline')?.textContent === 'Offline',
+        'A LAN device going offline must update without a manual refresh.');
+    bv('routing-scope').value = 'tailscale';
+    bv('routing-scope').dispatchEvent(new Event('change'));
+    const ipadSelect = bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]');
+    const ipadRow = ipadSelect.closest('tr');
+    ipadSelect.focus();
+    reply.dashboard.tailnetDevices[0].online = false;
+    window.blankvpnAvailabilityTick();
+    await wait();
+    assert(requests.some(x => x.action === 'deviceAvailability') && ipadRow.isConnected &&
+        document.activeElement === ipadSelect && ipadRow.cells[2].textContent === 'Offline' &&
+        ipadRow.cells[0].querySelector('.bv-offline')?.textContent === 'Offline',
+        'A focused device row must update from Online to Offline without losing its controls or focus.');
+    ipadSelect.click();
+    assert(!bv('assignment').hidden, 'An offline Tailscale device must remain editable.');
+    bv('close-assignment').click();
+    reply.dashboard.tailnetDevices[0].online = true;
+    window.blankvpnAvailabilityTick();
+    await wait();
+    assert(ipadRow.cells[2].textContent === 'Online' && !ipadRow.cells[0].querySelector('.bv-offline'),
+        'Availability polling must restore Online after the peer reconnects.');
+    bv('routing-scope').value = 'local';
+    bv('routing-scope').dispatchEvent(new Event('change'));
     const ports = bv('managed').querySelectorAll('input');
     const checked = ports[0].closest('label');
     assert(getComputedStyle(checked).color === 'rgb(23, 56, 102)' &&

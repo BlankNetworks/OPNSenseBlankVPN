@@ -87,6 +87,8 @@
             networkDevice: null,
             busy: false,
             dashboardRequest: null,
+            deviceAvailabilityRequest: null,
+            deviceAvailabilityRevision: 0,
             deviceRefreshRunning: false,
             settingsDirty: false,
             tailnetRoutingDirty: false,
@@ -690,6 +692,10 @@
             for (const {device, assignment} of rows) {
                 const tailnet = (device?.kind || assignment?.kind) === 'tailnet';
                 const row = (tailnet ? tailnetBody : body).insertRow();
+                row.dataset.deviceKey = device ? deviceKey(device) : assignment
+                    ? deviceKey(assignment.kind === 'tailnet'
+                        ? {kind: 'tailnet', ipv4: assignment.ip, ipv6: assignment.ipv6}
+                        : {interface: assignment.interface, mac: assignment.mac}) : '';
                 const policy = tailnet ? tailnetPolicy : state.settings;
                 const networkDraft = tailnet ? wholeTailnet : wholeNetwork;
                 const networkApplies = networkDraft && policy?.enabled && policy.coverage === 'network' && policy.networkMode !== 'disabled';
@@ -701,9 +707,9 @@
                 const reservationIp = assignment?.reservationIp || device?.reservationIpv4 || '';
                 const reserveAddress = device?.stable === true ? device.reservationIpv4 || observedIp : observedIp;
                 const ip = observedIp || effectiveIp || assignment?.ip || '';
-                const offline = Boolean(assignment && (!tailnet
-                    ? device ? device.online === false : !state.discoveryTruncated
-                    : device ? device.online === false : state.tailnetStatusAvailable));
+                const offline = !tailnet
+                    ? device ? device.online === false : Boolean(assignment && !state.discoveryTruncated)
+                    : device ? device.online === false : Boolean(assignment && state.tailnetStatusAvailable);
                 const ipv6 = list(device?.ipv6 || assignment?.ipv6);
                 const routableV6 = ipv6.filter(address => !address.toLowerCase().startsWith('fe80:'));
                 const interfaceId = assignment?.interface || device?.interface ||
@@ -756,15 +762,7 @@
                     ...list(device?.ipv4Addresses), ...ipv6].filter(Boolean))];
                 const identity = [device?.mac || assignment?.mac, device?.arpConfirmed === false ? 'DHCP lease' : ''];
                 const deviceCell = cell(row, name, 'Device', tailnet ? 'Tailscale' : identity.filter(Boolean).join(' · '));
-                if (offline) {
-                    const badge = document.createElement('span');
-                    badge.className = 'bv-offline';
-                    badge.textContent = 'Offline';
-                    if (!tailnet) {
-                        badge.title = 'No recent LAN activity detected';
-                    }
-                    deviceCell.insertBefore(badge, deviceCell.firstElementChild);
-                }
+                setOfflineBadge(deviceCell, offline, tailnet);
                 const addressDetail = addresses.slice(1);
                 if (waitingForAddress) {
                     if (observedIp) {
@@ -891,6 +889,96 @@
             const counts = [count + (count === 1 ? ' device found' : ' devices found')];
             counts.push(rules + (rules === 1 ? ' saved rule' : ' saved rules'));
             byId('observed').textContent = counts.join(' · ');
+        }
+
+        function deviceKey(device) {
+            return device.kind === 'tailnet' ? 'tailnet/' + (device.ipv4 || list(device.ipv6)[0] || '')
+                : device.interface + '/' + device.mac;
+        }
+
+        function setOfflineBadge(deviceCell, offline, tailnet) {
+            const existing = deviceCell.querySelector('.bv-offline');
+            if (!offline) {
+                existing?.remove();
+                return;
+            }
+            const badge = existing || document.createElement('span');
+            badge.className = 'bv-offline';
+            badge.textContent = 'Offline';
+            badge.title = tailnet ? 'Tailscale reports this peer offline' : 'No recent LAN activity detected';
+            if (!existing) {
+                deviceCell.insertBefore(badge, deviceCell.firstElementChild);
+            }
+        }
+
+        async function refreshDeviceAvailability() {
+            if (state.dashboardRequest || state.deviceAvailabilityRequest) {
+                return;
+            }
+            const revision = state.deviceAvailabilityRevision;
+            state.deviceAvailabilityRequest = (async () => {
+                const data = await api('deviceAvailability');
+                if (revision !== state.deviceAvailabilityRevision) {
+                    return;
+                }
+                const lan = new Map(array(data.devices).map(device => [deviceKey(device), device]));
+                const tailnet = new Map(array(data.tailnetDevices).map(device =>
+                    [deviceKey({...device, kind: 'tailnet'}), device]));
+                state.discoveryTruncated = data.truncated === true;
+                state.tailnetStatusAvailable = data.tailnetStatusAvailable === true;
+                for (const device of state.devices) {
+                    const current = lan.get(deviceKey(device));
+                    device.online = data.lanStatusAvailable !== true ? null
+                        : current ? current.online === true : state.discoveryTruncated ? null : false;
+                }
+                for (const device of state.tailnetDevices) {
+                    const current = tailnet.get(deviceKey(device));
+                    device.online = !state.tailnetStatusAvailable ? null : current ? current.online === true : false;
+                }
+                const observed = new Map([...state.devices, ...state.tailnetDevices]
+                    .map(device => [deviceKey(device), device]));
+                for (const [body, isTailnet] of [[byId('device-list'), false], [byId('tailnet-device-list'), true]]) {
+                    for (const row of body.rows) {
+                        const device = observed.get(row.dataset.deviceKey);
+                        const current = isTailnet ? tailnet.get(row.dataset.deviceKey) : lan.get(row.dataset.deviceKey);
+                        if (!row.dataset.deviceKey) {
+                            continue;
+                        }
+                        const online = device?.online ?? (isTailnet ? !state.tailnetStatusAvailable ? null
+                            : current ? current.online === true : false
+                            : data.lanStatusAvailable !== true || state.discoveryTruncated ? null
+                                : current ? current.online === true : false);
+                        setOfflineBadge(row.cells[0], online === false, isTailnet);
+                        if (isTailnet) {
+                            row.cells[2].textContent = online === true ? 'Online'
+                                : online === false ? 'Offline' : 'Unknown';
+                        }
+                    }
+                }
+                const online = state.tailnetDevices.filter(device => device.online === true).length;
+                byId('tailnet-count').textContent = state.tailnetDevices.length ? online + ' online' : '';
+            })().catch(() => {
+                if (revision !== state.deviceAvailabilityRevision) {
+                    return;
+                }
+                for (const device of [...state.devices, ...state.tailnetDevices]) {
+                    device.online = null;
+                }
+                for (const row of byId('tailnet-device-list').rows) {
+                    if (row.dataset.deviceKey) {
+                        setOfflineBadge(row.cells[0], false, true);
+                        row.cells[2].textContent = 'Unknown';
+                    }
+                }
+                for (const row of byId('device-list').rows) {
+                    if (row.dataset.deviceKey) {
+                        setOfflineBadge(row.cells[0], false, false);
+                    }
+                }
+            }).finally(() => {
+                state.deviceAvailabilityRequest = null;
+            });
+            return state.deviceAvailabilityRequest;
         }
 
         function vpnStatus(profile) {
@@ -1849,6 +1937,7 @@
         }
 
         async function fetchDashboard() {
+            state.deviceAvailabilityRevision++;
             const refresh = byId('refresh');
             const loginRevision = state.loginRevision;
             refresh.disabled = true;
@@ -3505,7 +3594,12 @@
         });
         void refreshDashboard();
         window.setInterval(() => {
-            if (!document.hidden && !state.busy && byId('assignment').hidden && !root.contains(document.activeElement)) {
+            if (document.hidden || state.busy) {
+                return;
+            }
+            if (state.section === 'network' && root.contains(document.activeElement)) {
+                void refreshDeviceAvailability();
+            } else if (byId('assignment').hidden && !root.contains(document.activeElement)) {
                 void refreshDashboard();
             }
         }, 30000);

@@ -39,17 +39,17 @@ ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubuser
 
 To pin this release instead, use the following command. It also checks the installer digest before running it.
 
-Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.38** on a supported amd64 or aarch64 OPNsense router.
+Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.39** on a supported amd64 or aarch64 OPNsense router.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.38.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.38/scripts/install.sh && sha256 -c 4f790b3e8956fe6e5fbc5b722e3be7e48529ce5ddb38858a18e488be749a097e /tmp/blankvpn-install-0.8.38.sh && sh /tmp/blankvpn-install-0.8.38.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.39.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.39/scripts/install.sh && sha256 -c ad01c9f770361239ce8ff0f45743ce4cec061c0f5a526d25f49da329db9e196f /tmp/blankvpn-install-0.8.39.sh && sh /tmp/blankvpn-install-0.8.39.sh'
 ```
 
 The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.
 
 ### Download on your computer
 
-1. Open the [0.8.38 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.38), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+1. Open the [0.8.39 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.39), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
 2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 
@@ -181,7 +181,7 @@ Open **Network Settings**, check the Ethernet ports or VLANs under **Interface**
 
 In **Network Settings**, press **Refresh** to see LAN devices and Tailscale peers. You can rename a saved device under either coverage mode. With **Whole-Network coverage** and the **Kill Switch** off, use **Bypass VPN** beside a LAN device to use its ISP WAN and direct DNS. **Use network rule** removes the exception. Bypass follows the device’s DHCP reservation. A saved IPv6 address follows the exception while OPNsense can verify it belongs to the device. The device exception is paused when the Kill Switch is on, and is inactive in **Only devices I choose** and **Blocked** mode.
 
-**Select** fills the addresses and MAC where available. The LAN list shows IPv4 neighbors and current Kea or Dnsmasq leases on eligible local interfaces. A **DHCP lease** label means OPNsense assigned the address and has yet to confirm it in ARP. Devices outside your saved coverage appear with setup guidance. Saved rules stay visible and editable with an **Offline** badge. For a matching active Kea or Dnsmasq lease, **Reserve IP and save rule** adds a DHCP reservation and applies the rule. For other devices, create a unique reservation in OPNsense first. Individual Multi-Path rules use the lists in **Multi-Path Settings**.
+**Select** fills the addresses and MAC where available. The LAN list shows IPv4 neighbors and current Kea or Dnsmasq leases on eligible local interfaces. A **DHCP lease** label means OPNsense assigned the address and has yet to confirm it in ARP. Devices outside your saved coverage appear with setup guidance. Offline devices show an **Offline** badge even before a rule is saved; saved rules stay visible and editable. While Devices and Routing is open, availability updates every 30 seconds without interrupting the selected row or editor. For a matching active Kea or Dnsmasq lease, **Reserve IP and save rule** adds a DHCP reservation and applies the rule. For other devices, create a unique reservation in OPNsense first. Individual Multi-Path rules use the lists in **Multi-Path Settings**.
 
 **On Demand** is available for individual LAN rules that use one server. A dedicated WireGuard tunnel with a Kill Switch can idle between uses. Whole-Network rules, Tailscale device rules, and base and override exits selected by active Multi-Path rules stay ready. Managed WireGuard exits in those policies use persistent keepalive. Attached OpenVPN and WireGuard services use their OPNsense service settings.
 

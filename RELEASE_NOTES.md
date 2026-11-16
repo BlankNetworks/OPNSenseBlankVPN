@@ -151,3 +151,8 @@
 
 - Add Edit → Restore device for saved Mullvad tunnels whose WireGuard keys were removed from the Mullvad account. It re-registers the existing public key, updates any newly assigned tunnel addresses in the owned OPNsense WireGuard configuration, and keeps the saved server ID, client rules, and Multi-Path assignments.
 - Keep the warning precise: a Mullvad device used by a saved tunnel is still needed even when Blank VPN routing is disabled. One live account had four such missing registrations; the remaining New Jersey registration passed a protected HTTPS test while the others had stale handshakes.
+
+## 0.8.39
+
+- Show **Offline** for discovered LAN devices even before a routing rule is saved. Keep offline LAN and Tailscale rows visible and their existing actions available.
+- Refresh device availability every 30 seconds while Devices and Routing has focus. Update only the availability labels and badges, so editing controls and drafts retain focus. A failed availability check shows **Unknown** instead of retaining an old Online result.
