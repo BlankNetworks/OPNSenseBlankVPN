@@ -112,8 +112,7 @@ try {
                 if ($verified !== $health) {
                     Policy::writeState('health.json', json_encode($verified, JSON_THROW_ON_ERROR));
                 }
-                if (Policy::anyEnabled($settings) || $tunnels !== [] ||
-                    (string)(\OPNsense\Core\Config::getInstance()->object()->OPNsense->tailscale->settings->enabled ?? '') === '1') {
+                if (Policy::anyEnabled($settings) || $tunnels !== []) {
                     Operations::sync($model);
                 }
             });

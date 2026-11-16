@@ -11,11 +11,6 @@
         <p id="bv-ping-dialog-detail"></p>
         <button id="bv-close-ping-dialog" type="button" class="btn btn-default">Close</button>
     </dialog>
-    <dialog id="bv-service-test-dialog" class="bv-panel bv-ping-dialog" aria-labelledby="bv-service-test-title">
-        <h2 id="bv-service-test-title">Multi-Path route test</h2>
-        <div id="bv-service-test-detail" class="bv-route-test-detail" role="status"></div>
-        <button id="bv-close-service-test-dialog" type="button" class="btn btn-default">Close</button>
-    </dialog>
 
     <nav class="bv-navigation" aria-label="Blank VPN &amp; Proxy pages">
         <button type="button" data-bv-section="vpns" aria-controls="bv-tunnels" aria-pressed="true">VPN Login</button>
@@ -321,6 +316,8 @@
         </div>
         <p id="bv-proxy-count" class="text-muted" role="status"></p>
         <div class="bv-actions bv-bulk-actions">
+            <button id="bv-proxy-ping-sort" type="button" class="btn btn-default">Ping &amp; Sort</button>
+            <span id="bv-proxy-ping-sort-status" class="text-muted" role="status"></span>
             <button id="bv-proxy-remove-selected" type="button" class="btn btn-default" disabled>Remove selected</button>
             <span id="bv-proxy-selected-count" class="text-muted" role="status">0 selected</span>
         </div>
@@ -371,7 +368,6 @@
         <section class="bv-panel" id="bv-local-routing" aria-labelledby="bv-local-routing-title" data-manage-only>
             <div class="bv-heading">
                 <h2 id="bv-local-routing-title">Local routing</h2>
-                <button type="button" id="bv-disable-routing" class="btn btn-danger" hidden>Disable Local routing</button>
             </div>
             <p id="bv-current-routing" class="bv-callout" aria-live="polite"></p>
             <form id="bv-settings-form">
@@ -419,7 +415,8 @@
                     </label>
                 </details>
                 <div class="bv-actions">
-                    <button type="submit" id="bv-save-routing" class="btn btn-primary">Save and Enable VPN</button>
+                    <button type="submit" id="bv-save-routing" class="btn btn-primary">Save</button>
+                    <button type="submit" id="bv-toggle-routing" class="btn bv-routing-toggle">Enable VPN</button>
                     <span id="bv-routing-enabled" role="status" hidden>VPN routing enabled</span>
                 </div>
             </form>
@@ -427,7 +424,6 @@
         <section class="bv-panel" id="bv-tailnet-coverage-panel" aria-labelledby="bv-tailnet-coverage-title" data-manage-only hidden>
             <div class="bv-heading">
                 <h2 id="bv-tailnet-coverage-title">Tailscale routing</h2>
-                <button type="button" id="bv-disable-tailnet-routing" class="btn btn-danger" hidden>Disable Tailscale routing</button>
             </div>
             <p id="bv-current-tailnet-routing" class="bv-callout" aria-live="polite"></p>
             <div id="bv-tailnet-base-test" class="bv-actions" hidden></div>
@@ -457,7 +453,8 @@
                 </label>
                 <p id="bv-tailnet-coverage-note" class="text-muted" aria-live="polite"></p>
                 <div class="bv-actions">
-                    <button type="submit" id="bv-save-tailnet-routing" class="btn btn-primary">Save and Enable Tailscale Routing</button>
+                    <button type="submit" id="bv-save-tailnet-routing" class="btn btn-primary">Save</button>
+                    <button type="submit" id="bv-toggle-tailnet-routing" class="btn bv-routing-toggle">Enable VPN</button>
                 </div>
             </form>
         </section>

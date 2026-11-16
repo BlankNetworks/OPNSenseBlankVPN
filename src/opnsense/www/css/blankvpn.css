@@ -290,13 +290,16 @@
     color: var(--bv-on-accent);
 }
 
-.blankvpn #bv-save-routing.bv-enabled {
+.blankvpn .bv-routing-toggle,
+.blankvpn .bv-routing-toggle:is(:hover, :focus, :active, :disabled) {
     background: #187449;
-    border-color: #187449;
+    border: 1px solid #187449;
+    border-radius: .45rem;
     color: #fff;
 }
 
-.blankvpn #bv-disable-routing {
+.blankvpn .bv-routing-toggle.bv-routing-on,
+.blankvpn .bv-routing-toggle.bv-routing-on:is(:hover, :focus, :active, :disabled) {
     background: #b1283c;
     border: 1px solid #b1283c;
     color: #fff;
@@ -871,9 +874,19 @@
     width: auto;
 }
 
-.blankvpn .bv-services td,
-.blankvpn .bv-route-test-detail {
+.blankvpn .bv-services td {
     overflow-wrap: anywhere;
+}
+
+.blankvpn .bv-service-ping {
+    display: block;
+    margin-top: .35rem;
+    color: var(--bv-muted);
+    font-size: .85em;
+}
+
+.blankvpn .bv-service-ping[data-result="fail"] {
+    color: #8e273c;
 }
 
 .blankvpn .bv-services .bv-inline-form select {

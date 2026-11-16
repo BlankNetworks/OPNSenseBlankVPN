@@ -48,7 +48,6 @@ const reply = {
 };
 window.confirm = () => true;
 // OPNsense and third-party WebGUI code can intercept form submissions globally.
-// Closing route dialogs must work without relying on method="dialog" submission.
 document.addEventListener('submit', (event) => {
     if (event.target.closest('dialog')) event.preventDefault();
 }, true);
@@ -203,6 +202,9 @@ window.jQuery.ajax = async (request) => {
     }
     if (action === 'testExit' && exitTestError) {
         return {ok:true, reachable:false, detail:exitTestError};
+    }
+    if (action === 'testProxyNode' && data.id === 'sort-fast') {
+        return {ok:true, reachable:true, milliseconds:8.4};
     }
     if (action === 'renameProxyNode') {
         reply.proxyCatalog.nodes.find(x => x.id === data.id).name = data.name;
@@ -664,6 +666,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'importProxies' && x.data.name === 'Private SOCKS') &&
         bv('proxy-body').value === '' && bv('proxy-import-name').value === '', 'proxy import was not submitted and cleared');
+    reply.proxyCatalog.nodes.push({id:'sort-fast', name:'Fast proxy', host:'192.0.2.7', port:1080,
+        protocol:'socks5', core:'mihomo'});
+    buttonByText('subscription-list', 'Refresh').click();
+    await wait();
+    bv('proxy-ping-sort').click();
+    await wait();
+    assert(requests.some(x => x.action === 'testProxyNode' && x.data.id === 'sort-fast') &&
+        bv('proxy-list').rows[0].cells[1].textContent.includes('Fast proxy') &&
+        bv('proxy-list').rows[0].querySelector('[data-test-result]').textContent.includes('8.4 ms') &&
+        bv('proxy-ping-sort-status').textContent.includes('Sorted 2 of 2'),
+        'Ping & Sort must test every proxy serially and put the lowest successful latency first.');
+    bv('proxy-ping-sort').click();
+    assert(bv('proxy-ping-sort').textContent === 'Stop Ping & Sort', 'A running sort needs a stop control.');
+    bv('proxy-ping-sort').click();
+    await wait();
+    assert(bv('proxy-ping-sort-status').textContent.includes('Stopped after 1 of 2'),
+        'Stopping must prevent additional server tests.');
+    reply.proxyCatalog.nodes.pop();
+    buttonByText('subscription-list', 'Refresh').click();
+    await wait();
     document.querySelector('[data-bv-section="tailscale"]').click();
     assert(!bv('tailscale-page').hidden && bv('tailscale-status').textContent.includes('Exit node advertised') &&
         !bv('native-tailscale').hidden, 'Tailscale page or native status missing');
@@ -694,15 +716,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelector('[data-bv-section="network"]').click();
     bv('routing-scope').value = 'local';
     bv('routing-scope').dispatchEvent(new Event('change'));
-    assert(bv('save-routing').textContent === 'Save and Enable VPN' && bv('routing-enabled').hidden &&
+    assert(bv('save-routing').textContent === 'Save' && bv('toggle-routing').textContent === 'Enable VPN' &&
+        getComputedStyle(bv('toggle-routing')).backgroundColor === 'rgb(24, 116, 73)' && bv('routing-enabled').hidden &&
         bv('network-kill-field').hidden, 'Disabled routing did not show the enable action.');
     bv('settings-form').requestSubmit(bv('settings-form').querySelector('button[type=submit]'));
+    await wait();
+    assert(requests.some(x => x.action === 'settings' && x.data.enabled === false) &&
+        !reply.dashboard.settings.enabled && bv('toggle-routing').textContent === 'Enable VPN',
+        'Save must keep Local VPN routing disabled.');
+    bv('settings-form').requestSubmit(bv('toggle-routing'));
     await wait();
     assert(requests.some(x => x.action === 'settings' && x.data.interfaces.includes('lan') &&
       x.data.smartInterfaces.includes('lan') && x.data.enabled === true &&
       !Object.hasOwn(x.data, 'dashboardBind')), 'network save was not scoped');
-    assert(bv('save-routing').classList.contains('bv-enabled') && !bv('routing-enabled').hidden,
-        'Verified enabled state did not turn the button green.');
+    assert(bv('save-routing').textContent === 'Save' && bv('toggle-routing').textContent === 'Disable VPN' &&
+        getComputedStyle(bv('toggle-routing')).backgroundColor === 'rgb(177, 40, 60)' &&
+        !bv('routing-enabled').hidden, 'Enabled Local routing must show a red disable action beside blue Save.');
     bv('refresh').click();
     await wait();
     assert(requests.some(x => x.action === 'discoverDevices') && bv('device-list').textContent.includes('New console'),
@@ -822,9 +851,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         'Combined Tailscale coverage requires its own base server.');
     bv('tailnet-coverage-form').requestSubmit(bv('save-tailnet-routing'));
     await wait();
+    assert(reply.dashboard.settings.tailnetEnabled === false && bv('toggle-tailnet-routing').textContent === 'Enable VPN' &&
+        getComputedStyle(bv('toggle-tailnet-routing')).backgroundColor === 'rgb(24, 116, 73)',
+        'Tailscale Save must not enable routing.');
+    bv('tailnet-coverage-form').requestSubmit(bv('toggle-tailnet-routing'));
+    await wait();
     assert(requests.some(x => x.action === 'tailnetRouting' && x.data.networkProfile === 'vpn1' &&
         !Object.hasOwn(x.data, 'interfaces')) && reply.dashboard.settings.coverage === 'device' &&
-        reply.dashboard.settings.tailnetCoverage === 'network',
+        reply.dashboard.settings.tailnetCoverage === 'network' && bv('toggle-tailnet-routing').textContent === 'Disable VPN' &&
+        getComputedStyle(bv('toggle-tailnet-routing')).backgroundColor === 'rgb(177, 40, 60)',
         'Saving Whole-Network Tailscale coverage must not change Local device coverage.');
     bv('tailnet-base-test').querySelector('button').click();
     await wait();
@@ -837,6 +872,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('tailnet-coverage').dispatchEvent(new Event('input', {bubbles:true}));
     bv('tailnet-coverage-form').requestSubmit(bv('save-tailnet-routing'));
     await wait();
+    bv('toggle-tailnet-routing').click();
+    await wait();
+    assert(requests.some(x => x.action === 'tailnetRouting' && x.data.enabled === false) &&
+        bv('toggle-tailnet-routing').textContent === 'Enable VPN' && reply.dashboard.settings.enabled === true,
+        'Tailscale Disable VPN must leave Local routing enabled.');
+    bv('tailnet-coverage-form').requestSubmit(bv('toggle-tailnet-routing'));
+    await wait();
+    assert(bv('toggle-tailnet-routing').textContent === 'Disable VPN' &&
+        reply.dashboard.settings.tailnetEnabled === true, 'Tailscale Enable VPN must restore its saved scope.');
     bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
     assert(bv('ip').value === '100.101.102.104' && bv('ipv6').value === 'fd7a:115c:a1e0::104' &&
         bv('interface').value === 'opt2' && bv('device-kind').value === 'tailnet', 'Existing gateway link rules must remain available.');
@@ -1187,24 +1231,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('service-scope').value === 'local',
         'Multi-Path offers independent list coverage.');
     const youtubeRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('YouTube'));
-    youtubeRow.querySelector('[aria-label="Test route for YouTube"]').click();
+    youtubeRow.querySelector('[aria-label="Ping server for YouTube"]').click();
     await wait();
-    assert(requests.some(x => x.action === 'testServiceRoute' && x.data.id === 'youtube-demo') &&
-        bv('service-test-dialog').open && bv('service-test-detail').textContent.includes('www.youtube.com') &&
-        bv('service-test-detail').textContent.includes('DNS and firewall match New York'),
-        'The Multi-Path test reports its hostname and result without changing the service row layout.');
-    bv('close-service-test-dialog').click();
-    assert(!bv('service-test-dialog').open, 'The Multi-Path route test Close button must dismiss its modal.');
+    assert(requests.some(x => x.action === 'testExit' && x.data.id === 'vpn1') &&
+        youtubeRow.querySelector('.bv-service-ping').textContent.includes('HTTPS 45.2 ms') &&
+        !document.getElementById('bv-service-test-dialog'),
+        'Multi-Path Ping must show the selected server result inline without a popup.');
+    let listDownload;
+    let listBlob;
+    const nativeListLink = HTMLAnchorElement.prototype.click;
+    const nativeListBlob = URL.createObjectURL;
+    HTMLAnchorElement.prototype.click = function () { listDownload = this.download; };
+    URL.createObjectURL = function (blob) { listBlob = blob; return 'blob:fixture-list'; };
+    try {
+        youtubeRow.querySelector('[aria-label="Download YouTube list"]').click();
+    } finally {
+        HTMLAnchorElement.prototype.click = nativeListLink;
+        URL.createObjectURL = nativeListBlob;
+    }
+    assert(listDownload === 'YouTube.txt' && (await listBlob.text()).includes('youtube.com'),
+        'A saved Multi-Path list must download from its row.');
+    assert([...youtubeRow.cells[3].querySelectorAll('button')].map(button => button.textContent).join(',') ===
+        'Ping,Edit,Download,Remove', 'Multi-Path row actions must be Ping, Edit, Download, Remove.');
     const downRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('Unavailable route'));
     assert(downRow.cells[2].textContent.includes('Selected server unavailable · Matching traffic blocked') &&
         !youtubeRow.cells[2].textContent.includes('Matching traffic blocked'),
         'A failed override should only change the status for its matching service.');
-    downRow.querySelector('[aria-label="Test route for Unavailable route"]').click();
+    exitTestError = 'Selected server unavailable. Matching traffic is blocked';
+    downRow.querySelector('[aria-label="Ping server for Unavailable route"]').click();
     await wait();
-    assert(bv('service-test-detail').textContent.includes('Selected server unavailable. Matching traffic is blocked'),
-        'The route test should display service-specific blocking.');
-    bv('close-service-test-dialog').click();
-    assert(!bv('service-test-dialog').open, 'The failed Multi-Path route test must also close.');
+    assert(downRow.querySelector('.bv-service-ping').textContent.includes('Selected server unavailable') &&
+        downRow.querySelector('.bv-service-ping').dataset.result === 'fail',
+        'A failed Multi-Path ping must appear in the row.');
+    exitTestError = null;
     reply.dashboard.settings.networkRouting.lan = {gateway:null, outage:true, statusKnown:true, blockedServices:0};
     bv('refresh').click();
     await wait();
@@ -1241,13 +1300,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('refresh').click();
     await wait();
     document.querySelector('[data-bv-section="network"]').click();
-    assert(bv('disable-routing').parentElement.contains(bv('local-routing-title')) &&
-        getComputedStyle(bv('disable-routing')).backgroundColor === 'rgb(177, 40, 60)',
-        'Disable Local routing must be red in the Local routing header.');
-    bv('disable-routing').click();
+    assert(bv('toggle-routing').textContent === 'Disable VPN' &&
+        getComputedStyle(bv('toggle-routing')).backgroundColor === 'rgb(177, 40, 60)',
+        'Disable Local routing must be red beside Save.');
+    bv('toggle-routing').click();
     await wait();
     assert(requests.some(x => x.action === 'disable') && bv('routing-enabled').hidden &&
-        !bv('save-routing').classList.contains('bv-enabled') && bv('network-kill').checked &&
+        bv('toggle-routing').textContent === 'Enable VPN' && bv('network-kill').checked &&
         reply.dashboard.settings.tailnetEnabled === true,
         'Disabling VPN did not preserve the saved kill switch and clear the green state.');
     document.querySelector('[data-bv-section="vpns"]').click();

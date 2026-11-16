@@ -10,6 +10,7 @@
 | PHP and XML source | The repository checks workflow runs the PHP fixtures and syntax checks. MVC, menu and ACL XML are parsed. JavaScript syntax is checked with Node. |
 | Package archives | The release workflow checks the ABI and checksums for both FreeBSD architectures, opens each package with native pkg in a FreeBSD 15.1 guest, and runs the bundled core version commands. |
 | SSH installer | A disposable router command fixture checks automatic ABI selection, package checksum verification before installation, protected backup permissions, and rejection of unsupported ABI or altered package bytes. Release notes include the installer's version-pinned digest and retain the manual package steps. |
+| 0.8.34 dashboard and install safety | The browser fixture at four widths verifies separate Local and Tailscale Save/Enable/Disable actions, serial proxy Ping & Sort, inline Multi-Path pings, and saved-list downloads. Source review confirmed a fresh install keeps routing disabled, loads the proxy TUN driver only when a selected proxy starts, and does not reconcile Blank VPN routing merely because Tailscale is enabled. A plain OPNsense first install still needs the lab check below. |
 | Packet-filter fail-closed fixture | The release workflow uses isolated FreeBSD 15.1 networks to test tagged IPv4 and IPv6 WAN blocking, pinned VPN routes, removal of stale WAN states, preserved local access, and recovery. It also verifies that a failed Multi-Path override blocks its own destination while the base VPN and an unrelated WAN client stay online. |
 | Physical OPNsense router | Upgraded an amd64 OPNsense 26.7 router through the signed 0.8.31 package. Fresh SSH through Tailscale worked after the upgrade and routing tests; Tailscale settings and management routes were not changed. See the dated results below. |
 
@@ -46,6 +47,8 @@ The router had a protected configuration backup and timed rollback for each live
 
 The 0.8.32 route-test message reports offline peers when no completed client connection exists. It clarifies the observed incident; it cannot keep a remote iPhone connected to Tailscale. The browser fixture also verifies that Multi-Path test results close with an explicit button while dialog form submissions are intercepted, at 320 × 800, 390 × 844, 900 × 900, and 1280 × 900.
 
+In 0.8.34, the Multi-Path route-test popup is removed from the dashboard. The row Ping checks its selected server and shows the result inline; it does not claim that client DNS, PF classification, or forwarding passed.
+
 ## Required OPNsense lab checks
 
 A passing lab should confirm all of the following on the exact CE 26.7 build. Use controlled WireGuard peers when Mullvad credentials are unavailable. Record the two sets of results independently.
@@ -53,6 +56,7 @@ A passing lab should confirm all of the following on the exact CE 26.7 build. Us
 | Test | Expected result |
 | --- | --- |
 | pkg registration, dashboard, login and ACLs | Native pkg accepts the archive. Fresh install leaves routing disabled. View-only and unauthorized users cannot change policy. |
+| Plain OPNsense first install | On an otherwise default CE 26.7 router without Tailscale or saved Blank VPN settings, install the matching package and confirm no Blank VPN PF rules, DNS redirects, proxy workers, or TUN interface start until a policy is explicitly enabled. Save Local settings while disabled, then enable and test Whole-Network VPN, proxy, per-device routing, and Bypass in turn. Repeat installation on a router with Tailscale installed but no Blank VPN Tailscale scope; existing exit-node and management access must remain intact. |
 | HTTPS and local dashboard DNS | The hostname resolves in each permitted group, the HTTPS certificate is trusted and the existing admin entry still works. |
 | Whole-Network + Multi-Path | Confirm unmatched IPv4 and uncategorized DNS take the base tunnel and nominated IPv4 destinations take their assigned exits. Stop an override and verify its domains and IP ranges stop working while base traffic and healthy overrides continue. Stop the base independently and verify unmatched traffic stops while healthy overrides stay reachable. Confirm direct WAN and public IPv6 stay blocked, then verify recovery. Repeat for a LAN and Tailscale device rule with an unaffected neighboring client. |
 | Independent routing coverage | Configure a Local base and a different Tailscale base. Confirm matched and unmatched IPv4 paths from one LAN client and a remote client using the exit node with direct router DNS. Switch Tailscale to Only Devices I choose and test a selected and unselected peer. Disable each scope separately and check the other scope and router HTTPS. |

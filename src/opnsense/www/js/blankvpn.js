@@ -41,9 +41,13 @@
             tailnetStatusAvailable: false,
             discoveryTruncated: false,
             proxyPage: 0,
+            proxySortByPing: false,
+            proxySortRunning: false,
+            proxySortStop: false,
             proxyCatalogLoaded: false,
             proxyCatalogRequest: null,
             services: [],
+            serviceTests: new Map(),
             proxyNodes: [],
             proxyFeeds: [],
             proxyCores: {},
@@ -529,6 +533,9 @@
         }
 
         function showSection(section) {
+            if (section !== 'proxies' && state.proxySortRunning) {
+                state.proxySortStop = true;
+            }
             state.section = section;
             for (const button of root.querySelectorAll('[data-bv-section]')) {
                 const active = button.dataset.bvSection === section;
@@ -571,7 +578,7 @@
 
         function networkName(id) {
             if (id === 'tailscale0') {
-                return 'OPNsense Tailscale exit node';
+                return 'Tailscale exit node';
             }
             const entry = state.availableInterfaces.find((item) => item.id === id);
             if (!entry) {
@@ -876,7 +883,20 @@
         }
 
         function proxyServers() {
-            return state.proxyNodes.filter((node) => node.provider !== 'nord');
+            const nodes = state.proxyNodes.filter((node) => node.provider !== 'nord');
+            if (!state.proxySortByPing) {
+                return nodes;
+            }
+            return nodes.sort((a, b) => {
+                const latency = (node) => {
+                    const test = state.tests.get('proxy:' + node.id);
+                    return test?.kind === 'pass' && Number.isFinite(test.milliseconds)
+                        ? test.milliseconds : Infinity;
+                };
+                const left = latency(a);
+                const right = latency(b);
+                return left === right ? 0 : left - right;
+            });
         }
 
         function profileInUse(id) {
@@ -1173,10 +1193,9 @@
                     field('network-kill').checked = saved.networkKillSwitch ?? saved.networkMode !== 'multi';
                 }
                 const enabled = saved?.enabled === true;
-                const save = byId(tailnet ? 'save-tailnet-routing' : 'save-routing');
-                save.classList.toggle('bv-enabled', enabled);
-                save.textContent = enabled ? 'Save changes' : 'Save and Enable ' + (tailnet ? 'Tailscale Routing' : 'VPN');
-                byId(tailnet ? 'disable-tailnet-routing' : 'disable-routing').hidden = !enabled;
+                const toggle = byId(tailnet ? 'toggle-tailnet-routing' : 'toggle-routing');
+                toggle.classList.toggle('bv-routing-on', enabled);
+                toggle.textContent = enabled ? 'Disable VPN' : 'Enable VPN';
                 updateCoverage(tailnet);
             }
             const tailnet = coverageSettings(true);
@@ -1380,7 +1399,15 @@
                     const entries = list(service.domains);
                     const saved = service.profile || '';
                     const scope = {local: 'Local', tailscale: 'Tailscale', both: 'Local and Tailscale'}[service.scope || 'both'];
-                    cell(row, service.name, 'Service and entries', scope + ' · ' + entries.length + (entries.length === 1 ? ' entry' : ' entries'));
+                    const summary = cell(row, service.name, 'Service and entries',
+                        scope + ' · ' + entries.length + (entries.length === 1 ? ' entry' : ' entries'));
+                    const pingResult = document.createElement('small');
+                    pingResult.className = 'bv-service-ping';
+                    pingResult.setAttribute('role', 'status');
+                    const previousTest = state.serviceTests.get(service.id);
+                    pingResult.textContent = previousTest?.profile === saved ? previousTest.text : '';
+                    pingResult.dataset.result = previousTest?.profile === saved ? previousTest.kind : '';
+                    summary.append(pingResult);
                     const destination = row.insertCell();
                     destination.dataset.label = 'Server';
                     if (state.canManage) {
@@ -1440,33 +1467,39 @@
                         'Routing', Number.isInteger(service.learned) ? service.learned + ' learned addresses' : '');
                     const actions = row.insertCell();
                     if (state.canManage) {
-                        if (saved && !isBypass && entries.some((entry) => !entry.includes('/')) && status.length > 0) {
-                            const test = button('Test route', async () => {
-                                const dialog = byId('service-test-dialog');
-                                const result = byId('service-test-detail');
-                                result.textContent = 'Checking DNS and firewall rules…';
-                                dialog.showModal();
-                                test.disabled = true;
-                                try {
-                                    const reply = await api('testServiceRoute', {id: service.id});
-                                    const host = document.createElement('p');
-                                    host.textContent = reply.host;
-                                    const paths = document.createElement('ul');
-                                    for (const [id, text] of Object.entries(reply.results || {})) {
-                                        const item = document.createElement('li');
-                                        item.textContent = networkName(id) + ' · ' + text;
-                                        paths.append(item);
-                                    }
-                                    result.replaceChildren(host, paths);
-                                } catch (error) {
-                                    result.textContent = errorMessage(error, 'The route test failed.');
-                                } finally {
-                                    test.disabled = false;
+                        const test = button('Ping', async () => {
+                            test.disabled = true;
+                            pingResult.textContent = 'Testing ' + profileName(saved) + '…';
+                            pingResult.dataset.result = 'pending';
+                            try {
+                                const profile = state.profiles.find((item) => item.id === saved);
+                                const node = state.proxyNodes.find((item) => 'proxy-' + item.id === saved);
+                                if (!profile && !node) {
+                                    throw new Error('The selected server is unavailable.');
                                 }
-                            }, 'Test route for ' + service.name);
-                            actions.append(test);
-                        }
+                                const reply = profile ? await api('testExit', {id: saved})
+                                    : await api('testProxyNode', {id: node.id});
+                                const passed = reply.reachable === true;
+                                state.serviceTests.set(service.id, {profile: saved, kind: passed ? 'pass' : 'fail',
+                                    text: passed ? profileName(saved) + ' · HTTPS ' + reply.milliseconds + ' ms'
+                                        : reply.detail || 'The server did not respond.'});
+                            } catch (error) {
+                                state.serviceTests.set(service.id, {profile: saved, kind: 'fail',
+                                    text: errorMessage(error, 'The server test failed.')});
+                            } finally {
+                                const result = state.serviceTests.get(service.id);
+                                pingResult.textContent = result.text;
+                                pingResult.dataset.result = result.kind;
+                                test.disabled = false;
+                            }
+                        }, 'Ping server for ' + service.name);
+                        test.disabled = !saved || isBypass;
+                        actions.append(test);
                         actions.append(button('Edit', () => editService(service), 'Edit ' + service.name));
+                    }
+                    actions.append(button('Download', () => downloadEntries(service.name, entries),
+                        'Download ' + service.name + ' list'));
+                    if (state.canManage) {
                         actions.append(button('Remove', (event) => {
                             if (window.confirm('Remove the Multi-Path list for ' + service.name + '?')) {
                                 void mutate(event.currentTarget, () => api('removeService', {id: service.id}),
@@ -1486,6 +1519,16 @@
             options(select, choicesFor(select.value), 'Leave unassigned');
             options(byId('service-preset'), Object.keys(state.presets).map((name) => ({value: name, label: name})),
                 'Custom list');
+        }
+
+        function downloadEntries(name, entries) {
+            const filename = name.trim().replace(/[^a-z0-9_.-]+/gi, '-') || 'multi-path';
+            const url = URL.createObjectURL(new Blob([entries.join('\n') + '\n'], {type: 'text/plain'}));
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename + '.txt';
+            link.click();
+            window.setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
 
         function editService(service = null) {
@@ -1528,6 +1571,12 @@
             try {
                 const catalog = await api('proxyCatalog');
                 state.proxyNodes = array(catalog.nodes);
+                const active = new Set(state.proxyNodes.map((node) => 'proxy:' + node.id));
+                for (const key of state.tests.keys()) {
+                    if (key.startsWith('proxy:') && !active.has(key)) {
+                        state.tests.delete(key);
+                    }
+                }
                 state.proxyFeeds = array(catalog.feeds);
                 state.proxyCatalogLoaded = true;
                 renderProxyCatalog();
@@ -1638,6 +1687,8 @@
             }
 
             const nodes = proxyServers();
+            byId('proxy-ping-sort').textContent = state.proxySortRunning ? 'Stop Ping & Sort' : 'Ping & Sort';
+            byId('proxy-ping-sort').disabled = !nodes.length;
             const pages = Math.max(1, Math.ceil(nodes.length / 50));
             state.proxyPage = Math.min(state.proxyPage, pages - 1);
             const offset = state.proxyPage * 50;
@@ -1746,6 +1797,12 @@
                 state.tailnetStatusAvailable = data.tailnetStatusAvailable === true;
                 state.discoveryTruncated = data.truncated === true;
                 state.services = array(data.services);
+                const serviceIds = new Set(state.services.map((service) => service.id));
+                for (const id of state.serviceTests.keys()) {
+                    if (!serviceIds.has(id)) {
+                        state.serviceTests.delete(id);
+                    }
+                }
                 state.proxyCores = data.proxyCores || {};
                 state.canManageCores = data.canManageCores === true;
                 state.canManageUpdates = data.canManageUpdates === true && !insecureWebGui;
@@ -2196,7 +2253,7 @@
             const {status, detail, dismiss, error, name} = testDisplays.get(control);
             const result = state.tests.get(control.dataset.testKey);
             control.disabled = control.dataset.disabled === 'true' || result?.kind === 'pending' ||
-                (control.dataset.proxyTest === 'true' && state.proxyTestRunning);
+                (control.dataset.proxyTest === 'true' && (state.proxyTestRunning || state.proxySortRunning));
             const failed = result?.kind === 'fail' && result.dismissed !== true;
             if (error) {
                 const routeTest = result?.routeTest === true && !result.dismissed && Boolean(result.latency);
@@ -2274,7 +2331,8 @@
                     ? {kind: 'pass', text: 'ICMP reply · ' + result.milliseconds + ' ms'}
                     : {kind: 'fail', text: 'No ICMP reply. The WireGuard service may still be available.'})
                     : result.reachable === true
-                    ? {kind: 'pass', text: 'HTTPS passed · ' + result.milliseconds + ' ms', latency: result.milliseconds + ' ms'}
+                    ? {kind: 'pass', text: 'HTTPS passed · ' + result.milliseconds + ' ms',
+                        latency: result.milliseconds + ' ms', milliseconds: Number(result.milliseconds)}
                     : {kind: 'fail', text: result.detail || 'The HTTPS test did not complete.'});
             } catch (error) {
                 state.tests.set(key, {kind: 'fail', text: errorMessage(error, 'The connection test could not be completed.')});
@@ -2461,7 +2519,6 @@
             }
         });
         byId('close-ping-dialog').addEventListener('click', () => byId('ping-dialog').close());
-        byId('close-service-test-dialog').addEventListener('click', () => byId('service-test-dialog').close());
         byId('refresh').addEventListener('click', async (event) => {
             const control = event.currentTarget;
             state.deviceRefreshRunning = true;
@@ -2971,6 +3028,45 @@
             state.proxyPage++;
             renderProxyCatalog();
         });
+        byId('proxy-ping-sort').addEventListener('click', async () => {
+            if (state.proxySortRunning) {
+                state.proxySortStop = true;
+                byId('proxy-ping-sort-status').textContent = 'Stopping after the current server…';
+                return;
+            }
+            if (state.proxyTestRunning) {
+                byId('proxy-ping-sort-status').textContent = 'Wait for the current server test to finish.';
+                return;
+            }
+            const nodes = proxyServers();
+            if (!nodes.length) {
+                return;
+            }
+            state.proxySortRunning = true;
+            state.proxySortStop = false;
+            state.proxySortByPing = false;
+            renderProxyCatalog();
+            let checked = 0;
+            try {
+                for (const node of nodes) {
+                    if (state.proxySortStop) {
+                        break;
+                    }
+                    byId('proxy-ping-sort-status').textContent = 'Testing ' + (checked + 1) + ' of ' + nodes.length + ' servers…';
+                    const exit = state.profiles.find((profile) => profile.node === node.id);
+                    await testConnection(exit ? 'testExit' : 'testProxyNode', exit?.id || node.id,
+                        'proxy:' + node.id, true);
+                    checked++;
+                }
+            } finally {
+                state.proxySortRunning = false;
+                state.proxySortByPing = true;
+                byId('proxy-ping-sort-status').textContent = (state.proxySortStop ? 'Stopped after ' : 'Sorted ') +
+                    checked + ' of ' + nodes.length + ' servers by HTTPS latency; failed tests appear last.';
+                state.proxyPage = 0;
+                renderProxyCatalog();
+            }
+        });
         byId('proxy-import').addEventListener('submit', (event) => {
             event.preventDefault();
             const body = byId('proxy-body').value.trim();
@@ -3019,11 +3115,14 @@
             selectRoutingScope('tailscale');
             openAssignment(null, 'tailnet');
         });
-        byId('disable-routing').addEventListener('click', (event) => {
-            if (window.confirm('Disable Local routing and its Kill Switch?')) {
-                void mutate(event.currentTarget, () => api('disable', {}), 'VPN routing disabled.', () => {
+        byId('toggle-routing').addEventListener('click', (event) => {
+            if (state.settings?.enabled && window.confirm('Disable Local routing and its Kill Switch?')) {
+                event.preventDefault();
+                void mutate(event.currentTarget, () => api('disable', {}), 'Local VPN routing disabled.', () => {
                     state.settingsDirty = false;
                 });
+            } else if (state.settings?.enabled) {
+                event.preventDefault();
             }
         });
         byId('routing-scope').addEventListener('change', (event) => selectRoutingScope(event.target.value));
@@ -3035,8 +3134,10 @@
         });
         byId('tailnet-coverage-form').addEventListener('submit', (event) => {
             event.preventDefault();
+            const enabled = event.submitter === byId('toggle-tailnet-routing') ||
+                coverageSettings(true)?.enabled === true;
             const payload = {
-                enabled: true,
+                enabled,
                 coverage: byId('tailnet-coverage').value,
                 networkMode: byId('tailnet-network-mode').value,
                 networkProfile: byId('tailnet-network-profile').required ? byId('tailnet-network-profile').value : '',
@@ -3045,19 +3146,23 @@
             const saved = coverageSettings(true);
             const changed = !saved?.enabled || ['coverage', 'networkMode', 'networkProfile', 'networkKillSwitch']
                 .some((field) => payload[field] !== saved[field]);
-            if (changed && payload.coverage === 'network' && payload.networkMode !== 'disabled'
+            if (changed && enabled && payload.coverage === 'network' && payload.networkMode !== 'disabled'
                 && !window.confirm('Apply this route to all clients using the OPNsense Tailscale exit node? Internet connections may reconnect.')) {
                 return;
             }
-            void mutate(event.submitter, () => api('tailnetRouting', payload), 'Tailscale routing saved.', () => {
+            void mutate(event.submitter, () => api('tailnetRouting', payload),
+                enabled ? 'Tailscale VPN routing saved and enabled.' : 'Tailscale settings saved; VPN remains disabled.', () => {
                 state.tailnetRoutingDirty = false;
             });
         });
-        byId('disable-tailnet-routing').addEventListener('click', (event) => {
-            if (window.confirm('Disable Tailscale routing and its Kill Switch?')) {
-                void mutate(event.currentTarget, () => api('tailnetRouting', {enabled: false}), 'Tailscale routing disabled.', () => {
+        byId('toggle-tailnet-routing').addEventListener('click', (event) => {
+            if (coverageSettings(true)?.enabled && window.confirm('Disable Tailscale routing and its Kill Switch?')) {
+                event.preventDefault();
+                void mutate(event.currentTarget, () => api('tailnetRouting', {enabled: false}), 'Tailscale VPN routing disabled.', () => {
                     state.tailnetRoutingDirty = false;
                 });
+            } else if (coverageSettings(true)?.enabled) {
+                event.preventDefault();
             }
         });
         byId('settings-form').addEventListener('input', (event) => {
@@ -3076,13 +3181,14 @@
         });
         byId('settings-form').addEventListener('submit', (event) => {
             event.preventDefault();
+            const enabled = event.submitter === byId('toggle-routing') || state.settings?.enabled === true;
             const interfaces = checkedInterfaces('managed');
             const rules = [...byId('interface-rules').children].filter((label) => interfaces.includes(label.dataset.interface));
             const selected = (type) => rules.filter((label) => label.querySelector('select').value === type)
                 .map((label) => label.dataset.interface);
             const networkMode = byId('network-mode').value;
             const payload = {
-                enabled: true,
+                enabled,
                 networkKillSwitch: byId('network-kill').checked,
                 coverage: byId('coverage').value,
                 networkMode,
@@ -3109,11 +3215,13 @@
             if (wideChange && !window.confirm('Apply ' + networkLabel + ' to all devices on the selected networks? Existing internet connections may reconnect.')) {
                 return;
             }
-            void mutate(event.submitter, () => api('settings', payload), 'VPN routing enabled. Settings saved.', () => {
+            void mutate(event.submitter, () => api('settings', payload),
+                enabled ? 'Local VPN routing saved and enabled.' : 'Local settings saved; VPN remains disabled.', () => {
                 state.settingsDirty = false;
             });
         });
         window.addEventListener('pagehide', () => {
+            state.proxySortStop = true;
             byId('account').value = '';
             byId('proxy-body').value = '';
             byId('subscription-url').value = '';

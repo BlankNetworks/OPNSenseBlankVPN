@@ -120,3 +120,10 @@
 
 - Add a version-pinned SSH installer for first installs and upgrades. It checks OPNsense and the package ABI, verifies the release package checksum, saves a protected configuration backup, and installs the matching architecture.
 - Add a one-command SSH path to each release page while retaining the explicit package download, checksum, and installation steps.
+
+## 0.8.34
+
+- Separate blue Save from green Enable VPN and red Disable VPN in both Local and Tailscale routing. Saving a disabled scope keeps it disabled.
+- Add serial Ping & Sort for proxy servers, with a stop control and successful HTTPS latencies ordered lowest first.
+- Show Multi-Path server ping results in each list row instead of a popup, and add a Download action for every saved list.
+- Leave the TUN driver unloaded until a proxy tunnel starts. A fresh install with Tailscale present but no Blank VPN policy no longer triggers a routing sync.
