@@ -133,3 +133,8 @@
 - Make Mullvad, password/token, and IVPN sign-in buttons work even when the OPNsense page intercepts form submission. Enter still submits the active sign-in form.
 - Recheck router sign-in state when a completed request loses its browser response, including Mysterium approval and the IVPN authenticator step, so a manual page refresh is unnecessary.
 - Follow the router's available OPNsense locales for language metadata, translated sign-in labels, and locale-aware dates and server sorting. Missing plugin-specific translations fall back to English.
+
+## 0.8.36
+
+- Keep native Tailscale exit-node traffic on the local ISP WAN when Blank VPN's Tailscale scope is manually disabled, whether or not Local Blank VPN routing remains enabled.
+- Install only the peer WAN pass, reply state, and source NAT for that disabled scope. A missing ISP WAN gateway still leaves internet unavailable.

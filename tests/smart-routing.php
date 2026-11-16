@@ -936,6 +936,20 @@ namespace {
         $directPass['to'] === '<' . Policy::COMBINED_LOCAL_TABLE . '>' && $directPass['to_not'] &&
         $direct->nat[0]['from'] === Policy::TAILSCALE_V4 && $direct->nat[0]['interface'] === 'wan',
         'Ordinary exit-node Internet runs after device and firewall rules with its own WAN NAT.');
+    $disabledScope = new Plugin();
+    (new ReflectionMethod(Firewall::class, 'registerDirectTailnetInternet'))->invoke(null, $disabledScope, $wan);
+    $wanOutput = Policy::marker('tailnet_output', 'wan:inet:blankvpn_tailnet_wan');
+    checkRouting(isset($disabledScope->rules[Policy::marker('tailnet_internet', $directId . ':inet')]) &&
+        $disabledScope->rules[$wanOutput]['tagged'] === 'blankvpn_tailnet_wan' &&
+        $disabledScope->rules[$wanOutput]['from'] === $wan['inet']['address'] &&
+        $disabledScope->nat[0]['from'] === Policy::TAILSCALE_V4 &&
+        $disabledScope->nat[0]['target'] === $wan['inet']['address'] &&
+        !isset($disabledScope->rules[Policy::marker('kill', $directId)]),
+        'Disabling Blank VPN keeps native Tailscale exit-node IPv4 on ISP WAN without a kill switch.');
+    $noWan = new Plugin();
+    (new ReflectionMethod(Firewall::class, 'registerDirectTailnetInternet'))->invoke(null, $noWan, []);
+    checkRouting($noWan->rules === [] && $noWan->nat === [],
+        'The direct exit-node path requires an available WAN gateway.');
     $saved['tailnetCoverage'] = 'network';
     $saved['tailnetNetworkMode'] = 'full_multi';
     $saved['tailnetNetworkProfile'] = 'us';

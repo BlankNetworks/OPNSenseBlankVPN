@@ -28,12 +28,13 @@ final class Firewall
         $settings = Policy::effectiveRouting($model);
         $profiles = Policy::routes($model);
         $interfaces = iterator_to_array($firewall->getInterfaceMapping());
+        $nativeTailnet = Policy::nativeTailnetConfigured();
         if ((string)(Config::getInstance()->object()->OPNsense->tailscale->settings->enabled ?? '') === '1') {
             // Keep Tailscale's native NAT anchor after OPNsense and VPN source NAT rules.
             $firewall->registerAnchor('tailscale', 'nat');
             $firewall->registerAnchor('tailscale');
         }
-        if (in_array(Policy::TAILSCALE_DEVICE, $settings['interfaces'], true)) {
+        if ($nativeTailnet || in_array(Policy::TAILSCALE_DEVICE, $settings['interfaces'], true)) {
             $interface = Policy::TAILSCALE_DEVICE;
             $interfaces[$interface] ??= [
                 'if' => $interface, 'ifconfig' => $firewall->getIfconfigDetails()[$interface] ?? [],
@@ -65,6 +66,15 @@ final class Firewall
         }
         unset($profile);
         if (!$settings['enabled']) {
+            if ($nativeTailnet) {
+                // Disabling Blank VPN must leave the native Tailscale exit node on the ISP WAN.
+                $connected = Policy::localNetworks(array_replace($settings, ['localNetworks' => []]));
+                $file = Policy::writeState('combined-local-networks', implode("\n", $connected) . "\n");
+                $firewall->registerTable(Policy::COMBINED_LOCAL_TABLE, true, $file);
+                $wan = array_filter(WanEgress::gateways($firewall), static fn (array $gateway, string $family): bool =>
+                    self::wanGatewayMapped($firewall, $gateway, $family), ARRAY_FILTER_USE_BOTH);
+                self::registerDirectTailnetInternet($firewall, $wan);
+            }
             return;
         }
 
@@ -93,6 +103,10 @@ final class Firewall
         }
         $wan = array_filter($wan, static fn (array $gateway, string $family): bool =>
             self::wanGatewayMapped($firewall, $gateway, $family), ARRAY_FILTER_USE_BOTH);
+        if ($nativeTailnet && !isset($scopes['tailscale'])) {
+            // Local Blank VPN policy does not replace ordinary Tailscale exit-node internet.
+            self::registerDirectTailnetInternet($firewall, $wan);
+        }
         if (isset($scopes['tailscale'])) {
             foreach ($wan as $family => $gateway) {
                 self::registerTailnetOutput($firewall, $gateway, $family, self::TAILNET_WAN_TAG);
@@ -719,6 +733,16 @@ final class Firewall
             ] + self::tailnetWanState());
             self::registerClientNat($firewall, $wan[$family], $source, 'any', 62, $family);
         }
+    }
+
+    private static function registerDirectTailnetInternet(Plugin $firewall, array $wan): void
+    {
+        foreach ($wan as $family => $gateway) {
+            self::registerTailnetOutput($firewall, $gateway, $family, self::TAILNET_WAN_TAG);
+        }
+        self::registerTailnetInternet($firewall, 'network:' . Policy::TAILSCALE_DEVICE, Policy::TAILSCALE_DEVICE, [
+            'inet' => Policy::TAILSCALE_V4, 'inet6' => Policy::TAILSCALE_V6
+        ], $wan);
     }
 
     private static function hasAssignmentIdentity(array $settings, array $row, Diagnostics $diagnostics): bool
