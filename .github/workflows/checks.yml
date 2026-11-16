@@ -64,7 +64,9 @@ jobs:
           prepare: |
             env ASSUME_ALWAYS_YES=yes pkg bootstrap
             env ASSUME_ALWAYS_YES=yes pkg install wireguard-tools
-          run: sh tests/freebsd-wireguard-forwarding.sh --isolated-vm
+          run: |
+            sh tests/freebsd-wireguard-forwarding.sh --isolated-vm
+            sh tests/freebsd-shared-mullvad-key.sh --isolated-vm
 
   packages:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[publish release]')
