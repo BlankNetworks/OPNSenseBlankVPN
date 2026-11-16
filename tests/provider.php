@@ -211,6 +211,13 @@ try {
     $recovery->maxDevices = 1;
     $recoveryProfile = array_replace($profile,
         ['address' => $identity['address'], 'address6' => $identity['address6']]);
+    $sharedIdentity = $provider->registeredRouterIdentity($token, ['saved' => $recoveryProfile],
+        static fn (array $saved): string => $identity['privateKey']);
+    check($sharedIdentity['publicKey'] === $identity['publicKey'] &&
+        $sharedIdentity['address'] === $identity['address'] &&
+        $sharedIdentity['accountBinding'] === $identity['accountBinding'] &&
+        $provider->creates === 1,
+        'Adding another relay reuses the registered router identity without consuming a second slot.');
     $applied = [];
     $recover = static function (string $id, array $saved, array $matched, string $bearer, Mullvad $mullvad)
         use (&$applied): void {
