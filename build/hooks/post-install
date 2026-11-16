@@ -12,6 +12,12 @@ if ! /usr/local/bin/php -r 'exit(extension_loaded("curl") ? 0 : 1);'; then
     echo "Blank VPN & Proxy: the OPNsense PHP cURL extension is required for subscriptions and connection tests." >&2
 fi
 
-if ! /usr/local/bin/php /usr/local/opnsense/scripts/OPNsense/BlankVpn/maintenance.php post_install; then
-    echo "Blank VPN & Proxy: existing exits could not be reconciled during installation. Check Blank VPN & Proxy status in the WebGUI." >&2
-fi
+attempt=1
+until /usr/local/bin/php /usr/local/opnsense/scripts/OPNsense/BlankVpn/maintenance.php post_install; do
+    if [ "$attempt" -ge 3 ]; then
+        echo "Blank VPN & Proxy: existing exits could not be reconciled during installation. Check Blank VPN & Proxy status in the WebGUI." >&2
+        break
+    fi
+    sleep $((attempt * 3))
+    attempt=$((attempt + 1))
+done

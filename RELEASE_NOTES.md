@@ -175,3 +175,8 @@
 - Stop automatic recovery from recreating deleted legacy per-server registrations when the account already has a registered router key. Preserve the existing per-key retry behavior if no router key remains.
 - Verify simultaneous shared-key forwarding across separate WireGuard exits in FreeBSD 15.1 and protected probes across five live Mullvad relays with one account device slot in use. Existing installations with multiple registered keys require consolidation of their saved profiles before those extra account devices can be removed.
 - Confirm a Tailscale iPhone browses through the shared-key Chicago exit, with bidirectional client PF states on the selected WireGuard interface, working protected DNS, and loaded kill-switch guards. The Tailscale management connection remains available.
+
+## 0.8.43
+
+- Retry post-install routing reconciliation up to two times after the OPNsense backend restarts. On the live 0.8.42 upgrade, the first reconciliation returned a generic maintenance warning and the immediate manual retry succeeded while all five tunnels and client routing remained healthy.
+- Confirm the migrated router's automatic Mullvad recovery reports healthy with only one registered account device and creates no additional keys.
