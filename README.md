@@ -2,6 +2,8 @@
 
 Blank VPN & Proxy is an OPNsense plug-in for assigning Mullvad, other WireGuard and OpenVPN providers, and individually selected proxy exits to services and IPv4 addresses. Multi-Path keeps normal internet as the default on selected LANs and routes destinations learned from service DNS through the configured exit. Several services and clients can share an exit. The dashboard uses OPNsense WebGUI login and permissions.
 
+[Screenshots](#screenshots) · [Install or upgrade](#install-or-upgrade)
+
 ## Compatibility
 
 Blank VPN & Proxy targets OPNsense Community Edition 26.7.x with the FreeBSD 15 package ABI, standard WebGUI process mode, WireGuard, and Dnsmasq.
@@ -12,6 +14,61 @@ Blank VPN & Proxy targets OPNsense Community Edition 26.7.x with the FreeBSD 15 
 | `aarch64` | `FreeBSD:15:aarch64` | Compatible community ARM64 OPNsense, including supported NanoPi builds and ARM64 VMs |
 
 OPNsense officially distributes x86-64 images. For NanoPi R4S/R4SE and R5S, start with a board-compatible community OPNsense 26.7 image and check its device notes. Other ARM64 boards need their own working OPNsense image. OpenWrt, Linux firmware, and 32-bit ARM require a different package and runtime. Live OPNsense routing still needs lab verification. [Official hardware support](https://docs.opnsense.org/manual/hardware.html) · [Community NanoPi images](https://github.com/matheusber/opnsense/releases) · [Validation](VALIDATION.md)
+
+## Screenshots
+
+Preview the dashboard before installing. These screenshots show **version 0.8.44**. Click an image to view it full size.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>VPN Login</h3>
+      <p>Choose a Mullvad location, name the tunnel, and select its WireGuard port.</p>
+      <a href="docs/screenshots/vpn-login.png"><img src="docs/screenshots/vpn-login.png" alt="VPN Login with Mullvad account status, server selection, tunnel name and WireGuard port" width="640"></a>
+    </td>
+    <td width="50%" valign="top">
+      <h3>Saved VPN servers</h3>
+      <p>Review status, ports and test results; manage individual or selected servers.</p>
+      <a href="docs/screenshots/saved-vpn-servers.png"><img src="docs/screenshots/saved-vpn-servers.png" alt="Saved VPN servers with selection checkboxes, status, port, ping and actions" width="640"></a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>Proxy Login</h3>
+      <p>Import proxy configurations and manage subscriptions.</p>
+      <a href="docs/screenshots/proxy-login.png"><img src="docs/screenshots/proxy-login.png" alt="Proxy Login with configuration import, subscription settings and core management" width="640"></a>
+    </td>
+    <td width="50%" valign="top">
+      <h3>Saved proxy servers</h3>
+      <p>View names, server details, protocols, cores and test results.</p>
+      <a href="docs/screenshots/saved-proxy-servers.png"><img src="docs/screenshots/saved-proxy-servers.png" alt="Saved proxy servers showing names and groups, server endpoints, protocols, cores and ping results" width="640"></a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>Network Settings</h3>
+      <p>Choose routing coverage, interfaces and device rules.</p>
+      <a href="docs/screenshots/network-settings.png"><img src="docs/screenshots/network-settings.png" alt="Network Settings with Local routing coverage, interface selection and device rules" width="640"></a>
+    </td>
+    <td width="50%" valign="top">
+      <h3>Multi-Path Settings</h3>
+      <p>Assign domain and IP lists to different exits.</p>
+      <a href="docs/screenshots/multi-path-settings.png"><img src="docs/screenshots/multi-path-settings.png" alt="Multi-Path Settings with domain and IP lists, destination selection and routing scope" width="640"></a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>Tailscale Settings</h3>
+      <p>Review exit-node readiness and dashboard access.</p>
+      <a href="docs/screenshots/tailscale-settings.png"><img src="docs/screenshots/tailscale-settings.png" alt="Tailscale Settings with connection status, dashboard addresses and routing readiness" width="640"></a>
+    </td>
+    <td width="50%" valign="top">
+      <h3>System Settings</h3>
+      <p>Change appearance, check updates, and back up or restore settings.</p>
+      <a href="docs/screenshots/system-settings.png"><img src="docs/screenshots/system-settings.png" alt="System Settings with appearance, package updates, backup and restore" width="640"></a>
+    </td>
+  </tr>
+</table>
 
 <a id="lab-installation"></a>
 
