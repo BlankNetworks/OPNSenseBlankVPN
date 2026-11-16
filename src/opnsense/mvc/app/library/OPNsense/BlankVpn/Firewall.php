@@ -1232,6 +1232,11 @@ final class Firewall
                 'direction' => 'out', 'ipprotocol' => 'inet', 'from' => $address,
                 'quick' => true, 'disablereplyto' => true
             ];
+            $sourcePorts = isset($profile['peerKey']) ? ($kind === 'probe'
+                ? Resolver::probeSourcePorts($profile) : Resolver::dnsSourcePorts($profile)) : null;
+            if ($sourcePorts !== null) {
+                $base['from_port'] = $sourcePorts[0] . ':' . $sourcePorts[1];
+            }
             if ($ready) {
                 $firewall->registerFilterRule(Policy::PRIORITY, [
                     'type' => 'pass', 'gateway' => $profile['gateway'], 'skip_rules_gw_down' => true,
@@ -1261,6 +1266,7 @@ final class Firewall
             return [];
         }
         $verified = [];
+        $sourcePorts = isset($profile['peerKey']) ? Resolver::probeSourcePorts($profile) : null;
         foreach (array_keys(Policy::PROBE_TARGETS) as $target) {
             $marker = Policy::marker('probe', $profile['id'] . $target);
             $pass = $loaded[$marker] ?? [];
@@ -1268,7 +1274,13 @@ final class Firewall
             if (($pass['action'] ?? '') === 'pass' && ($pass['source'] ?? '') === $source &&
                 ($pass['gateway'] ?? null) === $profile['interface'] && ($pass['probeTarget'] ?? '') === $target &&
                 ($guard['action'] ?? '') === 'block' && ($guard['source'] ?? '') === $source &&
-                ($guard['probeTarget'] ?? '') === $target && self::probeNoNatInstalled($nat, $source, $target)) {
+                ($guard['probeTarget'] ?? '') === $target &&
+                ($sourcePorts === null ||
+                    (($pass['sourcePortStart'] ?? null) === $sourcePorts[0] &&
+                    ($pass['sourcePortEnd'] ?? null) === $sourcePorts[1] &&
+                    ($guard['sourcePortStart'] ?? null) === $sourcePorts[0] &&
+                    ($guard['sourcePortEnd'] ?? null) === $sourcePorts[1])) &&
+                self::probeNoNatInstalled($nat, $source, $target)) {
                 $verified[] = $target;
             }
         }
@@ -1295,6 +1307,8 @@ final class Firewall
             preg_match('/\broute-to\s+[({\s]*([a-zA-Z][a-zA-Z0-9_.-]*)\b/', $line, $gateway);
             preg_match('/^(?:@\d+\s+)?(pass|block|match)\b/', ltrim($line), $action);
             preg_match('/\bfrom\s+([a-f0-9:.]+)(?:%[\w.-]+)?(?:\/([0-9]+))?\s/i', $line, $source);
+            preg_match('/\bfrom\s+\S+\s+port\s+(?:=\s*)?([0-9]+)(?:\s*(?::|><)\s*([0-9]+))?/i',
+                $line, $sourcePort);
             $prefix = $source[2] ?? '';
             $address = isset($source[1]) && $prefix !== '' &&
                 $prefix !== (str_contains($source[1], ':') ? '128' : '32')
@@ -1306,12 +1320,14 @@ final class Firewall
             $rules[$match[1]] = [
                 'gateway' => $gateway[1] ?? null, 'action' => $action[1] ?? null, 'source' => $address,
                 'table' => $table[1] ?? null, 'port' => isset($port[1]) ? (int)$port[1] : null,
+                'sourcePortStart' => isset($sourcePort[1]) ? (int)$sourcePort[1] : null,
+                'sourcePortEnd' => isset($sourcePort[2]) ? (int)$sourcePort[2] : null,
                 'tagged' => $tagged[1] ?? null, 'tag' => $tag[1] ?? null,
                 'quick' => preg_match('/^.+?\bquick\s+(?:on|inet|inet6|proto|from|all)\b/', $line) === 1
             ] + (isset($ingress[1]) ? ['ingress' => $ingress[1]] : []);
             if (str_starts_with($match[1], 'blankvpn_probe_') &&
                 preg_match('/^(?:@\d+\s+)?(?:pass|block)(?:\s+(?:drop|return))?\s+out\s+quick\b.*' .
-                    '\binet\s+proto\s+tcp\s+from\s+\S+\s+to\s+([0-9.]+)(?:\/32)?\s+port\s*=\s*(?:443|https)\b/',
+                    '\binet\s+proto\s+tcp\s+from\s+\S+(?:\s+port\s+\S+)?\s+to\s+([0-9.]+)(?:\/32)?\s+port\s*=\s*(?:443|https)\b/',
                     ltrim($line), $probe)) {
                 $rules[$match[1]]['probeTarget'] = $probe[1];
             }

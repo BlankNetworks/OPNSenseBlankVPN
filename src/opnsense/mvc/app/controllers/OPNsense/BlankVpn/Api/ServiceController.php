@@ -687,8 +687,13 @@ class ServiceController extends ApiControllerBase
             $relay['port'] = $port;
             $dnsPort = Resolver::freePort(Policy::routes($model));
             WireGuard::preflight($relay['ipv4']);
-            $occupiedKeys = array_unique([...array_column($profiles, 'identityKey'), ...WireGuard::identityKeys()]);
-            $identity = $mullvad->registerRouterWithToken($token, $relayId, $occupiedKeys);
+            $matched = $mullvad->routerProfiles($token, $profiles);
+            $identity = $mullvad->registeredRouterIdentity($token, $profiles);
+            if ($identity === null && $matched !== []) {
+                throw new \DomainException('This router has saved Mullvad servers but no registered device key. Restore its saved device before adding a server.');
+            }
+            $identity ??= $mullvad->registerRouterWithToken($token, $relayId,
+                array_unique([...array_column($profiles, 'identityKey'), ...WireGuard::identityKeys()]));
             return $this->addProfile($name, $relayId, $identity, $relay, $dnsPort)
                 + ['message' => 'Mullvad server added. Choose it in Network Settings to route a device.'];
         }), true, true, true);

@@ -232,6 +232,12 @@ try {
         [$account], [], $recover);
     check($result['restored'] === null && !$result['missing'] && $recovery->creates === 1,
         'A registered device must not consume another account slot.');
+    $deletedLegacy = array_replace($recoveryProfile,
+        ['identityKey' => base64_encode(str_repeat('z', 32))]);
+    $result = MullvadRecovery::reconcile(['saved' => $recoveryProfile, 'deleted' => $deletedLegacy],
+        $recovery, [$account], [], $recover);
+    check($result['restored'] === null && $result['missing'] && $recovery->creates === 1,
+        'A registered router key must suppress automatic re-registration of a deleted per-server key.');
     $changedAddress = array_replace($recoveryProfile, ['address' => '10.64.0.99/32']);
     $result = MullvadRecovery::reconcile(['saved' => $changedAddress], $recovery,
         [$account], [], $recover);

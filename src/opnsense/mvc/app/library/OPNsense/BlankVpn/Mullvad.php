@@ -290,6 +290,27 @@ class Mullvad
         return $this->registerWithToken($token, self::ROUTER_REGISTRATION, $relay, $occupiedKeys);
     }
 
+    /** Reuse this router's registered device for another relay on the same account. */
+    public function registeredRouterIdentity(string $token, array $profiles): ?array
+    {
+        foreach ($this->routerProfiles($token, $profiles) as $profile) {
+            if (empty($profile['registered'])) {
+                continue;
+            }
+            $privateKey = WireGuard::ownedPrivateKey($profile);
+            if (!hash_equals($profile['identityKey'], $this->derivePublicKey($privateKey))) {
+                throw new RuntimeException('The saved Mullvad key does not match its native WireGuard instance.');
+            }
+            return [
+                'id' => $profile['identity'], 'publicKey' => $profile['identityKey'],
+                'privateKey' => $privateKey, 'address' => $profile['registeredAddress'],
+                'address6' => $profile['registeredAddress6'], 'dns' => self::DNS,
+                'accountBinding' => $profile['accountBinding'],
+            ];
+        }
+        return null;
+    }
+
     public function rememberRouterKey(string $binding, string $privateKey): void
     {
         if (!preg_match('/^[a-f0-9]{64}$/D', $binding) || !$this->validKey($privateKey)) {

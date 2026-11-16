@@ -26,6 +26,13 @@ $settings = [
     'smartAssignedOnly' => false,
 ];
 $base = ['dnsPort' => 46651, 'address' => '10.64.0.9/32', 'dns' => ['10.64.0.1'], 'interface' => 'wg3'];
+$otherExit = ['dnsPort' => 46652, 'address' => '10.64.0.9/32', 'dns' => ['10.64.0.1'],
+    'interface' => 'wg4', 'peerKey' => 'second-relay'];
+[$firstStart, $firstEnd] = Resolver::dnsSourcePorts($base);
+[$secondStart, $secondEnd] = Resolver::dnsSourcePorts($otherExit);
+checkDnsPlan($firstEnd < $secondStart && $firstStart >= 1024 && $secondEnd < 53000 &&
+    Resolver::probeSourcePorts($base)[1] < Resolver::probeSourcePorts($otherExit)[0],
+    'Two exits sharing a tunnel address require disjoint DNS and HTTPS probe source ports.');
 $proxy = ProxyRuntime::route('video', 0, str_repeat('a', 64), 'Video', 'mihomo', 'socks5');
 $profiles = ['base' => $base, 'video' => $proxy];
 $routed = ['id' => 'video', 'profile' => 'video', 'domains' => ['video.example.net']];
@@ -57,6 +64,10 @@ checkDnsPlan(count(array_unique($ports)) === count($ports) &&
     'Protected DNS listeners must use distinct valid ports.');
 
 $wholeCombined = $makePlan($settings);
+checkDnsPlan(str_contains($wholeCombined[$combinedPort], "\nmin-port={$firstStart}\n") === false &&
+    preg_match('/^min-port=([0-9]+)$/m', $wholeCombined[$combinedPort]) === 1 &&
+    preg_match('/^max-port=([0-9]+)$/m', $wholeCombined[$combinedPort]) === 1,
+    'A tunnel DNS listener binds a dedicated source-port range.');
 checkDnsPlan(!isset($wholeCombined[Resolver::FALLBACK_PORT]) && !isset($wholeCombined[Resolver::SERVICE_PORT]) &&
     str_contains($wholeCombined[$combinedPort], "\nserver=10.64.0.1@10.64.0.9\n") &&
     str_contains($wholeCombined[$combinedPort], "\nserver=/video.example.net/127.0.0.1#{$protectedMulti}\n") &&

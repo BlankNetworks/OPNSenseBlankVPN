@@ -106,6 +106,16 @@ final class MullvadRecovery
                 $lastError = $error;
                 continue;
             }
+            // One router key serves every relay. Legacy per-relay keys removed by the
+            // owner must not be registered again when this account already has a
+            // working router key; those profiles require local consolidation.
+            $registeredKey = null;
+            foreach ($matched as $candidate) {
+                if (!empty($candidate['registered'])) {
+                    $registeredKey = $candidate['identityKey'];
+                    break;
+                }
+            }
             foreach ($matched as $id => $profile) {
                 $matchedIds[$id] = true;
                 if ($profile['registered'] && $profile['identity'] !== '' &&
@@ -114,6 +124,9 @@ final class MullvadRecovery
                     continue;
                 }
                 $missing = true;
+                if ($registeredKey !== null && !hash_equals($registeredKey, $profile['identityKey'])) {
+                    continue;
+                }
                 if (isset($recentAttempts[$id])) {
                     continue;
                 }

@@ -17,10 +17,53 @@ final class Resolver
     private const COMBINED_PORT_OFFSET = 200;
     private const PROTECTED_PORT_OFFSET = 400;
     private const PROTECTED_COMBINED_PORT_OFFSET = 800;
+    private const DNS_SOURCE_PORT_START = 20000;
+    private const DNS_SOURCE_PORTS_PER_LISTENER = 128;
+    private const PROBE_SOURCE_PORT_START = 53000;
+    private const PROBE_SOURCE_PORTS_PER_PROFILE = 8;
 
     private static function vpnPorts(): array
     {
         return [...range(self::LOCAL_PORT + 1, self::LOCAL_PORT + 5), ...range(46680, 46706)];
+    }
+
+    /** Dedicated source-port ranges keep shared-key tunnels distinct in PF. */
+    public static function dnsSourcePorts(array $profile): ?array
+    {
+        $slot = array_search((int)($profile['dnsPort'] ?? 0), self::vpnPorts(), true);
+        if ($slot === false) {
+            return null;
+        }
+        $start = self::DNS_SOURCE_PORT_START + $slot * 8 * self::DNS_SOURCE_PORTS_PER_LISTENER;
+        return [$start, $start + 8 * self::DNS_SOURCE_PORTS_PER_LISTENER - 1];
+    }
+
+    public static function probeSourcePorts(array $profile): ?array
+    {
+        $slot = array_search((int)($profile['dnsPort'] ?? 0), self::vpnPorts(), true);
+        if ($slot === false) {
+            return null;
+        }
+        $start = self::PROBE_SOURCE_PORT_START + $slot * self::PROBE_SOURCE_PORTS_PER_PROFILE;
+        return [$start, $start + self::PROBE_SOURCE_PORTS_PER_PROFILE - 1];
+    }
+
+    private static function listenerSourcePorts(int $port): ?array
+    {
+        foreach (self::vpnPorts() as $slot => $base) {
+            foreach ([0, self::COMBINED_PORT_OFFSET, self::PROTECTED_PORT_OFFSET,
+                self::PROTECTED_COMBINED_PORT_OFFSET] as $variant => $offset) {
+                foreach ([0, self::TAILNET_PORT_OFFSET] as $tailnet) {
+                    if ($port === $base + $offset + $tailnet) {
+                        $index = $variant + ($tailnet === 0 ? 0 : 4);
+                        $start = self::DNS_SOURCE_PORT_START +
+                            ($slot * 8 + $index) * self::DNS_SOURCE_PORTS_PER_LISTENER;
+                        return [$start, $start + self::DNS_SOURCE_PORTS_PER_LISTENER - 1];
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private static function profilePorts(): array
@@ -165,15 +208,21 @@ final class Resolver
             }
             $source = explode('/', $profile['address'] ?? '', 2)[0];
             $interface = $profile['interface'] ?? '';
+            $ports = isset($profile['peerKey']) ? self::dnsSourcePorts($profile) : null;
             $profile['dns'] = array_values(array_filter(SmartRouting::profileDns($profile),
-                static function (string $server) use ($id, $loaded, $source, $interface): bool {
+                static function (string $server) use ($id, $loaded, $source, $interface, $ports): bool {
                     $marker = Policy::marker('dns_out', $id . $server);
                     $route = $loaded[$marker] ?? [];
                     $guard = $loaded[$marker . '_block'] ?? [];
                     return $source !== '' && $interface !== '' &&
                         ($route['action'] ?? '') === 'pass' && ($route['gateway'] ?? '') === $interface &&
                         ($route['source'] ?? '') === $source &&
-                        ($guard['action'] ?? '') === 'block' && ($guard['source'] ?? '') === $source;
+                        ($guard['action'] ?? '') === 'block' && ($guard['source'] ?? '') === $source &&
+                        ($ports === null ||
+                            (($route['sourcePortStart'] ?? null) === $ports[0] &&
+                            ($route['sourcePortEnd'] ?? null) === $ports[1] &&
+                            ($guard['sourcePortStart'] ?? null) === $ports[0] &&
+                            ($guard['sourcePortEnd'] ?? null) === $ports[1]));
                 }));
         }
         unset($profile);
@@ -526,6 +575,13 @@ final class Resolver
             $smart ? 'cache-size=0' : 'cache-size=256',
             'pid-file=' . Policy::STATE_DIR . "/dns-{$port}.pid",
         ];
+        $sourcePorts = self::listenerSourcePorts($port);
+        if ($sourcePorts !== null && array_filter($upstreams,
+            static fn (string $upstream): bool => str_starts_with($upstream, 'server=') &&
+                str_contains($upstream, '@')) !== []) {
+            $rows[] = 'min-port=' . $sourcePorts[0];
+            $rows[] = 'max-port=' . $sourcePorts[1];
+        }
         $rows[] = 'local=/' . $hostname . '/';
         if ($host !== '') {
             $rows[] = 'host-record=' . $hostname . ',' . $host;

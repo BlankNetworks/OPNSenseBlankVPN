@@ -56,13 +56,28 @@ final class WireGuard
         $owner = self::owner($id);
         $nativeServers = new Server();
         $nativeClients = new Client();
+        $sharedOwners = [];
+        if (!empty($identity['accountBinding'])) {
+            foreach (Policy::profiles(new BlankVpn()) as $profile) {
+                if (empty($profile['relay']) ||
+                    !hash_equals((string)($profile['accountBinding'] ?? ''), (string)$identity['accountBinding']) ||
+                    !hash_equals((string)($profile['identityKey'] ?? ''), $identityKey) ||
+                    ($profile['address'] ?? '') !== $address || ($profile['address6'] ?? '') !== $address6) {
+                    continue;
+                }
+                if (hash_equals(self::ownedPrivateKey($profile), $privateKey)) {
+                    $sharedOwners[$profile['owner']] = true;
+                }
+            }
+        }
 
         $usedUnits = [];
         foreach ($nativeServers->servers->server->iterateItems() as $current) {
             if ((string)$current->name === $owner) {
                 throw new RuntimeException('This Blank VPN & Proxy profile already owns a WireGuard instance.');
             }
-            if ((string)$current->pubkey === $identityKey || (string)$current->privkey === $privateKey) {
+            $shared = isset($sharedOwners[(string)$current->name]);
+            if (((string)$current->pubkey === $identityKey || (string)$current->privkey === $privateKey) && !$shared) {
                 throw new RuntimeException('This WireGuard identity is already used by another instance.');
             }
             $currentAddresses = array_map(
@@ -70,7 +85,7 @@ final class WireGuard
                 $current->tunneladdress->getValues()
             );
             foreach ($addresses as $candidate) {
-                if (in_array(inet_pton(explode('/', $candidate, 2)[0]), $currentAddresses, true)) {
+                if (in_array(inet_pton(explode('/', $candidate, 2)[0]), $currentAddresses, true) && !$shared) {
                     throw new RuntimeException('A WireGuard tunnel address is already used by another instance.');
                 }
             }
@@ -235,12 +250,23 @@ final class WireGuard
         $address = self::hostAddress((string)($device['address'] ?? ''), false);
         $address6 = self::hostAddress((string)($device['address6'] ?? ''), true);
         self::checkUnderlay();
+        $sharedOwners = [];
+        foreach (Policy::profiles(new BlankVpn()) as $otherProfile) {
+            if (($otherProfile['id'] ?? '') !== ($profile['id'] ?? '') &&
+                !empty($otherProfile['relay']) && !empty($profile['accountBinding']) &&
+                ($otherProfile['accountBinding'] ?? '') === ($profile['accountBinding'] ?? null) &&
+                ($otherProfile['identityKey'] ?? '') === $profile['identityKey']) {
+                self::ownedPrivateKey($otherProfile);
+                $sharedOwners[$otherProfile['owner']] = true;
+            }
+        }
         foreach ($servers->servers->server->iterateItems() as $id => $other) {
             if ($id === self::instanceId($profile)) {
                 continue;
             }
             foreach ($other->tunneladdress->getValues() as $existing) {
-                if (in_array($existing, [$address, $address6], true)) {
+                if (in_array($existing, [$address, $address6], true) &&
+                    !isset($sharedOwners[(string)$other->name])) {
                     throw new RuntimeException('Mullvad assigned an address already used by another WireGuard tunnel.');
                 }
             }
@@ -534,7 +560,8 @@ final class WireGuard
         $unverified = false;
         foreach ($targets as $destination => $target) {
             $marker = Policy::marker('probe', $profile['id'] . $destination);
-            $probe = self::probeEndpoint($address, $destination, $target['host'], $target['path'], $profile['interface'], $marker);
+            $probe = self::probeEndpoint($address, $destination, $target['host'], $target['path'], $profile['interface'],
+                $marker, Resolver::probeSourcePorts($profile));
             if ($probe['status'] === 'reachable') {
                 return ['reachable' => true, 'checkedAt' => time(), 'status' => 'reachable',
                     'milliseconds' => $probe['milliseconds'], 'detail' => null];
@@ -564,14 +591,15 @@ final class WireGuard
         string $host,
         string $path,
         string $interface,
-        string $marker
+        string $marker,
+        ?array $sourcePorts
     ): array {
         $curl = curl_init('https://' . $host . $path);
         if ($curl === false) {
             throw new RuntimeException('OPNsense could not initialize the HTTPS tunnel test.');
         }
         $body = '';
-        if (!curl_setopt_array($curl, [
+        $options = [
             CURLOPT_INTERFACE => $address,
             CURLOPT_RESOLVE => [$host . ':' . Policy::PROBE_PORT . ':' . $destination],
             CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
@@ -590,7 +618,12 @@ final class WireGuard
                 $body .= $chunk;
                 return strlen($chunk);
             },
-        ])) {
+        ];
+        if ($sourcePorts !== null) {
+            $options[CURLOPT_LOCALPORT] = $sourcePorts[0];
+            $options[CURLOPT_LOCALPORTRANGE] = $sourcePorts[1] - $sourcePorts[0] + 1;
+        }
+        if (!curl_setopt_array($curl, $options)) {
             throw new RuntimeException('OPNsense could not configure the protected HTTPS tunnel test.');
         }
         $transport = curl_exec($curl) === true;

@@ -454,6 +454,21 @@ namespace {
     }
     $withDns = new Plugin();
     (new ReflectionMethod(Firewall::class, 'registerProfile'))->invoke(null, $withDns, $profiles['jp'], true);
+    $shared = $profiles['jp'] + ['peerKey' => 'remote-relay'];
+    $sharedRules = new Plugin();
+    (new ReflectionMethod(Firewall::class, 'registerProfile'))->invoke(null, $sharedRules, $shared, true);
+    $probeRange = Resolver::probeSourcePorts($shared);
+    $dnsRange = Resolver::dnsSourcePorts($shared);
+    checkRouting(($sharedRules->rules[$probe]['from_port'] ?? '') === implode(':', $probeRange) &&
+        ($sharedRules->rules[Policy::marker('dns_out', 'jp10.64.0.1')]['from_port'] ?? '') === implode(':', $dnsRange),
+        'Shared-key router probes and provider DNS must use profile-specific source ports.');
+    $sourceBoundRules = "pass out quick route-to (wg0 ?) inet proto tcp from 10.64.0.9 port {$probeRange[0]}:{$probeRange[1]} to " .
+        Policy::PROBE_IP . " port = https flags S/SA keep state label \"$probe\"\n" .
+        "block drop out quick inet proto tcp from 10.64.0.9 port {$probeRange[0]}:{$probeRange[1]} to " .
+        Policy::PROBE_IP . " port = https label \"{$probe}_block\"\n";
+    checkRouting(Firewall::probePathsInstalled($shared, Firewall::parseLoadedRules($sourceBoundRules),
+        'no nat inet proto tcp from 10.64.0.9 to ' . Policy::PROBE_IP . " port = https\n") === [Policy::PROBE_IP],
+        'Only a loaded matching source-port route can verify a shared-key exit.');
     $dnsNat = array_values(array_filter($withDns->nat, static fn (array $rule): bool =>
         ($rule['dstport'] ?? '') === '53'));
     checkRouting(count($dnsNat) === 1 && $dnsNat[0]['nonat'] === true &&
