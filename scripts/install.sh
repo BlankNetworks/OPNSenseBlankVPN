@@ -2,7 +2,7 @@
 # Install the package pinned to this release on a supported OPNsense router.
 set -eu
 
-version=0.8.40
+version=0.8.41
 repository=BlankNetworks/OPNSenseBlankVPN
 
 fail() {

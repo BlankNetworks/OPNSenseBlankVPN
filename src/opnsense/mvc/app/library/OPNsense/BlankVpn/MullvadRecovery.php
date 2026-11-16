@@ -11,7 +11,8 @@ final class MullvadRecovery
     private const CHECK_SECONDS = 600;
     private const NEXT_REPAIR_SECONDS = 60;
     private const RETRY_SECONDS = 900;
-    private const KEY_RETRY_SECONDS = 600;
+    private const TRANSIENT_RETRY_SECONDS = 120;
+    private const KEY_RETRY_SECONDS = 300;
 
     public static function status(): array
     {
@@ -67,12 +68,15 @@ final class MullvadRecovery
                 : (!$result['matched'] ? 'no-matching-login' : ($result['missing'] ? 'waiting' : 'healthy'));
             $state['nextCheck'] = $now + ($result['restored'] !== null ? self::NEXT_REPAIR_SECONDS
                 : (!$result['matched'] ? self::RETRY_SECONDS
-                    : ($result['missing'] ? self::KEY_RETRY_SECONDS : self::CHECK_SECONDS)));
+                    : ($result['missing'] ? self::TRANSIENT_RETRY_SECONDS : self::CHECK_SECONDS)));
             self::save($state);
             return $result['restored'] !== null;
-        } catch (\Throwable) {
-            $state['outcome'] = 'error';
-            $state['nextCheck'] = $now + self::RETRY_SECONDS;
+        } catch (\Throwable $error) {
+            // Mullvad can briefly reject a newly removed key with HTTP 400 before accepting
+            // the same public key again. Keep the per-key cooldown and retry sooner.
+            $transient = $error->getCode() === 400;
+            $state['outcome'] = $transient ? 'retrying' : 'error';
+            $state['nextCheck'] = $now + ($transient ? self::TRANSIENT_RETRY_SECONDS : self::RETRY_SECONDS);
             try {
                 self::save($state);
             } catch (\Throwable) {

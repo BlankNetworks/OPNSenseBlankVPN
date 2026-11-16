@@ -20,6 +20,7 @@ final class FixtureMullvad extends Mullvad
     public bool $catalogOffline = false;
     public bool $expireAccount = false;
     public bool $responseLost = false;
+    public bool $rejectNextRegistration = false;
 
     protected function request(string $path, ?string $token = null, ?array $body = null): array
     {
@@ -63,6 +64,10 @@ final class FixtureMullvad extends Mullvad
             return $this->deviceRecords;
         }
         check(array_keys($body) === ['pubkey', 'hijack_dns'] && $body['hijack_dns'] === false, 'Only the public key and DNS option should leave the router.');
+        if ($this->rejectNextRegistration) {
+            $this->rejectNextRegistration = false;
+            throw new RuntimeException('Mullvad returned HTTP 400.', 400);
+        }
         $this->creates++;
         $device = [
             'id' => sprintf('00000000-0000-4000-8000-%012d', count($this->deviceRecords) + 1),
@@ -238,6 +243,17 @@ try {
         [$account], [], $recover), 'no free device slot');
     check($recovery->creates === 1 && count($recovery->deviceRecords) === 1,
         'Automatic recovery must never evict another Mullvad account device.');
+    $retry = new FixtureMullvad($directory);
+    $retry->rejectNextRegistration = true;
+    expectFailure(fn () => MullvadRecovery::reconcile(['saved' => $recoveryProfile], $retry,
+        [$account], [], $recover), 'HTTP 400');
+    check($retry->creates === 0 && $retry->deviceRecords === [],
+        'A transient provider rejection must not create a new key or evict another device.');
+    $result = MullvadRecovery::reconcile(['saved' => $recoveryProfile], $retry,
+        [$account], [], $recover);
+    check($result['restored'] === 'saved' && $retry->creates === 1 &&
+        $retry->deviceRecords[0]['pubkey'] === $identity['publicKey'],
+        'The same saved key must be recoverable after a transient Mullvad HTTP 400.');
     $provider->rememberRouterKey($identity['accountBinding'], $identity['privateKey']);
     $restarted = new FixtureMullvad($directory);
     $restarted->deviceRecords = $provider->deviceRecords;

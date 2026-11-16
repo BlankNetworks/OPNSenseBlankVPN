@@ -78,6 +78,7 @@ class ServiceController extends ApiControllerBase
                 $warning = match ($recovery['outcome'] ?? '') {
                     'waiting' => 'A saved Mullvad device registration is missing. Automatic recovery is waiting for its retry window.',
                     'restored' => 'A missing Mullvad device registration was restored automatically. Check the account device list if this keeps happening.',
+                    'retrying' => 'Mullvad rejected a missing device registration. Automatic recovery is waiting briefly before retrying its saved key.',
                     'error' => 'Automatic Mullvad device recovery could not finish. Check the saved login and Mullvad account device slots.',
                     'no-saved-login' => 'Save the Mullvad login on this router to enable automatic recovery of missing device registrations.',
                     'no-matching-login' => 'Saved Mullvad tunnels do not match the available saved Mullvad login. Sign in with the account used to add them.',
