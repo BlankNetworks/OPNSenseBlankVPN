@@ -127,3 +127,9 @@
 - Add serial Ping & Sort for proxy servers, with a stop control and successful HTTPS latencies ordered lowest first.
 - Show Multi-Path server ping results in each list row instead of a popup, and add a Download action for every saved list.
 - Leave the TUN driver unloaded until a proxy tunnel starts. A fresh install with Tailscale present but no Blank VPN policy no longer triggers a routing sync.
+
+## 0.8.35
+
+- Make Mullvad, password/token, and IVPN sign-in buttons work even when the OPNsense page intercepts form submission. Enter still submits the active sign-in form.
+- Recheck router sign-in state when a completed request loses its browser response, including Mysterium approval and the IVPN authenticator step, so a manual page refresh is unnecessary.
+- Follow the router's available OPNsense locales for language metadata, translated sign-in labels, and locale-aware dates and server sorting. Missing plugin-specific translations fall back to English.

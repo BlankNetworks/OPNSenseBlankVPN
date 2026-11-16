@@ -3,12 +3,15 @@ let settingsError = null;
 let exitTestError = null;
 let bulkRemoveError = null;
 let tailnetTraffic = 'unseen';
+const ambiguousSignIns = new Set(['account', 'providerLogin', 'mystBeginAuth', 'mystPollAuth', 'ivpnLogin']);
 const updateStatus = {ok:true, supported:true, enabled:false, running:false, installed:'0.1.39',
     available:'', message:'Check for a Blank VPN & Proxy update.'};
 const routingBackup = {schema:1, version:1, routing:{enabled:false}, assignments:[], services:[]};
 let updatePolls = 0;
 const reply = {
     dashboard: {
+        language: {locale:'fr_FR', available:{en_US:'English', fr_FR:'Français'},
+            translations:{'Sign in':'Connexion', 'Sign in and save':'Se connecter et enregistrer'}},
         devices: [{ipv4: '10.0.0.20', ipv4Addresses: ['10.0.0.20', '10.0.0.21'], ipv6: ['fd00::20'], mac:'02:00:00:00:00:20', interface:'lan', interfaceName:'LAN', name:'<b>Device</b>', lastSeen:'2026-11-12T13:30:00Z', stable:true}],
         tailnetDevices: [{kind:'tailnet', name:'Remote iPad', ipv4:'100.101.102.104', ipv6:['fd7a:115c:a1e0::104'], online:true}],
         profiles: [{id:'vpn1', name:'Canada', relay:'ca-test-wg-001', port:51820, interface:'wg1', dns:['10.64.0.1'], latestHandshake:1794490200, status:'Recent handshake', receivedBytes:4096, sentBytes:2048}],
@@ -49,6 +52,10 @@ const reply = {
 window.confirm = () => true;
 // OPNsense and third-party WebGUI code can intercept form submissions globally.
 document.addEventListener('submit', (event) => {
+    if (['bv-login-form', 'bv-provider-login', 'bv-ivpn-login'].includes(event.target.id)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+    }
     if (event.target.closest('dialog')) event.preventDefault();
 }, true);
 window.jQuery = (ready) => document.addEventListener('DOMContentLoaded', ready);
@@ -90,6 +97,7 @@ window.jQuery.ajax = async (request) => {
     if (action === 'account') {
         reply.dashboard.mullvadSignedIn = true;
         reply.dashboard.mullvadLoginSaved = data.saveLogin;
+        if (ambiguousSignIns.delete(action)) throw {status:0};
         return structuredClone({...reply.account, saved:data.saveLogin});
     }
     if (action === 'restoreMullvad') {
@@ -102,15 +110,18 @@ window.jQuery.ajax = async (request) => {
     }
     if (action === 'providerLogin' || action === 'providerLogout') {
         reply.dashboard.providerAccounts[data.provider] = action === 'providerLogin';
+        if (ambiguousSignIns.delete(action)) throw {status:0};
     }
     if (action === 'mystBeginAuth') {
         reply.dashboard.mystAuth = {pending:true, status:'pending',
             approvalUrl:'https://app.mysteriumvpn.com/oauth/authorize?request_id=test'};
+        if (ambiguousSignIns.delete(action)) throw {status:0};
         return {ok:true, ...reply.dashboard.mystAuth};
     }
     if (action === 'mystPollAuth') {
         reply.dashboard.mystAuth = {authenticated:true, status:'authenticated'};
         reply.dashboard.providerAccounts.mysterium = true;
+        if (ambiguousSignIns.delete(action)) throw {status:0};
         return {ok:true, ...reply.dashboard.mystAuth};
     }
     if (action === 'mystLocations') {
@@ -121,6 +132,7 @@ window.jQuery.ajax = async (request) => {
         reply.dashboard.ivpnAuth = authorized ? {authenticated:true, saved:true, status:'authenticated'}
             : {authenticated:false, status:'pending', challenge:'totp', message:'Enter your authenticator code.'};
         reply.dashboard.providerAccounts.ivpn = authorized;
+        if (ambiguousSignIns.delete(action)) throw {status:0};
         return {ok:true, ...reply.dashboard.ivpnAuth};
     }
     if (action === 'ivpnServers') {
@@ -316,6 +328,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelector('[data-bv-section="vpns"]').click();
     assert(!bv('tunnels').hidden && bv('register-form').hidden, 'VPN login did not open');
     bv('account').value = '1234567890123456';
+    assert(document.getElementById('blankvpn').lang === 'fr-FR' && bv('inspect-account').textContent === 'Connexion',
+        'The dashboard must apply the OPNsense locale to sign-in controls.');
     bv('save-login').checked = true;
     bv('inspect-account').click();
     await wait();
@@ -1375,8 +1389,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(!bv('ivpn-confirmation-field').hidden && bv('ivpn-confirmation').required, 'IVPN confirmation field missing.');
     assert(bv('ivpn-account').value === '' && !bv('ivpn-account').required, 'IVPN account ID must not remain visible.');
     bv('ivpn-confirmation').value = '123456';
+    ambiguousSignIns.add('ivpnLogin');
     bv('ivpn-login').querySelector('button').click();
     await wait();
+    assert(reply.dashboard.providerAccounts.ivpn && bv('ivpn-login').hidden && !bv('provider-server-form').hidden,
+        'IVPN confirmation must recover when its successful response is lost.');
     bv('provider-server').value = 'ivpn-loc';
     bv('provider-server').dispatchEvent(new Event('change'));
     bv('provider-name').value = 'IVPN Toronto';

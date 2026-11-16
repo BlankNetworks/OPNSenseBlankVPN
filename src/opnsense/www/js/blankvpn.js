@@ -28,7 +28,7 @@
         }
         const insecureWebGui = window.location.protocol === 'http:';
         const bypassDestination = 'bypass';
-        const serviceOrder = new Intl.Collator(undefined, {sensitivity: 'base', numeric: true});
+        let serviceOrder = new Intl.Collator(undefined, {sensitivity: 'base', numeric: true});
         const maxDomainBytes = 131072;
         const testDisplays = new WeakMap();
         const state = {
@@ -94,8 +94,26 @@
             restoreAttempted: false,
             tailscaleDirty: false,
             loginRevision: 0,
-            activeSmartInterfaces: []
+            activeSmartInterfaces: [],
+            language: {locale: 'en_US', translations: {}}
         };
+
+        function translated(source) {
+            return state.language.translations?.[source] || source;
+        }
+
+        function applyLanguage(language) {
+            if (!language || typeof language.locale !== 'string') {
+                return;
+            }
+            state.language = language;
+            root.lang = language.locale.replace('_', '-');
+            root.dir = language.locale === 'fa_IR' ? 'rtl' : 'ltr';
+            serviceOrder = new Intl.Collator(root.lang, {sensitivity: 'base', numeric: true});
+            for (const element of root.querySelectorAll('[data-bv-i18n]')) {
+                element.textContent = translated(element.dataset.bvI18n);
+            }
+        }
 
         function array(value) {
             if (Array.isArray(value)) {
@@ -122,7 +140,7 @@
             const isNumber = typeof value === 'number' || /^\d+$/.test(String(value));
             const timestamp = Number(value);
             const parsed = new Date(isNumber ? (timestamp < 1e12 ? timestamp * 1000 : timestamp) : value);
-            return Number.isNaN(parsed.getTime()) ? shown(value) : parsed.toLocaleString();
+            return Number.isNaN(parsed.getTime()) ? shown(value) : parsed.toLocaleString(state.language.locale.replace('_', '-'));
         }
 
         function errorMessage(error, fallback) {
@@ -161,7 +179,9 @@
                     throw new Error('OPNsense denied this request. Check your session and privileges.');
                 }
                 if (method === 'POST' && !xhr?.status) {
-                    throw new Error('The router did not return a result. Refresh the dashboard to check what changed before retrying.');
+                    const error = new Error('The router did not return a result. Refresh the dashboard to check what changed before retrying.');
+                    error.ambiguous = true;
+                    throw error;
                 }
                 throw new Error('The router did not return a readable result.');
             }
@@ -405,12 +425,12 @@
             byId('provider-secret-label').textContent = password ? 'PIA password'
                 : provider === 'azire' ? 'AzireVPN API token' : 'NordVPN router login token';
             byId('provider-status').textContent = supportedLogin
-                ? insecureWebGui ? 'Open the OPNsense WebGUI over HTTPS to sign in.'
-                    : signedIn ? (ivpn && state.ivpnAuth.message ? state.ivpnAuth.message : 'Login saved on this router.')
-                    : browserLogin && pending ? 'Approve the sign-in in Mysterium VPN, then select Check approval.'
-                    : browserLogin && state.mystAuth.status === 'expired' ? 'The approval link expired. Sign in again.'
+                ? insecureWebGui ? translated('Open the OPNsense WebGUI over HTTPS to sign in.')
+                    : signedIn ? (ivpn && state.ivpnAuth.message ? state.ivpnAuth.message : translated('Login saved on this router.'))
+                    : browserLogin && pending ? translated('Approve the sign-in in Mysterium VPN, then select Check approval.')
+                    : browserLogin && state.mystAuth.status === 'expired' ? translated('The approval link expired. Sign in again.')
                     : ivpn && state.ivpnAuth.message ? state.ivpnAuth.message
-                    : 'Sign in to load the provider’s WireGuard servers.'
+                    : translated('Sign in to load the provider’s WireGuard servers.')
                 : 'Import a WireGuard profile or add a VPN tunnel already configured in OPNsense.';
             byId('provider-logout').hidden = !signedIn;
             byId('provider-server-form').hidden = !signedIn;
@@ -1784,12 +1804,20 @@
             return state.dashboardRequest;
         }
 
+        async function refreshSignInStatus() {
+            if (state.dashboardRequest) {
+                await state.dashboardRequest;
+            }
+            await refreshDashboard();
+        }
+
         async function fetchDashboard() {
             const refresh = byId('refresh');
             const loginRevision = state.loginRevision;
             refresh.disabled = true;
             try {
                 const data = await api('dashboard');
+                applyLanguage(data.language);
                 state.profiles = array(data.profiles);
                 state.assignments = array(data.assignments);
                 state.devices = array(data.devices);
@@ -2101,7 +2129,7 @@
             byId('assignment-title').focus();
         }
 
-        async function mutate(control, operation, success, onSuccess) {
+        async function mutate(control, operation, success, onSuccess, recover) {
             if (state.busy) {
                 return;
             }
@@ -2127,6 +2155,16 @@
                 }
                 await refreshDashboard();
             } catch (error) {
+                if (error.ambiguous && recover) {
+                    try {
+                        if (await recover()) {
+                            notice(success, 'success');
+                            return;
+                        }
+                    } catch (_) {
+                        // Keep the original request error when the status check also fails.
+                    }
+                }
                 notice(errorMessage(error, 'The operation could not be completed.'), 'danger');
             } finally {
                 state.busy = false;
@@ -2411,7 +2449,7 @@
         function accountNumber() {
             const value = byId('account').value.replace(/[\s-]/g, '');
             if (!/^\d{16}$/.test(value)) {
-                throw new Error('Enter the 16-digit Mullvad account number.');
+                throw new Error(translated('Enter the 16-digit Mullvad account number.'));
             }
             return value;
         }
@@ -2427,7 +2465,7 @@
             state.signingIn = true;
             state.restoreAttempted = true;
             state.loginRevision++;
-            target.textContent = restore ? 'Reconnecting saved Mullvad login…' : 'Signing in to Mullvad…';
+            target.textContent = translated(restore ? 'Reconnecting saved Mullvad login…' : 'Signing in to Mullvad…');
             try {
                 const payload = restore ? {} : {account: accountNumber(), saveLogin: byId('save-login').checked};
                 byId('account').value = '';
@@ -2438,6 +2476,20 @@
                 setMullvadSignedIn(true);
                 renderMullvadAccount(response);
             } catch (error) {
+                if (error.ambiguous) {
+                    state.signingIn = false;
+                    try {
+                        await refreshSignInStatus();
+                        if (state.mullvadSignedIn) {
+                            target.textContent = translated('Signed in to Mullvad.');
+                            refreshMullvadAccount();
+                            notice(translated('Mullvad sign-in completed.'), 'success');
+                            return;
+                        }
+                    } catch (_) {
+                        // Report the original request error if status cannot be confirmed.
+                    }
+                }
                 setMullvadSignedIn(false);
                 target.textContent = '';
                 notice(errorMessage(error, 'Account information is unavailable.'), 'danger');
@@ -2445,6 +2497,9 @@
                 state.signingIn = false;
                 control.disabled = false;
                 byId('sign-out').disabled = false;
+            }
+            if (state.mullvadSignedIn) {
+                void refreshSignInStatus();
             }
         }
 
@@ -2682,8 +2737,27 @@
                 void loadProviderServers();
             }
         });
-        byId('provider-login').addEventListener('submit', (event) => {
-            event.preventDefault();
+        function bindSignIn(formId, buttonId, signIn) {
+            const form = byId(formId);
+            const control = byId(buttonId);
+            const run = () => {
+                if (form.reportValidity()) {
+                    signIn(control);
+                }
+            };
+            control.addEventListener('click', run);
+            form.addEventListener('submit', (event) => {
+                event.preventDefault();
+                run();
+            });
+            form.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' && event.target.tagName === 'INPUT') {
+                    event.preventDefault();
+                    run();
+                }
+            });
+        }
+        bindSignIn('provider-login', 'provider-sign-in', (control) => {
             const provider = state.provider;
             const secret = byId('provider-secret');
             const payload = {provider, username: byId('provider-user').value.trim(), secret: secret.value};
@@ -2691,12 +2765,19 @@
                 return;
             }
             secret.value = '';
-            void mutate(event.submitter, () => api('providerLogin', payload), 'VPN login saved.', () => {
+            void mutate(control, () => api('providerLogin', payload), translated('VPN login saved.'), () => {
                 state.providerAccounts[provider] = true;
                 state.providerLocations.delete(provider);
                 byId('provider-login').reset();
                 renderProvider();
                 void loadProviderServers();
+            }, async () => {
+                await refreshSignInStatus();
+                if (state.providerAccounts[provider] === true) {
+                    void loadProviderServers();
+                    return true;
+                }
+                return false;
             });
         });
         function updateMystAuth(result) {
@@ -2709,21 +2790,31 @@
         }
 
         byId('myst-begin').addEventListener('click', (event) => {
-            void mutate(event.currentTarget, () => api('mystBeginAuth', {}), 'Mysterium approval link created.', updateMystAuth);
+            void mutate(event.currentTarget, () => api('mystBeginAuth', {}), translated('Mysterium approval link created.'), updateMystAuth,
+                async () => {
+                    await refreshSignInStatus();
+                    return state.mystAuth.pending === true || state.providerAccounts.mysterium === true;
+                });
         });
         byId('myst-poll').addEventListener('click', (event) => {
             void mutate(event.currentTarget, async () => {
                 const result = await api('mystPollAuth', {});
                 return {...result, message: result.authenticated ? 'Mysterium VPN login saved.'
                     : result.pending ? 'Mysterium is still waiting for approval.' : 'Start a new Mysterium sign-in.'};
-            }, 'Mysterium VPN sign-in checked.', updateMystAuth);
+            }, translated('Mysterium VPN sign-in checked.'), updateMystAuth, async () => {
+                await refreshSignInStatus();
+                if (state.providerAccounts.mysterium === true) {
+                    void loadProviderServers();
+                    return true;
+                }
+                return state.mystAuth.pending === true;
+            });
         });
         byId('myst-type').addEventListener('change', () => {
             renderProvider();
             void loadProviderServers();
         });
-        byId('ivpn-login').addEventListener('submit', (event) => {
-            event.preventDefault();
+        bindSignIn('ivpn-login', 'ivpn-sign-in', (control) => {
             if (state.busy || insecureWebGui) {
                 return;
             }
@@ -2732,10 +2823,10 @@
             const payload = {account: account.value.trim() || state.ivpnConfirmationAccount, confirmation: confirmation.value.trim()};
             account.value = '';
             confirmation.value = '';
-            void mutate(event.submitter, async () => {
+            void mutate(control, async () => {
                 const result = await api('ivpnLogin', payload);
                 return {...result, message: result.message || (result.authenticated ? 'IVPN login saved.' : 'Finish signing in to IVPN.')};
-            }, 'IVPN sign-in checked.', (result) => {
+            }, translated('IVPN sign-in checked.'), (result) => {
                 state.ivpnAuth = result;
                 state.ivpnConfirmationAccount = result.challenge === 'totp' ? payload.account : '';
                 state.providerAccounts.ivpn = result.saved === true;
@@ -2743,6 +2834,18 @@
                 if (result.saved) {
                     void loadProviderServers();
                 }
+            }, async () => {
+                await refreshSignInStatus();
+                if (state.providerAccounts.ivpn === true) {
+                    void loadProviderServers();
+                    return true;
+                }
+                if (state.ivpnAuth.challenge === 'totp') {
+                    state.ivpnConfirmationAccount = payload.account;
+                    renderProvider();
+                    return true;
+                }
+                return false;
             });
         });
         byId('provider-logout').addEventListener('click', (event) => {
@@ -2818,10 +2921,7 @@
         byId('city').addEventListener('change', renderRelays);
         byId('relay').addEventListener('change', renderRelayChoice);
         byId('test-relay').addEventListener('click', () => void pingRelay());
-        byId('login-form').addEventListener('submit', (event) => {
-            event.preventDefault();
-            void inspectAccount();
-        });
+        bindSignIn('login-form', 'inspect-account', () => void inspectAccount());
         byId('restore-login').addEventListener('click', () => void inspectAccount(true));
         byId('sign-out').addEventListener('click', (event) => {
             void mutate(event.currentTarget, () => api('logoutMullvad', {}), 'Signed out of Mullvad.', () => {

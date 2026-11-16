@@ -44,7 +44,7 @@
                 <div class="bv-heading">
                     <h3 id="bv-vpn-title">Mullvad VPN</h3>
                     <div class="bv-actions">
-                        <button id="bv-restore-login" type="button" class="btn btn-default" hidden>Use saved login</button>
+                        <button id="bv-restore-login" type="button" class="btn btn-default" data-bv-i18n="Use saved login" hidden>Use saved login</button>
                         <button id="bv-sign-out" type="button" class="btn btn-default" hidden>Sign out</button>
                     </div>
                 </div>
@@ -54,20 +54,20 @@
                     System → Settings → Administration if the router uses HTTP.
                 </p>
                 <form id="bv-login-form">
-                    <label for="bv-account">Mullvad account number</label>
+                    <label for="bv-account" data-bv-i18n="Mullvad account number">Mullvad account number</label>
                     <div class="bv-inline-form">
                         <input id="bv-account" type="password" class="form-control" inputmode="numeric" autocomplete="off"
                             maxlength="23" placeholder="16-digit account number" required>
-                        <button id="bv-inspect-account" type="submit" class="btn btn-primary">Sign in</button>
+                        <button id="bv-inspect-account" type="button" class="btn btn-primary" data-bv-i18n="Sign in">Sign in</button>
                     </div>
-                    <label class="bv-check bv-save-login"><input id="bv-save-login" type="checkbox" checked> Save login on this router</label>
+                    <label class="bv-check bv-save-login"><input id="bv-save-login" type="checkbox" checked> <span data-bv-i18n="Save login on this router">Save login on this router</span></label>
                 </form>
                 <div id="bv-account-status" class="bv-account-status" role="status" aria-live="polite"></div>
 
                 <form id="bv-register-form" hidden>
                     <div class="bv-heading bv-relay-heading">
                         <h4>Choose a server</h4>
-                        <button id="bv-refresh-relays" type="button" class="btn btn-default">Refresh servers</button>
+                        <button id="bv-refresh-relays" type="button" class="btn btn-default" data-bv-i18n="Refresh servers">Refresh servers</button>
                     </div>
                     <p id="bv-relay-status" class="text-muted" aria-live="polite"></p>
                     <div class="bv-fields">
@@ -106,18 +106,18 @@
                 <div id="bv-myst-login" class="bv-actions" hidden>
                     <button id="bv-myst-begin" type="button" class="btn btn-primary">Sign in to Mysterium VPN</button>
                     <a id="bv-myst-approve" class="btn btn-default" target="_blank" rel="noopener noreferrer" hidden>Approve sign-in</a>
-                    <button id="bv-myst-poll" type="button" class="btn btn-default" hidden>Check approval</button>
+                    <button id="bv-myst-poll" type="button" class="btn btn-default" data-bv-i18n="Check approval" hidden>Check approval</button>
                 </div>
                 <form id="bv-ivpn-login" hidden>
                     <div class="bv-fields">
                         <label>IVPN account ID
                             <input id="bv-ivpn-account" type="password" maxlength="64" autocomplete="off" class="form-control" required>
                         </label>
-                        <label id="bv-ivpn-confirmation-field" hidden>Authenticator code
+                        <label id="bv-ivpn-confirmation-field" hidden><span data-bv-i18n="Authenticator code">Authenticator code</span>
                             <input id="bv-ivpn-confirmation" type="text" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" class="form-control">
                         </label>
                     </div>
-                    <button type="submit" class="btn btn-primary">Sign in and save</button>
+                    <button id="bv-ivpn-sign-in" type="button" class="btn btn-primary" data-bv-i18n="Sign in and save">Sign in and save</button>
                 </form>
                 <form id="bv-provider-login" hidden>
                     <div class="bv-fields">
@@ -128,7 +128,7 @@
                             <input id="bv-provider-secret" type="password" maxlength="512" autocomplete="off" class="form-control" required>
                         </label>
                     </div>
-                    <button type="submit" class="btn btn-primary">Sign in and save</button>
+                    <button id="bv-provider-sign-in" type="button" class="btn btn-primary" data-bv-i18n="Sign in and save">Sign in and save</button>
                 </form>
                 <form id="bv-provider-server-form" hidden>
                     <div class="bv-fields">

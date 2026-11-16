@@ -11,6 +11,7 @@ use OPNsense\BlankVpn\DeviceIdentity;
 use OPNsense\BlankVpn\Diagnostics;
 use OPNsense\BlankVpn\Firewall;
 use OPNsense\BlankVpn\Ivpn;
+use OPNsense\BlankVpn\Language;
 use OPNsense\BlankVpn\Mullvad;
 use OPNsense\BlankVpn\MystVpn;
 use OPNsense\BlankVpn\NativeVpn;
@@ -329,6 +330,7 @@ class ServiceController extends ApiControllerBase
             $savedProviders['mysterium'] = !empty($mystAuth['authenticated']);
             $savedProviders['ivpn'] = !empty($ivpnAuth['saved']);
             return $discovery + [
+                'language' => Language::dashboard(),
                 'profiles' => array_values($profiles),
                 'proxyCores' => ProxyRuntime::capabilities(),
                 'canManageCores' => self::nativeWritesAvailable() && is_string($username) &&
