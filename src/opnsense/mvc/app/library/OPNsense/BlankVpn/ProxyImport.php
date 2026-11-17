@@ -413,7 +413,11 @@ final class ProxyImport
 
     private static function ssr(string $raw): array
     {
-        [$body, $query] = array_pad(explode('/?', self::decode($raw), 2), 2, '');
+        [$raw, $fragment] = array_pad(explode('#', $raw, 2), 2, '');
+        // SSR is usually base64-encoded, but subscription lists also publish the
+        // decoded host:port:protocol:cipher:obfs:password form directly.
+        $decoded = str_contains($raw, ':') ? $raw : self::decode($raw);
+        [$body, $query] = array_pad(explode('/?', $decoded, 2), 2, '');
         $parts = explode(':', $body);
         if (count($parts) < 6) {
             throw new DomainException('Invalid ShadowsocksR configuration.');
@@ -425,7 +429,7 @@ final class ProxyImport
             'cipher' => $cipher, 'obfs' => $obfs, 'password' => self::decode($password), 'udp' => true,
             'obfs-param' => isset($q['obfsparam']) ? self::decode($q['obfsparam']) : '',
             'protocol-param' => isset($q['protoparam']) ? self::decode($q['protoparam']) : ''
-        ], isset($q['remarks']) ? self::decode($q['remarks']) : '');
+        ], isset($q['remarks']) ? self::decode($q['remarks']) : rawurldecode($fragment));
     }
 
     private static function node(string $core, array $config, string $label): array

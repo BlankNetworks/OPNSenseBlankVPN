@@ -191,3 +191,9 @@
 - Confirm on the live router that pausing an iPhone's Full rule sends fresh IPv4 traffic through WAN source NAT and returns the ISP address, while both a numeric-IP site and `example.com` load. Restore the Full rule after the test. No forwarding rule change was needed for this path.
 - Exercise Full, Multi-Path, and unassigned Tailscale peers together in the isolated FreeBSD PF regression test. Run that test on every repository push alongside the WireGuard forwarding tests.
 - Document Tailscale SSH check mode and its periodic reapproval under the SSH install instructions.
+
+## 0.8.46
+
+- Import decoded `ssr://host:port:protocol:cipher:obfs:password` links as well as base64-encoded SSR links. Keep an existing server's identity when the format changes, and use a link fragment as its display name when no SSR remarks field exists.
+- Validate legacy Shadowsocks CFB and RC4 import fixtures with the bundled Mihomo core, plus VLESS XHTTP REALITY with the bundled Xray core. These configuration checks do not imply a particular remote endpoint is reachable or accepts the supplied account.
+- Keep TLS certificate checks enabled. Live diagnostics confirmed the router's saved Shadowsocks and Trojan servers work; three saved VLESS REALITY profiles timed out through both Mihomo and Xray, while another REALITY profile worked through both. No client routing or Tailscale management setting was changed.

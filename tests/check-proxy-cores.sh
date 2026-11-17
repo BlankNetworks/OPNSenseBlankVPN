@@ -20,8 +20,9 @@ unzip -p xray.zip xray > xray
 tar -xOzf sing-box.tar.gz sing-box-1.14.4-linux-amd64/sing-box > sing-box
 chmod 755 mihomo xray sing-box
 
-for config in ss ssr vmess ss2022 reality adapter-bridge nord-chicago nord-tokyo; do
+for config in ss ssr ssr-plain ss-cfb ss-rc4 vmess ss2022 reality adapter-bridge nord-chicago nord-tokyo; do
     ./mihomo -d "$blankvpn_fixtures" -t -f "$config.json"
 done
 ./xray run -test -config xray.json
+./xray run -test -config xray-reality.json
 ./sing-box check -c sing-box.json

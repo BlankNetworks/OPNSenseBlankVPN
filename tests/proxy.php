@@ -80,15 +80,30 @@ $vless = "vless://{$uuid}@192.0.2.4:443?type=xhttp&security=tls&sni=example.com&
 $vmess = 'vmess://' . base64_encode(json_encode(['v' => '2', 'add' => '192.0.2.5', 'port' => '443',
     'id' => $uuid, 'aid' => '0', 'net' => 'ws', 'type' => 'none', 'host' => 'example.com', 'path' => '/ws']));
 $ss2022 = 'ss://' . rawurlencode('2022-blake3-aes-128-gcm:' . base64_encode(str_repeat('x', 16))) . '@192.0.2.8:443';
+$ssCfb = 'ss://' . rtrim(base64_encode('aes-128-cfb:fixture-pass'), '=') . '@192.0.2.8:8443#Legacy CFB';
+$ssRc4 = 'ss://' . rtrim(base64_encode('rc4-md5:fixture-pass'), '=') . '@192.0.2.8:8444#Legacy RC4';
 $list = base64_encode(implode("\n", [$ss, $legacy, $vless, $vmess, 'https://user:pass@192.0.2.6:8443', 'unknown://host']));
 $result = ProxyImport::parse($list);
 assertProxy(count($result['nodes']) === 5 && $result['skipped'] === 1, 'Recognize each supported subscription node independently.');
 assertProxy(proxyNode($ss)['id'] === proxyNode(str_replace('#Example', '#Changed', $ss))['id'], 'An alias change must preserve node identity.');
 assertProxy(proxyNode($ss)['id'] !== proxyNode($ss2022)['id'], 'Different upstream configuration needs a different identity.');
 assertProxy(proxyNode($legacy)['legacy'], 'Identify SSR as legacy.');
+$plainSsr = 'ssr://192.0.2.3:443:origin:aes-256-cfb:plain:' .
+    rtrim(base64_encode('fixture-pass'), '=') . '/?remarks=' .
+    rawurlencode(base64_encode('Fixture SSR')) . '# Source label';
+assertProxy(proxyNode($plainSsr)['id'] === proxyNode($legacy)['id'] &&
+    proxyNode($plainSsr)['name'] === 'Fixture SSR',
+    'Decoded SSR subscription links preserve their server and remarks without changing node identity.');
+$plainSsrWithoutRemarks = 'ssr://192.0.2.3:443:origin:aes-256-cfb:plain:' .
+    rtrim(base64_encode('fixture-pass'), '=') . '# Source label';
+assertProxy(proxyNode($plainSsrWithoutRemarks)['name'] === 'Source label',
+    'Decoded SSR links use the fragment when no remarks field is present.');
 assertProxy(proxyNode($vless)['core'] === 'xray', 'XHTTP uses Xray.');
 assertProxy(proxyNode($vmess)['config']['network'] === 'ws', 'VMess subscription carries WebSocket settings.');
 assertProxy(proxyNode($ss2022)['config']['cipher'] === '2022-blake3-aes-128-gcm', 'Preserve Shadowsocks 2022 method.');
+assertProxy(proxyNode($ssCfb)['legacy'] && proxyNode($ssCfb)['config']['cipher'] === 'aes-128-cfb' &&
+    proxyNode($ssRc4)['legacy'] && proxyNode($ssRc4)['config']['cipher'] === 'rc4-md5',
+    'Import legacy Shadowsocks CFB and RC4 methods without mistaking them for unreachable servers.');
 assertProxy(proxyNode('hysteria2://fixture-pass@192.0.2.7:443?sni=example.com')['protocol'] === 'hysteria2', 'Hysteria2 link');
 assertProxy(proxyNode("tuic://{$uuid}:fixture-pass@192.0.2.9:443?sni=example.com")['protocol'] === 'tuic', 'TUIC link');
 rejectProxy("trojan://secret@192.0.2.8:443?allowInsecure=1");
@@ -233,6 +248,14 @@ $realityConfig = ProxyRuntime::configuration($route, $reality)['mihomo'];
 assertProxy($realityConfig['proxies'][0]['flow'] === 'xtls-rprx-vision' &&
     $realityConfig['proxies'][0]['reality-opts']['short-id'] === '01' &&
     $realityConfig['proxies'][0]['servername'] === 'example.com', 'Preserve REALITY and XTLS Vision settings.');
+$xrayReality = proxyNode('vless://' . $uuid . '@192.0.2.12:443?type=xhttp&security=reality' .
+    '&sni=example.com&fp=chrome&pbk=' . rtrim(strtr(base64_encode(str_repeat('k', 32)), '+/', '-_'), '=') .
+    '&sid=01&path=%2Fproxy#Xray REALITY');
+$xrayRealityConfig = ProxyRuntime::configuration($route, $xrayReality)['adapter'];
+assertProxy($xrayReality['core'] === 'xray' &&
+    $xrayRealityConfig['outbounds'][0]['streamSettings']['security'] === 'reality' &&
+    $xrayRealityConfig['outbounds'][0]['streamSettings']['realitySettings']['shortId'] === '01',
+    'XHTTP with REALITY uses Xray and preserves its verified server identity.');
 
 $probeFailure = new ReflectionMethod(ProxyRuntime::class, 'probeFailure');
 assertProxy(str_contains($probeFailure->invoke(null, CURLE_SSL_CACERT, 0), 'certificate') &&
@@ -284,10 +307,14 @@ assertProxy(!$waiting->invoke(null, $retry, 'different-route', $when - 1) &&
 if (isset($argv[1])) {
     $dir = $argv[1];
     foreach (['ss' => $ssConfig['mihomo'], 'ssr' => ProxyRuntime::configuration($route, proxyNode($legacy))['mihomo'],
+        'ssr-plain' => ProxyRuntime::configuration($route, proxyNode($plainSsr))['mihomo'],
+        'ss-cfb' => ProxyRuntime::configuration($route, proxyNode($ssCfb))['mihomo'],
+        'ss-rc4' => ProxyRuntime::configuration($route, proxyNode($ssRc4))['mihomo'],
         'vmess' => ProxyRuntime::configuration($route, proxyNode($vmess))['mihomo'],
         'ss2022' => ProxyRuntime::configuration($route, proxyNode($ss2022))['mihomo'], 'reality' => $realityConfig,
         'adapter-bridge' => $xray['mihomo'], 'nord-chicago' => $chicagoConfig, 'nord-tokyo' => $tokyoConfig,
-        'xray' => $xray['adapter'], 'sing-box' => $sing['adapter']] as $name => $config) {
+        'xray' => $xray['adapter'], 'xray-reality' => $xrayRealityConfig,
+        'sing-box' => $sing['adapter']] as $name => $config) {
         file_put_contents($dir . '/' . $name . '.json', json_encode($config, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     }
 }
