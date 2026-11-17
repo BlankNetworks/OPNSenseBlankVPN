@@ -36,6 +36,7 @@
             selectedVpns: new Set(),
             selectedProxies: new Set(),
             assignments: [],
+            deviceServerDrafts: new Map(),
             devices: [],
             tailnetDevices: [],
             tailnetStatusAvailable: false,
@@ -637,6 +638,32 @@
             return status + (count > 0 ? ' · ' + count + ' Multi-Path ' + (count === 1 ? 'list blocked' : 'lists blocked') : '');
         }
 
+        function deviceServerPayload(assignment, discovered, kind, server) {
+            const mode = assignment && usesBaseServer(assignment.mode) ? assignment.mode : 'full';
+            const killSwitch = mode === 'full_multi' || (assignment
+                ? (assignment.killSwitch ?? (assignment.failure === 'block')) === true : true);
+            const backup = assignment?.backup && assignment.backup !== server ? assignment.backup : '';
+            const failure = mode === 'full_multi' || killSwitch ? 'block'
+                : assignment?.failure === 'backup' && backup ? 'backup' : 'wan';
+            const reserveIp = kind === 'lan' && discovered?.reserveIp && discovered.canUseInterface &&
+                (!assignment || assignment.bindMac === true);
+            return {
+                ...(assignment ? {id: assignment.id} : {}),
+                reserveIp: Boolean(reserveIp),
+                ip: assignment?.ip || discovered?.ip || '',
+                interface: assignment?.interface || discovered?.interface || '',
+                mac: assignment?.mac || discovered?.mac || '',
+                ipv6: assignment?.ipv6 || discovered?.ipv6 || '',
+                kind, mode, label: assignment?.label || discovered?.label || '',
+                profile: server, backup: failure === 'backup' ? backup : '',
+                killSwitch, failure,
+                onDemand: assignment?.onDemand !== false,
+                ...(kind === 'lan' ? {bindMac: assignment ? assignment.bindMac === true
+                    : discovered?.macBindingSupported === true} : {}),
+                switchNow: true
+            };
+        }
+
         function renderDeviceRules() {
             const body = byId('device-list');
             const tailnetBody = byId('tailnet-device-list');
@@ -652,7 +679,7 @@
             byId('add-device').hidden = wholeNetwork;
             byId('device-guide').textContent = wholeNetwork
                 ? 'Edit device names here. Device Bypass requires the Whole-Network Kill Switch to be off. To assign individual servers, choose Only Devices I choose.'
-                : 'Refresh to find LAN devices and current DHCP leases. Select a device to set up its routing rule.';
+                : 'Choose a server and press Save to apply an individual device rule. Edit opens advanced routing options.';
             const managed = list(state.settings?.interfaces);
             const transit = list(state.settings?.tailscaleInterfaces);
             const unboundInterfaces = list(state.settings?.killSwitchUnboundInterfaces);
@@ -783,12 +810,17 @@
                     addAddressDetail('DHCP reservation', reservationIp !== assignment.ip ? reservationIp : '');
                     addAddressDetail('Saved IP', assignment.ip);
                 }
-                cell(row, addresses[0], 'Addresses', addressDetail.join(' · '));
-                if (tailnet) {
-                    cell(row, device?.online ? 'Online' : device || offline ? 'Offline' : 'Unknown', 'Availability');
-                } else {
-                    cell(row, interfaceId ? networkName(interfaceId) : '—', 'Interface');
-                }
+                cell(row, addresses[0], 'Address', [
+                    ...(!tailnet && interfaceId ? [networkName(interfaceId)] : []), ...addressDetail
+                ].join(' · '));
+                cell(row, device?.online === true ? 'Online' : offline ? 'Offline' : 'Unknown', 'Availability');
+                const discovered = device ? {
+                    ip: waitingForAddress ? assignment.ip : ip, reserveAddress, effectiveIp,
+                    ipv6: tailnet || routableV6.length === 1 ? routableV6[0] : '',
+                    interface: interfaceId, mac: device.mac, label: (device.name || '').replace(/[<>]/g, '').slice(0, 80),
+                    reserved, reserveIp: reserveIp && !offline, canUseInterface, macBindingSupported,
+                    addressConflict: device.addressConflict === true
+                } : null;
                 const keepReady = assignment && (tailnet || assignment.mode === 'full_multi');
                 const onDemand = assignment?.mode === 'full' && assignment.onDemand !== false && !keepReady;
                 const ruleDetail = [assignment?.profile ? profileName(assignment.profile) : '',
@@ -804,7 +836,31 @@
                 const ruleNote = networkRule && !bypassActive && usesBaseServer(policy.networkMode)
                     ? 'Configured server · ' + profileName(policy.networkProfile)
                     : networkDraft ? '' : ruleDetail.filter(Boolean).join(' · ');
-                cell(row, rule, 'Rule', ruleNote);
+                const serverCell = cell(row, '', 'Server');
+                serverCell.replaceChildren();
+                const server = document.createElement('select');
+                server.className = 'form-control bv-device-server';
+                server.setAttribute('aria-label', 'Server for ' + name);
+                const currentServer = networkDraft ? (usesBaseServer(policy?.networkMode) ? policy.networkProfile : '')
+                    : assignment && usesBaseServer(assignment.mode) ? assignment.profile : '';
+                const choices = routingServers().map(exitChoice);
+                if (currentServer && !choices.some((choice) => choice.value === currentServer)) {
+                    choices.push({value: currentServer, label: 'Unavailable · ' + profileName(currentServer)});
+                }
+                const drafted = state.deviceServerDrafts.get(row.dataset.deviceKey);
+                const selectedServer = drafted && choices.some((choice) => choice.value === drafted) ? drafted : currentServer;
+                if (drafted && selectedServer !== drafted) {
+                    state.deviceServerDrafts.delete(row.dataset.deviceKey);
+                }
+                options(server, choices, networkDraft ? 'Whole-Network policy'
+                    : assignment?.mode === 'multi' ? 'No base server · Multi-Path'
+                        : 'No VPN or Proxy · local ISP', selectedServer);
+                const serverEditable = state.canManage && !networkDraft && !paused && canUseInterface &&
+                    (!assignment || ['full', 'full_multi', 'default'].includes(assignment.mode)) &&
+                    (assignment || (device && ip && !device.addressConflict &&
+                        (tailnet ? reserved : device.mac && (reserved || (reserveIp && !offline)))));
+                server.disabled = !serverEditable;
+                serverCell.append(server);
                 const statusDetail = [];
                 if (!tailnet && !canUseInterface) {
                     statusDetail.push('Select this interface in Routing coverage and save.');
@@ -820,18 +876,58 @@
                 if (!networkDraft && !tailnet && unboundInterfaces.includes(interfaceId)) {
                     statusDetail.push('Internet is blocked on this interface until the protected device has a confirmed IPv4 address.');
                 }
-                cell(row, status, 'Status', statusDetail.join(' '));
+                cell(row, rule, 'Routing', [ruleNote, status, ...statusDetail].filter(Boolean).join(' · '));
                 const ping = cell(row, '—', 'Ping');
                 const actions = row.insertCell();
                 actions.setAttribute('role', 'cell');
                 if (state.canManage) {
-                    const discovered = device ? {
-                        ip: waitingForAddress ? assignment.ip : ip, reserveAddress, effectiveIp,
-                        ipv6: tailnet || routableV6.length === 1 ? routableV6[0] : '',
-                        interface: interfaceId, mac: device.mac, label: (device.name || '').replace(/[<>]/g, '').slice(0, 80),
-                        reserved, reserveIp: reserveIp && !offline, canUseInterface, macBindingSupported,
-                        addressConflict: device.addressConflict === true
-                    } : null;
+                    const editIndividual = () => {
+                        openAssignment(assignment, tailnet ? 'tailnet' : 'lan', discovered);
+                        if (server.value && server.value !== currentServer) {
+                            byId('profile').value = server.value;
+                            byId('profile').dispatchEvent(new Event('change'));
+                        }
+                    };
+                    const save = button('Save', (event) => {
+                        const selected = server.value;
+                        if (!selected || selected === currentServer) {
+                            return;
+                        }
+                        const payload = deviceServerPayload(assignment, discovered, tailnet ? 'tailnet' : 'lan', selected);
+                        if (payload.reserveIp && !window.confirm('Reserve this IP address and save the rule? OPNsense will reload the DHCP service.')) {
+                            return;
+                        }
+                        void mutate(event.currentTarget, async () => {
+                            const result = await api('assign', payload);
+                            return {...result, message: result.applied ? 'Device server applied.'
+                                : result.message || 'Device server saved. Enable device routing to apply it.'};
+                        }, 'Device server saved.', () => {
+                            state.deviceServerDrafts.delete(row.dataset.deviceKey);
+                            if (assignment) {
+                                state.tests.delete('device:' + assignment.id);
+                            }
+                        });
+                    }, 'Save server for ' + name);
+                    const cancel = button('Cancel', () => {
+                        state.deviceServerDrafts.delete(row.dataset.deviceKey);
+                        server.value = currentServer;
+                        save.disabled = true;
+                        cancel.disabled = true;
+                        server.focus();
+                    }, 'Cancel server change for ' + name);
+                    const updateDraft = () => {
+                        const changed = serverEditable && server.value !== '' && server.value !== currentServer;
+                        if (changed) {
+                            state.deviceServerDrafts.set(row.dataset.deviceKey, server.value);
+                        } else {
+                            state.deviceServerDrafts.delete(row.dataset.deviceKey);
+                        }
+                        save.disabled = !changed;
+                        cancel.disabled = !changed;
+                    };
+                    server.addEventListener('change', updateDraft);
+                    updateDraft();
+                    actions.append(save, cancel);
                     if (networkDraft && !tailnet) {
                         const eligible = !tailnet && !transit.includes(interfaceId) && canUseInterface && (assignment ||
                             (!device?.addressConflict && device?.mac && ip && (reserved || (reserveIp && !offline))));
@@ -855,9 +951,10 @@
                     } else if (networkDraft && tailnet && assignment) {
                         actions.append(button('Edit', () => openNetworkDevice(assignment, discovered, false), 'Edit ' + name));
                     } else if (!networkDraft && assignment) {
-                        actions.append(button('Edit', () => openAssignment(assignment, tailnet ? 'tailnet' : 'lan', discovered), 'Edit ' + name));
+                        actions.append(button('Edit', editIndividual, 'Edit ' + name));
                         if (policy?.enabled && !paused && usesBaseServer(assignment.mode) && assignment.profile) {
-                            appendConnectionTest(actions, 'testDeviceRoute', assignment.id, name, {ping});
+                            ping.textContent = '';
+                            appendConnectionTest(ping, 'testDeviceRoute', assignment.id, name, {ping});
                         }
                         if (tailnet) {
                             const action = paused ? 'Enable' : 'Disable';
@@ -873,7 +970,7 @@
                             }, action + ' ' + name));
                         }
                     } else if ((tailnet || canUseInterface) && !device?.addressConflict) {
-                        actions.append(button('Select', () => openAssignment(null, tailnet ? 'tailnet' : 'lan', discovered), 'Select ' + name));
+                        actions.append(button('Edit', editIndividual, 'Edit ' + name));
                     }
                 }
             }
@@ -956,10 +1053,8 @@
                             : data.lanStatusAvailable !== true || state.discoveryTruncated ? null
                                 : current ? current.online === true : false);
                         setOfflineBadge(row.cells[0], online === false, isTailnet);
-                        if (isTailnet) {
-                            row.cells[2].textContent = online === true ? 'Online'
-                                : online === false ? 'Offline' : 'Unknown';
-                        }
+                        row.cells[2].textContent = online === true ? 'Online'
+                            : online === false ? 'Offline' : 'Unknown';
                     }
                 }
                 const online = state.tailnetDevices.filter(device => device.online === true).length;
@@ -980,6 +1075,7 @@
                 for (const row of byId('device-list').rows) {
                     if (row.dataset.deviceKey) {
                         setOfflineBadge(row.cells[0], false, false);
+                        row.cells[2].textContent = 'Unknown';
                     }
                 }
             }).finally(() => {
@@ -2854,6 +2950,9 @@
                 payload.bindMac = deviceMacBinding();
             }
             void mutate(event.submitter, () => api('assign', payload), 'Device assignment saved.', () => {
+                const key = payload.kind === 'tailnet' ? 'tailnet/' + payload.ip
+                    : payload.interface + '/' + payload.mac;
+                state.deviceServerDrafts.delete(key);
                 if (state.editing) {
                     state.tests.delete('device:' + state.editing.id);
                 }

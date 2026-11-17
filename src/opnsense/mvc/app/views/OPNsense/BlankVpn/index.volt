@@ -480,16 +480,16 @@
                 </div>
             </div>
             <div id="bv-lan-devices">
-                <p id="bv-device-guide" class="text-muted">Refresh to find LAN devices and current DHCP leases. Select a device to set up its routing rule.</p>
+                <p id="bv-device-guide" class="text-muted">Choose a server and press Save to apply an individual device rule. Edit opens advanced routing options.</p>
                 <div class="bv-scroll">
                 <table class="table bv-table bv-devices" role="table">
                     <thead role="rowgroup">
                         <tr role="row">
                             <th scope="col" role="columnheader">Device</th>
-                            <th scope="col" role="columnheader">Addresses</th>
-                            <th scope="col" role="columnheader">Interface</th>
-                            <th scope="col" role="columnheader">Assignment</th>
-                            <th scope="col" role="columnheader">Status</th>
+                            <th scope="col" role="columnheader">Address</th>
+                            <th scope="col" role="columnheader">Availability</th>
+                            <th scope="col" role="columnheader">Server</th>
+                            <th scope="col" role="columnheader">Routing</th>
                             <th scope="col" role="columnheader">Ping</th>
                             <th scope="col" role="columnheader"><span class="sr-only">Actions</span></th>
                         </tr>
@@ -506,8 +506,8 @@
                 <button type="button" id="bv-add-tailnet-peer" class="btn btn-default" data-manage-only hidden>Add by Tailscale IP</button>
                 <div class="bv-scroll">
                     <table class="table bv-table bv-devices" role="table">
-                        <thead><tr><th scope="col">Device</th><th scope="col">Addresses</th><th scope="col">Availability</th>
-                            <th scope="col">Rule</th><th scope="col">Routing</th><th scope="col">Ping</th>
+                        <thead><tr><th scope="col">Device</th><th scope="col">Address</th><th scope="col">Availability</th>
+                            <th scope="col">Server</th><th scope="col">Routing</th><th scope="col">Ping</th>
                             <th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                         <tbody id="bv-tailnet-device-list" role="rowgroup"></tbody>
                     </table>

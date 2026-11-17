@@ -486,6 +486,12 @@
     font-variant-numeric: tabular-nums;
 }
 
+.blankvpn .bv-device-server {
+    width: 100%;
+    min-width: 10rem;
+    max-width: 100%;
+}
+
 .blankvpn #bv-core-upload label,
 .blankvpn #bv-core-archive {
     min-width: 0;

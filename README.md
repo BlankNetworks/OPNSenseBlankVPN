@@ -98,17 +98,17 @@ ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubuser
 
 To pin this release instead, use the following command. It also checks the installer digest before running it.
 
-Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.47** on a supported amd64 or aarch64 OPNsense router.
+Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.48** on a supported amd64 or aarch64 OPNsense router.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.47.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.47/scripts/install.sh && sha256 -c 0aa5511b1fa7826a60a6d170067dafdb4c8ad52b715125d37f92ae189c979ad3 /tmp/blankvpn-install-0.8.47.sh && sh /tmp/blankvpn-install-0.8.47.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.48.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.48/scripts/install.sh && sha256 -c 67bac5e51e887a3523ef57b96f94fb523db02e10810d49dc5cf39942bfad6fc6 /tmp/blankvpn-install-0.8.48.sh && sh /tmp/blankvpn-install-0.8.48.sh'
 ```
 
 The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.
 
 ### Download on your computer
 
-1. Open the [0.8.47 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.47), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+1. Open the [0.8.48 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.48), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
 2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 
@@ -183,6 +183,8 @@ The dashboard reads the router's selected language and supports all 20 OPNsense 
 | ExpressVPN, VyprVPN, Other VPN | Attach a compatible OpenVPN or WireGuard tunnel configured in OPNsense with an assigned IPv4 gateway. Use the provider setup guide in the picker. |
 
 VPN and proxy servers appear together in **Network Settings**, grouped alphabetically by service or proxy core. LAN and Tailscale devices can use different servers at the same time, subject to provider limits.
+
+Under **Devices and Routing Rules**, choose a saved server in a Local or Tailscale device's **Server** dropdown and press **Save** to apply it. **Cancel** discards an unsaved choice. **Edit** opens the full rule form for routing mode, Kill Switch, DHCP reservation, and other advanced settings. A new device gets a Full rule when its inline server is saved; a DHCP lease may require the displayed reservation confirmation. Changing the server of an existing **Base VPN + Multi-Path** rule keeps that mode and its destination overrides. Multi-Path-only, blocked, paused, and Whole-Network policies require their corresponding advanced controls before a device server can be changed.
 
 ### Add Mullvad servers
 
@@ -270,7 +272,7 @@ Blank VPN & Proxy can route Tailscale peers only when their decrypted packets re
 
 Local Whole-Network coverage does not include Tailscale exit-node clients. In a physical os-tailscale 1.4 test with **Disable SNAT** off and Blank VPN's Tailscale scope disabled, an iPhone selected OPNsense as its exit node and reached the internet through the router's direct WAN address while the LAN proxy remained active. That is a working Tailscale exit node, but it is not a protected Blank VPN route. Confirm the public exit address from the peer itself before claiming VPN or proxy coverage.
 
-In Blank VPN & Proxy, open **Tailscale Settings** to check readiness. After confirming the kernel/PF forwarding path, use **Network Settings → Routing coverage** to choose **Tailscale**, then **Whole-Network coverage** or **Only Devices I choose**. Choose Whole-Network to set a base or Multi-Path policy for all peers using the exit node. For individual coverage, select a peer in the table or use **Add by Tailscale IP**. For a separate Tailscale gateway on Ethernet or VLAN, select its dedicated interface under **Tailscale Settings → Use a separate Tailscale gateway**. Use **Disable** beside a saved peer rule to pause the rule and its Kill Switch.
+In Blank VPN & Proxy, open **Tailscale Settings** to check readiness. After confirming the kernel/PF forwarding path, use **Network Settings → Routing coverage** to choose **Tailscale**, then **Whole-Network coverage** or **Only Devices I choose**. Choose Whole-Network to set a base or Multi-Path policy for all peers using the exit node. For individual coverage, choose a peer's server in the table and press **Save**, use **Edit** for advanced routing, or use **Add by Tailscale IP**. For a separate Tailscale gateway on Ethernet or VLAN, select its dedicated interface under **Tailscale Settings → Use a separate Tailscale gateway**. Use **Disable** beside a saved peer rule to pause the rule and its Kill Switch.
 
 With **Only Devices I choose**, a peer without an active rule uses the local ISP through the exit node, subject to ordinary OPNsense firewall rules. A paused peer rule has the same default. Other peers' Full, Multi-Path, and Kill Switch settings do not apply to it. The router source-NATs that peer's IPv4 traffic on the WAN. If the WAN has no IPv6 gateway, public IPv6 is unavailable; clients should use IPv4. In a live iPhone test on 0.8.44, pausing its Full rule produced an ISP exit address and successfully loaded both a numeric-IP page and `example.com`; restoring the rule reinstated its VPN route. The FreeBSD PF regression test covers a Full peer, a Multi-Path peer, and an unassigned peer together.
 

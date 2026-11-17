@@ -3,6 +3,7 @@ let settingsError = null;
 let exitTestError = null;
 let bulkRemoveError = null;
 let coreStatusError = false;
+let inlineAssignError = false;
 let tailnetTraffic = 'unseen';
 const ambiguousSignIns = new Set(['account', 'providerLogin', 'mystBeginAuth', 'mystPollAuth', 'ivpnLogin']);
 const updateStatus = {ok:true, supported:true, enabled:false, running:false, installed:'0.1.39',
@@ -200,6 +201,18 @@ window.jQuery.ajax = async (request) => {
         reply.dashboard.profiles.find(x => x.id === data.id).port = data.port;
         return {ok:true, port:data.port};
     }
+    if (action === 'assign' && data.switchNow === true) {
+        if (inlineAssignError) {
+            inlineAssignError = false;
+            return {ok:false, error:'The selected device server could not be applied.'};
+        }
+        const existing = reply.dashboard.assignments.find(row => row.id === data.id ||
+            (data.kind === 'lan' ? row.mac === data.mac && row.interface === data.interface
+                : row.kind === 'tailnet' && row.ip === data.ip));
+        if (existing) Object.assign(existing, data);
+        else reply.dashboard.assignments.push({id:'inline-device-' + reply.dashboard.assignments.length, ...data});
+        return {ok:true, applied:true};
+    }
     if (action === 'assign' && data.kind === 'tailnet') {
         const existing = reply.dashboard.assignments.find(row => row.id === 'tailnet1');
         const fields = {...data, label: data.label || 'Remote iPad', ipv6: data.ipv6 || 'fd7a:115c:a1e0::104'};
@@ -318,26 +331,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(!requests.some(x => x.action === 'relays'), 'server list loaded before sign-in');
     assert(getComputedStyle(bv('appearance')).backgroundImage === 'none', 'host select decoration was not suppressed');
     document.querySelector('[data-bv-section="network"]').click();
-    const disconnectedIpad = bv('device-list').querySelector('[aria-label="Select Test iPad"]').closest('tr');
+    const expectedDeviceColumns = 'Device,Address,Availability,Server,Routing,Ping,Actions';
+    for (const table of [bv('device-list'), bv('tailnet-device-list')]) {
+        assert([...table.closest('table').tHead.rows[0].cells].map(column => column.textContent.trim()).join(',') ===
+            expectedDeviceColumns, 'Local and Tailscale device tables must share the requested columns.');
+    }
+    const initialRule = bv('device-list').querySelector('[aria-label="Edit <b>Device rule</b>"]').closest('tr');
+    assert(initialRule.cells[3].querySelector('select[aria-label="Server for <b>Device rule</b>"]') &&
+        [...initialRule.cells[6].querySelectorAll('button')].slice(0, 3).map(control => control.textContent).join(',') ===
+            'Save,Cancel,Edit' && !bv('device-list').textContent.includes('Select'),
+        'Device rows need an inline server selector and Save, Cancel, Edit actions.');
+    const disconnectedIpad = bv('device-list').querySelector('[aria-label="Edit Test iPad"]').closest('tr');
     assert(disconnectedIpad.cells[0].querySelector('.bv-offline')?.textContent === 'Offline' &&
-        disconnectedIpad.querySelector('[aria-label="Select Test iPad"]'),
+        disconnectedIpad.querySelector('[aria-label="Edit Test iPad"]'),
         'A discovered but unassigned offline LAN device must stay visible and selectable.');
-    const lanIpadSelect = disconnectedIpad.querySelector('[aria-label="Select Test iPad"]');
+    const lanIpadSelect = disconnectedIpad.querySelector('[aria-label="Edit Test iPad"]');
     lanIpadSelect.focus();
     reply.dashboard.devices.find(device => device.name === 'Test iPad').online = true;
     window.blankvpnAvailabilityTick();
     await wait();
     assert(disconnectedIpad.isConnected && document.activeElement === lanIpadSelect &&
-        !disconnectedIpad.cells[0].querySelector('.bv-offline'),
+        !disconnectedIpad.cells[0].querySelector('.bv-offline') && disconnectedIpad.cells[2].textContent === 'Online',
         'A LAN device coming online must update without rebuilding the focused row.');
     reply.dashboard.devices.find(device => device.name === 'Test iPad').online = false;
     window.blankvpnAvailabilityTick();
     await wait();
-    assert(disconnectedIpad.cells[0].querySelector('.bv-offline')?.textContent === 'Offline',
+    assert(disconnectedIpad.cells[0].querySelector('.bv-offline')?.textContent === 'Offline' &&
+        disconnectedIpad.cells[2].textContent === 'Offline',
         'A LAN device going offline must update without a manual refresh.');
     bv('routing-scope').value = 'tailscale';
     bv('routing-scope').dispatchEvent(new Event('change'));
-    const ipadSelect = bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]');
+    const ipadSelect = bv('tailnet-device-list').querySelector('[aria-label="Edit Remote iPad"]');
     const ipadRow = ipadSelect.closest('tr');
     ipadSelect.focus();
     reply.dashboard.tailnetDevices[0].online = false;
@@ -372,7 +396,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('appearance').dispatchEvent(new Event('change'));
     assert(ports.length === 3 && ports[0].value === 'lan' && ports[0].parentElement.textContent.includes('igc0') &&
         bv('managed').textContent.includes('vlan02'), 'Ethernet ports and VLANs should be listed with the main port first');
-    bv('device-list').querySelector('button').click();
+    bv('device-list').querySelector('[aria-label="Edit <b>Device rule</b>"]').click();
     assert(bv('ip').value === '10.0.0.20' && bv('interface').value === 'lan', 'saved rule did not populate');
     bv('mode').value = 'full';
     bv('profile').value = 'vpn1';
@@ -894,26 +918,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(consoleRow.cells[0].textContent.includes('DHCP lease') && !consoleRow.textContent.includes('Online'),
         'A lease-only device must be identified without claiming it is online.');
     assert(outsideRow.textContent.includes('Interface outside coverage') &&
-        outsideRow.textContent.includes('Select this interface in Routing coverage and save') && !outsideRow.querySelector('button'),
+        outsideRow.textContent.includes('Select this interface in Routing coverage and save') &&
+        outsideRow.querySelector('[aria-label="Save server for Guest phone"]').disabled &&
+        !outsideRow.querySelector('[aria-label="Edit Guest phone"]'),
         'Devices on unmanaged LANs should be visible without allowing a rule until coverage is saved.');
-    assert(changedRow.cells[1].textContent === '10.0.0.46' &&
-        changedRow.textContent.includes('DHCP reservation is 10.0.0.16') && !changedRow.querySelector('button'),
+    assert(changedRow.cells[1].textContent.startsWith('10.0.0.46') &&
+        changedRow.textContent.includes('DHCP reservation is 10.0.0.16') &&
+        changedRow.querySelector('[aria-label="Save server for Changed reservation"]').disabled &&
+        !changedRow.querySelector('[aria-label="Edit Changed reservation"]'),
         'Show the current device address and explain why a conflicting reservation must be corrected before assignment.');
     const savedInterfaces = [...reply.dashboard.settings.interfaces];
     const vlan = bv('managed').querySelector('[value="opt1"]');
     vlan.click();
-    assert(!bv('device-list').querySelector('[aria-label="Select Guest phone"]'),
+    assert(!bv('device-list').querySelector('[aria-label="Edit Guest phone"]'),
         'Marking the VLAN in a draft must leave the guest device unavailable for assignment.');
     bv('settings-form').requestSubmit(bv('save-routing'));
     await wait();
-    bv('device-list').querySelector('[aria-label="Select Guest phone"]').click();
+    bv('device-list').querySelector('[aria-label="Edit Guest phone"]').click();
     assert(bv('ip').value === '10.0.2.45' && bv('interface').value === 'opt1',
         'After saving VLAN coverage, selecting its DHCP device should fill its observed address and interface.');
     bv('close-assignment').click();
     reply.dashboard.settings.interfaces = savedInterfaces;
     bv('refresh').click();
     await wait();
-    bv('device-list').querySelector('[aria-label="Select New console"]').click();
+    bv('device-list').querySelector('[aria-label="Edit New console"]').click();
     assert(bv('ip').value === '10.0.0.30' && bv('mac').value === '02:00:00:00:00:30' &&
         bv('interface').value === 'lan' && bv('device-kill').checked && bv('device-on-demand').checked &&
         bv('device-bind-mac-field').hidden, 'Selecting a LAN device must fill the reservation fallback rule.');
@@ -928,7 +956,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'assign' && x.data.ip === '10.0.0.30' &&
         x.data.reserveIp && x.data.profile === 'proxy-proxy-1' && x.data.killSwitch && x.data.onDemand && !x.data.bindMac),
         'New proxies must be ready to assign without a separate enable action.');
-    bv('device-list').querySelector('[aria-label="Select Laptop"]').click();
+    bv('device-list').querySelector('[aria-label="Edit Laptop"]').click();
     assert(bv('device-bind-mac').checked && !bv('device-bind-mac-field').hidden &&
         bv('device-on-demand').checked && bv('device-kill').checked &&
         bv('save-device').textContent === 'Reserve IP and save rule' && bv('identity').textContent.includes('Saving reserves the current address'),
@@ -1033,9 +1061,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('toggle-tailnet-routing').textContent === 'Disable VPN' &&
         reply.dashboard.settings.tailnetEnabled === true, 'Tailscale Enable VPN must restore its saved scope.');
     assert(bv('tailnet-coverage-note').textContent.includes('Unassigned Tailscale peers use the local ISP') &&
-        bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').closest('tr').textContent.includes('No VPN or Proxy · local ISP'),
+        bv('tailnet-device-list').querySelector('[aria-label="Edit Remote iPad"]').closest('tr').textContent.includes('No VPN or Proxy · local ISP'),
         'Device coverage must show local ISP as the default for unassigned Tailscale peers.');
-    bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
+    bv('tailnet-device-list').querySelector('[aria-label="Edit Remote iPad"]').click();
     assert(bv('ip').value === '100.101.102.104' && bv('ipv6').value === 'fd7a:115c:a1e0::104' &&
         bv('interface').value === 'opt2' && bv('device-kind').value === 'tailnet', 'Existing gateway link rules must remain available.');
     bv('close-assignment').click();
@@ -1043,14 +1071,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     reply.dashboard.settings.tailscaleSetup = {ready:false, disableSnat:true, reason:'Apply Tailscale settings from the LAN.'};
     bv('refresh').click();
     await wait();
-    bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
+    bv('tailnet-device-list').querySelector('[aria-label="Edit Remote iPad"]').click();
     assert(bv('assignment-interface-field').hidden && bv('save-device').disabled &&
         bv('route-note').textContent.includes('Apply Tailscale settings'), 'Unconfigured exit node must give an actionable message.');
     bv('close-assignment').click();
     reply.dashboard.settings.tailscaleSetup = {ready:true, disableSnat:true, reason:''};
     bv('refresh').click();
     await wait();
-    bv('tailnet-device-list').querySelector('[aria-label="Select Remote iPad"]').click();
+    bv('tailnet-device-list').querySelector('[aria-label="Edit Remote iPad"]').click();
     assert(bv('assignment-interface-field').hidden && !bv('interface').required &&
         bv('interface').value === 'tailscale0' && !bv('switch-now') &&
         bv('device-on-demand').disabled && bv('device-on-demand-field').hidden && bv('device-bind-mac-field').hidden,
@@ -1102,11 +1130,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         'A missing peer must be looked up by IPv4 when saving the chosen server.');
     const tailnetTable = bv('tailnet-device-list');
     const peerPing = tailnetTable.querySelector('[data-test-result="device:tailnet1"]').closest('td');
-    assert(peerPing.dataset.label === 'Ping' && peerPing.querySelector('[role="status"]').textContent === '—',
+    assert(peerPing.dataset.label === 'Ping' && peerPing.querySelector('[role="status"]').textContent === '—' &&
+        peerPing.querySelector('[aria-label="Test Remote iPad"]'),
         'The Tailscale row must reserve its Ping cell before a test.');
     tailnetTable.querySelector('[aria-label="Test Remote iPad"]').click();
     await wait();
-    const latency = peerPing.querySelector('button');
+    const latency = peerPing.querySelector('.bv-ping-error');
     assert(latency.textContent === '22.4 ms' && !latency.hidden &&
         requests.some(x => x.action === 'testDeviceRoute' && x.data.id === 'tailnet1'),
         'Tailscale Test must update the existing Ping cell even without a completed peer connection.');
@@ -1375,8 +1404,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const effectiveRow = bv('device-list').querySelector('[aria-label="Edit Renamed LAN device"]').closest('tr');
     assert(bv('current-routing').textContent.includes('Chicago proxy · 1 Multi-Path list blocked') &&
         bv('coverage-note').textContent.includes('only its destinations are blocked') &&
-        effectiveRow.cells[3].textContent.includes('Configured server · Chicago proxy') &&
-        !effectiveRow.cells[3].textContent.includes('On Demand') &&
+        effectiveRow.cells[4].textContent.includes('Configured server · Chicago proxy') &&
+        !effectiveRow.cells[4].textContent.includes('On Demand') &&
         !bv('current-routing').textContent.includes('Kill Switch blocking internet'),
         'A healthy base stays visible and the device row must show the effective network policy while an override is blocked.');
     assert(bv('service-list').firstElementChild === renderedService &&
@@ -1831,6 +1860,119 @@ document.addEventListener('DOMContentLoaded', async () => {
     reply.dashboard = savedDashboard;
     reply.proxyCatalog = savedCatalog;
     await refreshLists(true);
+    Object.assign(reply.dashboard.settings, {coverage:'device', enabled:true, tailnetCoverage:'device',
+        tailnetEnabled:true, tailscaleSetup:{ready:true, disableSnat:true, reason:''}});
+    const localSaved = reply.dashboard.assignments.find(row => row.id === 'device1');
+    const peerSaved = reply.dashboard.assignments.find(row => row.id === 'tailnet1');
+    const boundSaved = reply.dashboard.assignments.find(row => row.id === 'mac-device');
+    Object.assign(localSaved, {mode:'full', profile:'vpn1', killSwitch:true, failure:'block', paused:false});
+    Object.assign(peerSaved, {mode:'full_multi', profile:'vpn1', killSwitch:true, failure:'block', paused:false});
+    Object.assign(boundSaved, {mode:'full', profile:'vpn1', backup:'backup-vpn', failure:'backup',
+        killSwitch:false, onDemand:false, bindMac:true, paused:false});
+    reply.dashboard.profiles.push({id:'inline-vpn', name:'Inline alternate', provider:'mullvad', interface:'wg9',
+        dns:['10.64.0.1']}, {id:'backup-vpn', name:'Backup alternate', provider:'mullvad', interface:'wg10',
+        dns:['10.64.0.1']});
+    reply.dashboard.devices.push({ipv4:'10.0.0.81', mac:'02:00:00:00:00:81', interface:'lan',
+        name:'Inline new device', stable:true, online:true});
+    reply.dashboard.tailnetDevices.push({kind:'tailnet', name:'Inline new peer', ipv4:'100.101.102.105',
+        ipv6:['fd7a:115c:a1e0::105'], online:true});
+    bv('refresh').click();
+    await wait();
+    document.querySelector('[data-bv-section="network"]').click();
+    const rowFor = (body, key) => [...body.rows].find(row => row.dataset.deviceKey === key);
+    let inlineLocal = rowFor(bv('device-list'), 'lan/02:00:00:00:00:20');
+    let inlineServer = inlineLocal.querySelector('.bv-device-server');
+    assert(document.documentElement.scrollWidth <= window.innerWidth &&
+        inlineServer.getBoundingClientRect().right <= window.innerWidth,
+        'The inline device selector and actions must fit the mobile page.');
+    const inlineRequestCount = requests.filter(request => request.action === 'assign').length;
+    assert(inlineServer.value === 'vpn1' && inlineLocal.cells[6].querySelector('[aria-label^="Save server"]').disabled,
+        'The local inline selector must show the saved server without offering a no-op Save.');
+    inlineServer.value = 'inline-vpn';
+    inlineServer.dispatchEvent(new Event('change'));
+    assert(!inlineLocal.cells[6].querySelector('[aria-label^="Save server"]').disabled &&
+        requests.filter(request => request.action === 'assign').length === inlineRequestCount,
+        'Selecting a local server must stay a draft until Save.');
+    inlineLocal.cells[6].querySelector('[aria-label^="Edit "]').click();
+    assert(!bv('assignment').hidden && bv('profile').value === 'inline-vpn',
+        'Edit must carry an unsaved inline server choice into the advanced rule form.');
+    bv('close-assignment').click();
+    inlineLocal.cells[6].querySelector('[aria-label^="Cancel server change"]').click();
+    assert(inlineServer.value === 'vpn1' && localSaved.profile === 'vpn1' &&
+        requests.filter(request => request.action === 'assign').length === inlineRequestCount,
+        'Cancel must restore the local server without changing the saved rule.');
+    inlineServer.value = 'inline-vpn';
+    inlineServer.dispatchEvent(new Event('change'));
+    bv('refresh').click();
+    await wait();
+    inlineLocal = rowFor(bv('device-list'), 'lan/02:00:00:00:00:20');
+    assert(inlineLocal.querySelector('.bv-device-server').value === 'inline-vpn',
+        'A dashboard refresh must keep an unsaved local server draft.');
+    inlineAssignError = true;
+    inlineLocal.cells[6].querySelector('[aria-label^="Save server"]').click();
+    await wait();
+    assert(localSaved.profile === 'vpn1' && inlineLocal.querySelector('.bv-device-server').value === 'inline-vpn' &&
+        !inlineLocal.cells[6].querySelector('[aria-label^="Save server"]').disabled &&
+        bv('message-detail').textContent.includes('could not be applied'),
+        'A rejected inline Save must retain the draft and the original device rule for retry.');
+    inlineLocal.cells[6].querySelector('[aria-label^="Save server"]').click();
+    await wait();
+    assert(localSaved.profile === 'inline-vpn' && requests.some(request => request.action === 'assign' &&
+        request.data.id === 'device1' && request.data.profile === 'inline-vpn' && request.data.mode === 'full' &&
+        request.data.killSwitch === true && request.data.switchNow === true) &&
+        rowFor(bv('device-list'), 'lan/02:00:00:00:00:20').querySelector('.bv-device-server').value === 'inline-vpn' &&
+        bv('assignment').hidden,
+        'Save must apply an existing local server without opening Edit or changing its routing protections.');
+    const boundRow = rowFor(bv('device-list'), 'lan/02:00:00:00:00:31');
+    const boundSelect = boundRow.querySelector('.bv-device-server');
+    boundSelect.value = 'inline-vpn';
+    boundSelect.dispatchEvent(new Event('change'));
+    boundRow.cells[6].querySelector('[aria-label^="Save server"]').click();
+    await wait();
+    assert(boundSaved.profile === 'inline-vpn' && requests.some(request => request.action === 'assign' &&
+        request.data.id === 'mac-device' && request.data.profile === 'inline-vpn' &&
+        request.data.backup === 'backup-vpn' && request.data.failure === 'backup' &&
+        request.data.killSwitch === false && request.data.onDemand === false && request.data.bindMac === true),
+        'Inline Save must preserve a LAN device’s backup, On Demand choice, and MAC binding.');
+    const newLocal = rowFor(bv('device-list'), 'lan/02:00:00:00:00:81');
+    const newServer = newLocal.querySelector('.bv-device-server');
+    newServer.value = 'inline-vpn';
+    newServer.dispatchEvent(new Event('change'));
+    newLocal.cells[6].querySelector('[aria-label^="Save server"]').click();
+    await wait();
+    assert(requests.some(request => request.action === 'assign' && request.data.ip === '10.0.0.81' &&
+        request.data.profile === 'inline-vpn' && request.data.mode === 'full' && !request.data.id) &&
+        reply.dashboard.assignments.some(row => row.ip === '10.0.0.81' && row.profile === 'inline-vpn'),
+        'A discovered local device must gain an applied Full rule from the row selector.');
+    bv('routing-scope').value = 'tailscale';
+    bv('routing-scope').dispatchEvent(new Event('change'));
+    let inlinePeer = rowFor(bv('tailnet-device-list'), 'tailnet/100.101.102.104');
+    const peerServer = inlinePeer.querySelector('.bv-device-server');
+    assert(peerServer.value === 'vpn1' && !peerServer.disabled &&
+        [...inlinePeer.cells[6].querySelectorAll('button')].slice(0, 3).map(control => control.textContent).join(',') ===
+            'Save,Cancel,Edit',
+        'A saved Tailscale peer must expose its current base server inline.');
+    peerServer.value = 'inline-vpn';
+    peerServer.dispatchEvent(new Event('change'));
+    inlinePeer.cells[6].querySelector('[aria-label^="Save server"]').click();
+    await wait();
+    inlinePeer = rowFor(bv('tailnet-device-list'), 'tailnet/100.101.102.104');
+    assert(peerSaved.profile === 'inline-vpn' && requests.some(request => request.action === 'assign' &&
+        request.data.id === 'tailnet1' && request.data.profile === 'inline-vpn' &&
+        request.data.mode === 'full_multi' && request.data.killSwitch === true && request.data.switchNow === true) &&
+        inlinePeer.querySelector('.bv-device-server').value === 'inline-vpn',
+        'Tailscale Save must switch the base server while retaining Base VPN + Multi-Path and its Kill Switch.');
+    const newPeer = rowFor(bv('tailnet-device-list'), 'tailnet/100.101.102.105');
+    const newPeerServer = newPeer.querySelector('.bv-device-server');
+    newPeerServer.value = 'inline-vpn';
+    newPeerServer.dispatchEvent(new Event('change'));
+    newPeer.cells[6].querySelector('[aria-label^="Save server"]').click();
+    await wait();
+    assert(requests.some(request => request.action === 'assign' && request.data.kind === 'tailnet' &&
+        request.data.ip === '100.101.102.105' && request.data.interface === 'tailscale0' &&
+        request.data.profile === 'inline-vpn' && !request.data.id) &&
+        reply.dashboard.assignments.some(row => row.ip === '100.101.102.105' && row.profile === 'inline-vpn'),
+        'A discovered Tailscale peer must gain a Full rule from the inline server selector.');
     system.click();
     reply.dashboard.canManageUpdates = false;
     bv('refresh').click();
