@@ -101,7 +101,7 @@ To pin this release instead, use the following command. It also checks the insta
 Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.49** on a supported amd64 or aarch64 OPNsense router.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.49.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.49/scripts/install.sh && sha256 -c 67bac5e51e887a3523ef57b96f94fb523db02e10810d49dc5cf39942bfad6fc6 /tmp/blankvpn-install-0.8.49.sh && sh /tmp/blankvpn-install-0.8.49.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.49.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.49/scripts/install.sh && sha256 -c a42cef0c50cffb3c1a6eae4b6a88b116f4c39973dc2bbfe1b7320aaeb4bec8f7 /tmp/blankvpn-install-0.8.49.sh && sh /tmp/blankvpn-install-0.8.49.sh'
 ```
 
 The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.

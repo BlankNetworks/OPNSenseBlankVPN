@@ -118,7 +118,7 @@ final class Policy
         $transit = $settings['tailscaleInterfaces'];
         if ($scope === 'tailscale') {
             foreach (['enabled', 'coverage', 'networkMode', 'networkProfile', 'networkBackupProfile', 'networkKillSwitch'] as $field) {
-                $settings[$field] = $settings['tailnet' . ucfirst($field)];
+                $settings[$field] = $settings['tailnet' . ucfirst($field)] ?? '';
             }
             $settings['interfaces'] = $transit;
             if (self::nativeTailnetConfigured() || ($settings['coverage'] === 'network' && $transit === []) ||
