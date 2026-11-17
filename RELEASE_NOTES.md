@@ -197,3 +197,10 @@
 - Import decoded `ssr://host:port:protocol:cipher:obfs:password` links as well as base64-encoded SSR links. Keep an existing server's identity when the format changes, and use a link fragment as its display name when no SSR remarks field exists.
 - Validate legacy Shadowsocks CFB and RC4 import fixtures with the bundled Mihomo core, plus VLESS XHTTP REALITY with the bundled Xray core. These configuration checks do not imply a particular remote endpoint is reachable or accepts the supplied account.
 - Keep TLS certificate checks enabled. Live diagnostics confirmed the router's saved Shadowsocks and Trojan servers work; three saved VLESS REALITY profiles timed out through both Mihomo and Xray, while another REALITY profile worked through both. No client routing or Tailscale management setting was changed.
+
+## 0.8.47
+
+- Load installed core versions when the Proxies page opens, then refresh them when Core updates and storage opens. Show a loading or readable error row instead of an empty table, and add **Reload status** for a direct retry.
+- Make installed core versions prominent and keep all four rows visible after **Check for updates**. Report the actual version of an installed system sing-box executable when the bundled one is absent.
+- Cover the full four-core table, failed status response, retry, and update check in the browser fixture at desktop and mobile widths.
+- Keep the core archive picker inside the Core panel on narrow screens; opening the panel no longer adds page overflow.

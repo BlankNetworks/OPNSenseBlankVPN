@@ -2,10 +2,21 @@ const requests = [];
 let settingsError = null;
 let exitTestError = null;
 let bulkRemoveError = null;
+let coreStatusError = false;
 let tailnetTraffic = 'unseen';
 const ambiguousSignIns = new Set(['account', 'providerLogin', 'mystBeginAuth', 'mystPollAuth', 'ivpnLogin']);
 const updateStatus = {ok:true, supported:true, enabled:false, running:false, installed:'0.1.39',
     available:'', message:'Check for a Blank VPN & Proxy update.'};
+const installedCores = [
+    {id:'mihomo',version:'1.19.34',installed:true,source:'Bundled',
+        available:{version:'1.19.35',sha256:'a'.repeat(64)},update:true,rollback:false},
+    {id:'tun2socks',version:'2.7.0',installed:true,source:'Bundled',
+        available:{version:'2.7.0',sha256:'b'.repeat(64)},update:false,rollback:false},
+    {id:'xray',version:'26.11.9',installed:true,source:'Bundled',
+        available:{version:'26.11.9',sha256:'c'.repeat(64)},update:false,rollback:false},
+    {id:'sing-box',version:'1.14.4',installed:true,source:'Bundled',
+        available:{version:'1.14.4',sha256:'d'.repeat(64)},update:false,rollback:false}
+];
 const routingBackup = {schema:1, version:1, routing:{enabled:false}, assignments:[], services:[]};
 let updatePolls = 0;
 const reply = {
@@ -35,10 +46,10 @@ const reply = {
     relays: {relays:[{id:'ca-test-wg-001',country:'Canada',countryCode:'ca',cityCode:'yyz',city:'Test',hostname:'ca-test-wg-001',active:true},{id:'ca-test-wg-002',country:'Canada',countryCode:'ca',cityCode:'yyz',city:'Test',hostname:'ca-test-wg-002',active:false},
         {id:'jp-test-wg-001',country:'Japan',countryCode:'jp',cityCode:'nrt',city:'Test',hostname:'jp-test-wg-001',active:true}], stale:false, fetchedAt:1794490200},
     connections: {connections:[{protocol:'tcp', source:'10.0.0.20', sourcePort:1234, destination:'2001:db8::25', destinationPort:443, age:'00:00:10', bytes:[1024,1024]}]},
-    status: {ok:true, cores:[{id:'mihomo',version:'1.19.34',installed:true,source:'Bundled',
-        available:{version:'1.19.35',sha256:'a'.repeat(64)},update:true,rollback:false}],
+    status: {ok:true, cores:installedCores,
         storage:{freeBytes:1073741824,coreBytes:0,catalogBytes:1024,reserveBytes:67108864}},
-    check: {ok:true, cores:[], storage:{freeBytes:1073741824,coreBytes:0,catalogBytes:1024,reserveBytes:67108864}},
+    check: {ok:true, cores:installedCores,
+        storage:{freeBytes:1073741824,coreBytes:0,catalogBytes:1024,reserveBytes:67108864}},
     account: {ok:true, devices:[{name:'Test router'}], maxDevices:5, expiresAt:'2027-01-01'},
     proxyCatalog: {nodes:[{id:'proxy-1', name:'Example proxy', serverName:'Example proxy', host:'192.0.2.9', port:1080, core:'mihomo',
         protocol:'socks5', legacy:true, sources:['feed-1'], options:{udp:true, tls:{serverName:'proxy.example.test'}}}], feeds:[{id:'feed-1', name:'Test feed', count:1, auto:true, usage:{upload:1024,download:1024,total:1048576,expire:1798761600}}]},
@@ -68,6 +79,10 @@ window.jQuery.ajax = async (request) => {
     const [, , , controller, action] = request.url.split('/');
     const data = request.data ? JSON.parse(request.data) : null;
     requests.push({controller, action, method:request.method, data});
+    if (controller === 'core' && action === 'status' && coreStatusError) {
+        coreStatusError = false;
+        return {ok:false, error:'Core status temporarily unavailable.'};
+    }
     if (controller === 'update') {
         if (action === 'check') {
             await new Promise(resolve => setTimeout(resolve, 5));
@@ -681,13 +696,34 @@ document.addEventListener('DOMContentLoaded', async () => {
         bv('managed').querySelector('[value="lan"]').checked, 'main Ethernet Multi-Path shortcut did not prefill');
     document.querySelector('[data-bv-section="proxies"]').click();
     await wait();
+    assert(requests.some(x => x.controller === 'core' && x.action === 'status') &&
+        bv('core-list').rows.length === 4, 'entering Proxies must load installed core versions before expansion');
+    const proxyWidthBeforeCore = document.documentElement.scrollWidth;
     bv('core-manager').open = true;
     await wait();
-    assert(bv('core-list').textContent.includes('Mihomo (Clash)') &&
-        bv('core-storage').textContent.includes('1.0 GiB free'), 'core status and storage not displayed');
+    assert(['1.19.34', '2.7.0', '26.11.9', '1.14.4'].every(version =>
+        bv('core-list').textContent.includes(version)) &&
+        bv('core-list').querySelectorAll('.bv-core-version').length === 4 &&
+        bv('core-storage').textContent.includes('1.0 GiB free'),
+    'each installed core version and storage must be visible');
+    assert(Number(getComputedStyle(bv('core-list').querySelector('.bv-core-version')).fontWeight) >= 700,
+        'installed core versions must have prominent type');
+    assert(document.documentElement.scrollWidth <= Math.max(window.innerWidth, proxyWidthBeforeCore),
+        'the expanded core manager must not overflow the page');
+    coreStatusError = true;
+    bv('core-reload').click();
+    await wait();
+    assert(bv('core-list').textContent.includes('Core status temporarily unavailable.') &&
+        bv('core-storage').textContent.includes('Core status temporarily unavailable.'),
+    'core status failures must display an error instead of an empty table');
+    bv('core-reload').click();
+    await wait();
+    assert(bv('core-list').rows.length === 4 && bv('core-list').textContent.includes('26.11.9'),
+        'Reload status must restore the installed core versions');
     bv('core-check').click();
     await wait();
-    assert(requests.some(x => x.action === 'check' && x.method === 'POST'), 'approved catalog check did not run');
+    assert(requests.some(x => x.action === 'check' && x.method === 'POST') &&
+        bv('core-list').rows.length === 4, 'approved catalog check must keep installed versions visible');
     assert(bv('proxy-list').textContent.includes('Example proxy'), 'proxy catalog not displayed');
     const proxyRow = bv('proxy-list').rows[0];
     assert([...proxyRow.closest('table').tHead.rows[0].cells].slice(1).map(cell => cell.textContent.trim()).join(',') ===

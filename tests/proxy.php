@@ -203,6 +203,10 @@ foreach (['http://example.com/list', 'https://name:secret@example.com/list', 'ht
 }
 
 $catalog = ProxyCores::parseCatalog((string)file_get_contents(__DIR__ . '/../src/share/blankvpn/core-catalog.json'), 'amd64');
+assertProxy((new ReflectionMethod(ProxyCores::class, 'reportedSingBoxVersion'))->invoke(null,
+    "sing-box version 1.14.4\nEnvironment: go1.25") === '1.14.4' &&
+    (new ReflectionMethod(ProxyCores::class, 'reportedSingBoxVersion'))->invoke(null, 'unknown executable') === null,
+    'A system sing-box install must report its actual version and never show an invented version.');
 assertProxy(str_starts_with(ProxyCores::releaseUrl('mihomo', $catalog['mihomo'], 'amd64'), 'https://github.com/MetaCubeX/mihomo/'),
     'Derive downloads from the approved source.');
 try {

@@ -241,13 +241,16 @@
         <details id="bv-core-manager" class="bv-panel" hidden>
             <summary>Core updates and storage</summary>
             <div class="bv-heading">
-                <p id="bv-core-storage" class="text-muted" aria-live="polite"></p>
-                <button id="bv-core-check" type="button" class="btn btn-default">Check for updates</button>
+                <p id="bv-core-storage" class="text-muted" aria-live="polite">Core status loads when this section opens.</p>
+                <div class="bv-actions">
+                    <button id="bv-core-reload" type="button" class="btn btn-default">Reload status</button>
+                    <button id="bv-core-check" type="button" class="btn btn-default">Check for updates</button>
+                </div>
             </div>
             <div class="bv-scroll">
                 <table class="table bv-table">
                     <thead><tr><th scope="col">Core</th><th scope="col">Installed</th><th scope="col">Approved release</th><th scope="col">Actions</th></tr></thead>
-                    <tbody id="bv-core-list"></tbody>
+                    <tbody id="bv-core-list"><tr><td colspan="4" class="bv-empty text-muted">Core versions load when this section opens.</td></tr></tbody>
                 </table>
             </div>
             <form id="bv-core-upload">

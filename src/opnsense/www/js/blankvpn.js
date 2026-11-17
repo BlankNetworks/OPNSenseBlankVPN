@@ -54,6 +54,8 @@
             proxyFeeds: [],
             proxyCores: {},
             canManageCores: false,
+            coreStatusAttempted: false,
+            coreStatusRequest: null,
             canManageUpdates: false,
             canWriteUpdates: false,
             canManageBackups: false,
@@ -577,6 +579,9 @@
             }
             if (section === 'proxies' && state.canManage && !state.proxyCatalogLoaded) {
                 void refreshProxyCatalog();
+            }
+            if (section === 'proxies' && state.canManageCores && !state.coreStatusAttempted) {
+                void refreshCores();
             }
             if (section === 'vpns') {
                 restoreSavedLogin();
@@ -1753,11 +1758,17 @@
                     formatBytes(storage.coreBytes) + ' core updates',
                     formatBytes(storage.catalogBytes) + ' proxy catalog',
                     formatBytes(storage.reserveBytes) + ' reserved as free space'].filter(Boolean).join(' · ');
+            if (!cores.length) {
+                empty(body, 'The router returned no core versions. Reload status to try again.', 4);
+            }
             for (const core of cores) {
                 const row = body.insertRow();
                 cell(row, core.id === 'mihomo' ? 'Mihomo (Clash)' : core.id);
-                cell(row, core.installed ? shown(core.version, 'Installed') : 'Unavailable', '',
+                const installed = cell(row, core.installed ? shown(core.version, 'Version unavailable') : 'Unavailable', '',
                     core.installed ? core.source : '');
+                if (core.installed && core.version) {
+                    installed.classList.add('bv-core-version');
+                }
                 cell(row, core.available?.version || '—');
                 const actions = row.insertCell();
                 if (core.update) {
@@ -1788,10 +1799,22 @@
         }
 
         async function refreshCores() {
+            if (state.coreStatusRequest) {
+                return state.coreStatusRequest;
+            }
+            state.coreStatusAttempted = true;
+            empty(byId('core-list'), 'Loading installed core versions…', 4);
+            byId('core-storage').textContent = 'Reading installed cores and storage…';
+            const request = coreApi('status');
+            state.coreStatusRequest = request;
             try {
-                renderCores(await coreApi('status'));
+                renderCores(await request);
             } catch (error) {
-                byId('core-storage').textContent = errorMessage(error, 'Core status is unavailable.');
+                const message = errorMessage(error, 'Core status is unavailable.');
+                byId('core-storage').textContent = message;
+                empty(byId('core-list'), message + ' Use Reload status to retry.', 4);
+            } finally {
+                state.coreStatusRequest = null;
             }
         }
 
@@ -1979,6 +2002,9 @@
                 state.canWriteUpdates = data.canWriteUpdates === true && state.canManageUpdates;
                 state.canManageBackups = data.canManageBackups === true && !insecureWebGui;
                 byId('core-manager').hidden = !state.canManageCores;
+                if (state.section === 'proxies' && state.canManageCores && !state.coreStatusAttempted) {
+                    void refreshCores();
+                }
                 state.presets = data.servicePresets || {};
                 state.vpnProviders = data.vpnProviders || {mullvad: {name: 'Mullvad'}};
                 state.providerAccounts = data.providerAccounts || {};
@@ -3231,6 +3257,7 @@
                 void refreshCores();
             }
         });
+        byId('core-reload').addEventListener('click', () => { void refreshCores(); });
         byId('core-check').addEventListener('click', (event) => {
             void mutate(event.currentTarget, () => coreApi('check', {}), 'Approved core catalog refreshed.', renderCores);
         });

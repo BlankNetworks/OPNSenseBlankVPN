@@ -192,6 +192,22 @@ final class ProxyCores
         }
     }
 
+    private static function systemSingBoxVersion(): ?string
+    {
+        try {
+            $output = Resolver::command(['/usr/bin/timeout', '3', '/usr/local/bin/sing-box', 'version'], false);
+        } catch (\Throwable) {
+            return null;
+        }
+        return self::reportedSingBoxVersion($output);
+    }
+
+    private static function reportedSingBoxVersion(string $output): ?string
+    {
+        return preg_match('/^sing-box version ([0-9]+\.[0-9]+\.[0-9]+)/mi', $output, $matches) === 1
+            ? $matches[1] : null;
+    }
+
     public static function status(): array
     {
         $state = self::state();
@@ -202,7 +218,8 @@ final class ProxyCores
             $selection = $state['cores'][$core] ?? [];
             $active = $selection['active'] ?? null;
             $system = $core === 'sing-box' && ProxyRuntime::usesSystemSingBox();
-            $version = $active['version'] ?? ($system || !$capabilities[$core] ? null : $base);
+            $version = $active['version'] ?? ($system ? self::systemSingBoxVersion() :
+                (!$capabilities[$core] ? null : $base));
             $previous = $selection['previous']['version'] ??
                 ($active !== null && !$system && ProxyRuntime::hasBase($core) ? $base : null);
             $available = $catalog[$core] ?? null;

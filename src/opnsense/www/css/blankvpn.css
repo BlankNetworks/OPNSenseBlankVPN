@@ -481,6 +481,17 @@
     overflow-wrap: anywhere;
 }
 
+.blankvpn .bv-core-version {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.blankvpn #bv-core-upload label,
+.blankvpn #bv-core-archive {
+    min-width: 0;
+    max-width: 100%;
+}
+
 .blankvpn .bv-table td > .btn {
     margin: .2rem .3rem .2rem 0;
 }
