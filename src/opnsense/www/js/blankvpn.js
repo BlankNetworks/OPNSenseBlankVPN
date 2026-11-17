@@ -908,6 +908,7 @@
                             }
                         });
                     }, 'Save server for ' + name);
+                    save.classList.replace('btn-default', 'btn-primary');
                     const cancel = button('Cancel', () => {
                         state.deviceServerDrafts.delete(row.dataset.deviceKey);
                         server.value = currentServer;

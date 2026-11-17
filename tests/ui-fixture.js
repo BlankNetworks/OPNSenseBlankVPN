@@ -1891,6 +1891,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     inlineServer.value = 'inline-vpn';
     inlineServer.dispatchEvent(new Event('change'));
     assert(!inlineLocal.cells[6].querySelector('[aria-label^="Save server"]').disabled &&
+        inlineLocal.cells[6].querySelector('[aria-label^="Save server"]').classList.contains('btn-primary') &&
         requests.filter(request => request.action === 'assign').length === inlineRequestCount,
         'Selecting a local server must stay a draft until Save.');
     inlineLocal.cells[6].querySelector('[aria-label^="Edit "]').click();

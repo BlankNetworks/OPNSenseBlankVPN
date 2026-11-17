@@ -208,6 +208,6 @@
 ## 0.8.48
 
 - Give Local and Tailscale **Devices and Routing Rules** tables the same Device, Address, Availability, Server, Routing, and Ping columns. Keep the interface name beneath a LAN address and update Availability during device presence polls.
-- Add an inline Server dropdown with **Save**, **Cancel**, and **Edit** for each manageable device. A server change remains a draft until Save; Cancel restores the saved server. Replace **Select** with **Edit** for unassigned devices.
+- Add an inline Server dropdown with blue **Save**, **Cancel**, and **Edit** for each manageable device. A server change remains a draft until Save; Cancel restores the saved server. Replace **Select** with **Edit** for unassigned devices.
 - Save a new individual Full rule or change an existing Full rule directly from the row. Preserve an existing Base VPN + Multi-Path mode, Kill Switch, backup, On Demand, and MAC binding when changing its base server. Apply saved changes through the existing validated assignment API and switch current sessions when possible. Whole-Network, Multi-Path-only, blocked, and paused rules continue to use Edit or their enable control for policy changes.
 - Cover local and Tailscale inline saving, cancellation, refresh preservation, new-device assignment, availability, and responsive table layout in the browser fixture.
