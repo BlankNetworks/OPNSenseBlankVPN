@@ -636,7 +636,7 @@ namespace {
         }
     };
     $groupHealth = ['jp' => ['reachable' => false]];
-    $groupRoute = RouteGroups::aliases($groupModel, $backupProfiles, $groupHealth)[$groupId] ?? [];
+    $groupRoute = RouteGroups::aliases($groupModel, $backupProfiles, $groupHealth, false, null, false)[$groupId] ?? [];
     $groupPolicies = $backupProfiles + [$groupId => $groupRoute];
     $groupNetwork = new Plugin();
     $network->invoke(null, $groupNetwork,
@@ -645,9 +645,17 @@ namespace {
         ($groupNetwork->rules[Policy::marker('device', 'network:lan')]['gateway'] ?? '') === 'NORD',
         'An ordered server group advances from its failed first member and routes Whole-Network traffic through the next member.');
     $recoveryProbe = RouteGroups::aliases($groupModel, $backupProfiles,
-        ['jp' => ['reachable' => false], 'us' => ['reachable' => false]], false, 1)[$groupId] ?? [];
+        ['jp' => ['reachable' => false], 'us' => ['reachable' => false]], false, 1, false)[$groupId] ?? [];
     checkRouting(($recoveryProbe['id'] ?? '') === 'us',
         'When every group member is down, once-per-minute recovery probes rotate through the saved members.');
+    checkRouting(RouteGroups::nextUsable(['jp', 'us'], $backupProfiles, [], 'us') === 'us',
+        'A recovered earlier server must not displace the currently selected healthy group member.');
+    checkRouting(RouteGroups::nextUsable(['jp', 'us'], $backupProfiles,
+        ['us' => ['reachable' => false]], 'us') === 'jp',
+        'A failed current group member advances to the next healthy server in saved order.');
+    checkRouting(RouteGroups::nextUsable(['jp', 'us'], $backupProfiles,
+        ['jp' => ['reachable' => false], 'us' => ['reachable' => false]], 'jp') === null,
+        'A group with no reachable servers stays unavailable for Kill Switch handling.');
     $wholeDown = new Plugin();
     $network->invoke(null, $wholeDown, $networkSettings, $interfaces, $profiles, ['jp' => ['reachable' => false]]);
     checkRouting(!isset($wholeDown->rules[Policy::marker('device', 'network:lan')]) &&

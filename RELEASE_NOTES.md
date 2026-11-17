@@ -205,6 +205,13 @@
 - Cover the full four-core table, failed status response, retry, and update check in the browser fixture at desktop and mobile widths.
 - Keep the core archive picker inside the Core panel on narrow screens; opening the panel no longer adds page overflow.
 
+## 0.8.50
+
+- Load the saved VPN and proxy catalog when opening Groups and display a clear loading/error status instead of leaving the server pickers empty. Cover selecting, ordering, and saving VPN and proxy members in the browser fixture.
+- Keep a group's current healthy member selected across service refreshes and firewall reloads. Advance to the next configured member only after the active member fails its health check.
+- When every member fails, preserve Kill Switch behavior and continue probing one group member at a time. A successful probe resumes routing through the recovered member, which remains selected until it fails.
+- Cover sticky selection, ordered advancement, full outage, and recovery behavior in routing regression fixtures.
+
 ## 0.8.49
 
 - Add named routing groups with ordered VPN and proxy server members. Users can create and edit groups from the new Groups tab and select groups anywhere a routing destination is chosen.

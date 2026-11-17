@@ -28,6 +28,7 @@ const reply = {
             {ipv4:'10.0.0.199', mac:'02:00:00:00:00:99', interface:'lan', name:'Test iPad', online:false, leaseProvider:'Dnsmasq DHCP', macBindingSupported:true}],
         tailnetDevices: [{kind:'tailnet', name:'Remote iPad', ipv4:'100.101.102.104', ipv6:['fd7a:115c:a1e0::104'], online:true}],
         profiles: [{id:'vpn1', name:'Canada', relay:'ca-test-wg-001', port:51820, interface:'wg1', dns:['10.64.0.1'], latestHandshake:1794490200, status:'Recent handshake', receivedBytes:4096, sentBytes:2048}],
+        groups: [],
         assignments: [{id:'device1',ip:'10.0.0.20',mac:'02:00:00:00:00:20',interface:'lan',
             label:'<b>Device rule</b>',mode:'disabled',profile:'',kind:'lan'}],
         services: [],
@@ -109,6 +110,18 @@ window.jQuery.ajax = async (request) => {
         if (action === 'restore') {
             return {ok:true};
         }
+    }
+    if (action === 'saveGroup') {
+        const group = {id:data.id || 'group-3f785570-f1fc-4212-918f-4747deadbeef', name:data.name,
+            members:JSON.parse(data.members)};
+        const existing = reply.dashboard.groups.findIndex(item => item.id === group.id);
+        if (existing >= 0) reply.dashboard.groups[existing] = group;
+        else reply.dashboard.groups.push(group);
+        return {ok:true, id:group.id};
+    }
+    if (action === 'removeGroup') {
+        reply.dashboard.groups = reply.dashboard.groups.filter(group => group.id !== data.id);
+        return {ok:true};
     }
     if (action === 'testServiceRoute') {
         return data.id === 'unavailable-demo'
@@ -333,6 +346,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelector('[data-bv-section="groups"]').click();
     assert(!bv('groups-page').hidden && bv('group-vpn-list') && bv('group-proxy-list') && bv('saved-groups'),
         'The Groups tab must open with VPN, proxy, and saved-list columns.');
+    const groupColumns = getComputedStyle(bv('group-vpn-list').parentElement.parentElement).gridTemplateColumns.split(' ').length;
+    assert(groupColumns === (innerWidth > 900 ? 3 : 1), 'Groups must use three columns on wide screens and stack on narrow screens.');
+    await wait();
+    const groupVpn = bv('group-vpn-list').querySelector('[data-group-choice][value="vpn1"]');
+    const groupProxy = bv('group-proxy-list').querySelector('[data-group-choice][value="proxy-proxy-1"]');
+    assert(groupVpn && groupProxy, 'Groups must load selectable saved VPN and proxy servers.');
+    groupVpn.checked = true;
+    groupProxy.checked = true;
+    bv('group-add').click();
+    assert([...bv('group-members').children].map(row => row.firstElementChild.textContent).join(',') ===
+        'Canada,Example proxy', 'Selected servers must appear in the group in their chosen order.');
+    bv('group-name').value = 'Test failover';
+    bv('group-name').dispatchEvent(new Event('input'));
+    bv('group-form').requestSubmit(bv('group-save'));
+    await wait();
+    assert(requests.some(x => x.action === 'saveGroup' && x.data.name === 'Test failover' &&
+        JSON.parse(x.data.members).join(',') === 'vpn1,proxy-proxy-1'),
+        'Saving a group must persist its selected servers in order.');
     document.querySelector('[data-bv-section="network"]').click();
     const expectedDeviceColumns = 'Device,Address,Availability,Server,Routing,Ping,Actions';
     for (const table of [bv('device-list'), bv('tailnet-device-list')]) {

@@ -585,6 +585,9 @@
             if (section === 'proxies' && state.canManage && !state.proxyCatalogLoaded) {
                 void refreshProxyCatalog();
             }
+            if (section === 'groups' && state.canManage && !state.proxyCatalogLoaded) {
+                void refreshProxyCatalog();
+            }
             if (section === 'proxies' && state.canManageCores && !state.coreStatusAttempted) {
                 void refreshCores();
             }
@@ -1501,6 +1504,8 @@
 
         function renderGroups() {
             if (state.section !== 'groups') return;
+            byId('group-catalog-status').textContent = state.proxyCatalogLoaded ? ''
+                : 'Loading saved VPN and proxy servers…';
             const servers = routingServers().filter((item) => item.kind !== 'group');
             for (const [kind, targetId] of [['vpn', 'group-vpn-list'], ['proxy', 'group-proxy-list']]) {
                 const target = byId(targetId);
@@ -1905,6 +1910,9 @@
                     if (state.section === 'groups') renderGroups();
                 }
             } catch (error) {
+                if (state.section === 'groups') {
+                    byId('group-catalog-status').textContent = 'The saved server list could not be loaded. Select Groups again to retry.';
+                }
                 notice(errorMessage(error, 'Proxy catalog unavailable.'), 'danger');
             }
         }

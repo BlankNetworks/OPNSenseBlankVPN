@@ -366,7 +366,8 @@
 
     <section id="bv-groups-page" class="bv-panel" data-bv-panel="groups" aria-labelledby="bv-groups-title" data-manage-only hidden>
         <h2 id="bv-groups-title">Server Groups</h2>
-        <p class="text-muted">Select servers and add them in failover order. If a server is unavailable, routing uses the next available server.</p>
+        <p class="text-muted">Select servers and save them in failover order. The active server stays selected until its health check fails, then the next reachable server takes over. If every server fails, the Kill Switch follows your routing setting while checks continue; routing resumes when a server recovers.</p>
+        <p id="bv-group-catalog-status" class="text-muted" role="status" aria-live="polite"></p>
         <form id="bv-group-form">
             <div class="bv-group-columns">
                 <section aria-labelledby="bv-group-vpn-title"><h3 id="bv-group-vpn-title">VPN Servers</h3><div id="bv-group-vpn-list"></div></section>

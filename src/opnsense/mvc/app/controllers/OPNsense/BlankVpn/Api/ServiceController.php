@@ -2251,11 +2251,15 @@ class ServiceController extends ApiControllerBase
                 $resolved = [];
                 foreach ($members as $member) {
                     if (is_string($member)) {
-                        $resolved[] = $this->resolveProxyChoice($model, $member);
+                        $resolved[] = $this->resolveProxyChoice($model, $member, $resolved);
                     }
                 }
                 $routes = Policy::routes($model, false);
+                $previous = $id === '' ? null : (RouteGroups::all($model)[$id]['members'] ?? null);
                 $groupId = RouteGroups::save($model, $id === '' ? null : $id, $name, $resolved, $routes);
+                if ($previous !== $resolved) {
+                    RouteGroups::resetActive($groupId);
+                }
                 $settings = Policy::effectiveRouting($model);
                 $interfaces = [];
                 foreach (Policy::scopes($settings) as $scope) {
@@ -2295,6 +2299,7 @@ class ServiceController extends ApiControllerBase
                     throw new \DomainException('Choose another destination everywhere this group is used before removing it.');
                 }
                 $model->groups->group->del(substr($id, strlen('group-')));
+                RouteGroups::resetActive($id);
                 return ['reload' => false];
             });
         }), true, true);
@@ -2538,6 +2543,9 @@ class ServiceController extends ApiControllerBase
             $used = [...$keep, $settings['networkProfile'], $settings['tailnetNetworkProfile']];
             foreach (Policy::assignments($model) as $row) {
                 array_push($used, $row['profile'], $row['backup']);
+            }
+            foreach (RouteGroups::all($model) as $group) {
+                array_push($used, ...$group['members']);
             }
             array_push($used, ...array_column(SmartRouting::services($model), 'profile'));
             foreach ($routes as $route) {

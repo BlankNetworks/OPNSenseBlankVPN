@@ -12,6 +12,7 @@ final class RouteGroups
     private const PREFIX = 'group-';
     private const MAX_GROUPS = 128;
     private const MAX_MEMBERS = 128;
+    private const ACTIVE_FILE = 'route-groups.json';
 
     public static function all(BlankVpn $model): array
     {
@@ -87,36 +88,90 @@ final class RouteGroups
         array $routes,
         array $health,
         bool $requireOwned = false,
-        ?int $minute = null
+        ?int $minute = null,
+        bool $persist = true
     ): array
     {
         $aliases = [];
+        $active = $persist ? self::activeState() : [];
+        $changed = false;
         foreach (self::all($model) as $id => $group) {
-            foreach ($group['members'] as $member) {
-                $route = $routes[$member] ?? null;
-                if ($route === null || ($requireOwned && empty($route['owned'])) ||
-                    (($health[$member]['reachable'] ?? true) === false)) {
+            $current = is_string($active[$id] ?? null) ? $active[$id] : null;
+            $member = self::nextUsable($group['members'], $routes, $health, $current, $requireOwned);
+            if ($member !== null) {
+                if ($persist && $current !== $member) {
+                    $active[$id] = $member;
+                    $changed = true;
+                }
+                $route = $routes[$member];
+            } else {
+                // Keep a failed member in the logical route so PF can hold the
+                // Kill Switch while maintenance probes the group for recovery.
+                $candidates = array_values(array_filter($group['members'], static function (string $candidate) use ($routes, $requireOwned): bool {
+                    return isset($routes[$candidate]) && (!$requireOwned || !empty($routes[$candidate]['owned']));
+                }));
+                if ($candidates === []) {
                     continue;
                 }
-                $route['groupId'] = $id;
-                $route['groupName'] = $group['name'];
-                $aliases[$id] = $route;
-                break;
+                $probeIndex = ($minute ?? (int)gmdate('i')) % count($candidates);
+                $route = $routes[$candidates[$probeIndex]];
             }
-            // Rotate one failed member into the probe/runtime slot each minute so an
-            // all-down group can discover recovered servers without keeping every
-            // standby proxy core running all the time.
-            if (!isset($aliases[$id]) && $group['members'] !== []) {
-                $probeIndex = ($minute ?? (int)gmdate('i')) % count($group['members']);
-                $route = $routes[$group['members'][$probeIndex]] ?? null;
-                if ($route !== null) {
-                    $route['groupId'] = $id;
-                    $route['groupName'] = $group['name'];
-                    $aliases[$id] = $route;
-                }
-            }
+            $route['groupId'] = $id;
+            $route['groupName'] = $group['name'];
+            $aliases[$id] = $route;
+        }
+        if ($persist && $changed) {
+            Policy::writeState(self::ACTIVE_FILE, json_encode($active, JSON_THROW_ON_ERROR));
         }
         return $aliases;
+    }
+
+    /** Keep a live member selected until it fails; then advance in saved order. */
+    public static function nextUsable(
+        array $members,
+        array $routes,
+        array $health,
+        ?string $current = null,
+        bool $requireOwned = false
+    ): ?string {
+        if ($members === []) {
+            return null;
+        }
+        $currentIndex = $current === null ? -1 : array_search($current, $members, true);
+        if ($currentIndex === false) {
+            $currentIndex = -1;
+        }
+        if ($currentIndex >= 0) {
+            $route = $routes[$current] ?? null;
+            if ($route !== null && (!$requireOwned || !empty($route['owned'])) &&
+                (($health[$current]['reachable'] ?? true) !== false)) {
+                return $current;
+            }
+        }
+        for ($offset = 1; $offset <= count($members); $offset++) {
+            $member = $members[($currentIndex + $offset) % count($members)];
+            $route = $routes[$member] ?? null;
+            if ($route === null || ($requireOwned && empty($route['owned'])) ||
+                (($health[$member]['reachable'] ?? true) === false)) {
+                continue;
+            }
+            return $member;
+        }
+        return null;
+    }
+
+    private static function activeState(): array
+    {
+        if (is_link(Policy::STATE_DIR) || !is_dir(Policy::STATE_DIR)) {
+            return [];
+        }
+        $path = Policy::STATE_DIR . '/' . self::ACTIVE_FILE;
+        if (!is_file($path) || is_link($path)) {
+            return [];
+        }
+        $raw = @file_get_contents($path);
+        $state = is_string($raw) ? json_decode($raw, true) : null;
+        return is_array($state) ? $state : [];
     }
 
     public static function expand(array $choices, array $groups): array
@@ -152,5 +207,15 @@ final class RouteGroups
         }
         $group = $groups[$choice] ?? null;
         return $group !== null && array_intersect($group['members'], $failed) !== [];
+    }
+
+    public static function resetActive(string $id): void
+    {
+        $active = self::activeState();
+        if (!array_key_exists($id, $active)) {
+            return;
+        }
+        unset($active[$id]);
+        Policy::writeState(self::ACTIVE_FILE, json_encode($active, JSON_THROW_ON_ERROR));
     }
 }
