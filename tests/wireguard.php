@@ -21,6 +21,7 @@ final class RouteFixture
 {
     public static string $default = 'igc0';
     public static array $lookups = [];
+    public static array $routes = [];
 }
 
 function proc_open(array $command, array $descriptors, ?array &$pipes)
@@ -31,7 +32,7 @@ function proc_open(array $command, array $descriptors, ?array &$pipes)
     }
     RouteFixture::$lookups[] = $destination;
     $output = fopen('php://temp', 'w+');
-    fwrite($output, '    interface: ' . RouteFixture::$default . "\n");
+    fwrite($output, '    interface: ' . (RouteFixture::$routes[$destination] ?? RouteFixture::$default) . "\n");
     rewind($output);
     $pipes = [1 => $output];
     return fopen('php://temp', 'w+');
@@ -130,6 +131,13 @@ foreach ([
 
 $routeLookup = new ReflectionMethod(WireGuard::class, 'routeLookup');
 $underlay = new ReflectionMethod(WireGuard::class, 'checkUnderlay');
+RouteFixture::$routes = ['default' => 'igc2', '198.51.100.77' => 'igc2', '10.141.89.206' => 'lo0'];
+$underlay->invoke(null, '198.51.100.77');
+checkWireGuard(RouteFixture::$lookups === ['default', '198.51.100.77'] &&
+    RouteFixture::$routes['10.141.89.206'] === 'lo0',
+    'A relay endpoint on the active WAN is accepted even when the reused tunnel address is already local on lo0.');
+RouteFixture::$lookups = [];
+RouteFixture::$routes = [];
 $first = $routeLookup->invoke(null);
 for ($index = 1; $index <= 32; $index++) {
     $underlay->invoke(null, '192.0.2.' . $index, $first);

@@ -51,7 +51,10 @@ final class WireGuard
         $address = self::hostAddress((string)($identity['address'] ?? ''), false);
         $address6 = empty($identity['address6']) ? '' : self::hostAddress((string)$identity['address6'], true);
         $addresses = $address6 === '' ? [$address] : [$address, $address6];
-        self::checkUnderlay(explode('/', $address, 2)[0]);
+        // The assigned address belongs to the new tunnel and may already be
+        // local on another interface when this Mullvad device key is reused.
+        // Only the relay endpoint must resolve through the active WAN; testing
+        // this inner address would incorrectly resolve to lo0 or a VPN route.
         $previousIpv6 = (new Gateways())->getDefaultGW(null, 'inet6');
         $owner = self::owner($id);
         $nativeServers = new Server();

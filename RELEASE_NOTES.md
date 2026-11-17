@@ -205,6 +205,11 @@
 - Cover the full four-core table, failed status response, retry, and update check in the browser fixture at desktop and mobile widths.
 - Keep the core archive picker inside the Core panel on narrow screens; opening the panel no longer adds page overflow.
 
+## 0.8.52
+
+- Fix Mullvad tunnel creation when reusing the router's single device key across servers. Check the relay's public endpoint against the active WAN route, and do not mistake the already-local inner tunnel address for a remote WAN destination.
+- Add a regression fixture for a WAN-routed relay endpoint alongside a reused WireGuard address that correctly routes to `lo0`.
+
 ## 0.8.51
 
 - Make Mullvad **Add server** show its pending, successful, and failed state next to the button. Keep the button disabled during router operations so repeated clicks cannot be silently ignored.
