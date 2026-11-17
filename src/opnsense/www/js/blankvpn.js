@@ -2475,13 +2475,17 @@
 
         async function mutate(control, operation, success, onSuccess, recover) {
             if (state.busy) {
-                return;
+                return false;
             }
             state.busy = true;
+            let completed = false;
             updateServerSelection('vpn');
             updateServerSelection('proxy');
             control = control || byId('refresh');
             control.disabled = true;
+            if (control === byId('register')) {
+                renderRelayChoice();
+            }
             notice('Waiting for the router…');
             try {
                 const result = await operation();
@@ -2498,24 +2502,31 @@
                     await state.dashboardRequest;
                 }
                 await refreshDashboard();
+                completed = true;
             } catch (error) {
                 if (error.ambiguous && recover) {
                     try {
                         if (await recover()) {
                             notice(success, 'success');
-                            return;
+                            completed = true;
                         }
                     } catch (_) {
                         // Keep the original request error when the status check also fails.
                     }
                 }
-                notice(errorMessage(error, 'The operation could not be completed.'), 'danger');
+                if (!completed) {
+                    notice(errorMessage(error, 'The operation could not be completed.'), 'danger');
+                }
             } finally {
                 state.busy = false;
                 control.disabled = false;
                 updateServerSelection('vpn');
                 updateServerSelection('proxy');
+                if (control === byId('register')) {
+                    renderRelayChoice();
+                }
             }
+            return completed;
         }
 
         function removeProfile(profile, control) {
@@ -2577,7 +2588,10 @@
             const register = byId('register');
             const saved = relay && state.profiles.some((profile) => profile.relay === relay.id);
             register.textContent = saved ? 'Already added' : 'Add server';
-            register.disabled = !relay || !state.mullvadSignedIn || Boolean(saved);
+            if (state.busy && !saved) {
+                register.textContent = 'Adding…';
+            }
+            register.disabled = !relay || !state.mullvadSignedIn || Boolean(saved) || state.busy;
             byId('test-relay').disabled = !relay || !state.mullvadSignedIn ||
                 state.tests.get('relay:' + relay.id)?.kind === 'pending';
         }
@@ -2586,6 +2600,35 @@
             const relay = byId('relay').value;
             const key = 'relay:' + relay;
             await testConnection('testRelay', relay, key, false);
+        }
+
+        async function addSelectedMullvadServer(control) {
+            const status = byId('register-status');
+            if (state.busy) {
+                status.textContent = 'Another router operation is still running. Wait for it to finish, then try again.';
+                return;
+            }
+            const relayId = byId('relay').value;
+            const relay = state.relays.find((item) => item.id === relayId && item.active !== false);
+            if (!state.mullvadSignedIn || !relay) {
+                status.textContent = !state.mullvadSignedIn
+                    ? 'Sign in to Mullvad again before adding a server.' : 'Choose an available server before adding it.';
+                return;
+            }
+            status.textContent = 'Adding ' + (relay.hostname || relay.id) + '…';
+            const completed = await mutate(control || byId('register'), () => api('register', {
+                relay: relayId, name: byId('register-name').value.trim(), port: Number(byId('register-port').value)
+            }), 'Mullvad server added.', (result) => {
+                if (result.profile) {
+                    state.tests.delete('exit:' + result.profile);
+                }
+                byId('register-name').value = '';
+                byId('register-port').value = '51820';
+                byId('relay').value = '';
+            });
+            status.textContent = completed
+                ? 'Server added. Find it in Saved VPN servers below.'
+                : 'The server was not added. Read the error above, correct it, then try again.';
         }
 
         function appendConnectionTest(actions, action, id, name, {nodeId, disabled = false, title = 'Test', ping} = {}) {
@@ -3270,7 +3313,10 @@
         byId('refresh-relays').addEventListener('click', () => void loadRelays(true));
         byId('country').addEventListener('change', renderRelays);
         byId('city').addEventListener('change', renderRelays);
-        byId('relay').addEventListener('change', renderRelayChoice);
+        byId('relay').addEventListener('change', () => {
+            byId('register-status').textContent = '';
+            renderRelayChoice();
+        });
         byId('test-relay').addEventListener('click', () => void pingRelay());
         bindSignIn('login-form', 'inspect-account', () => void inspectAccount());
         byId('restore-login').addEventListener('click', () => void inspectAccount(true));
@@ -3286,21 +3332,10 @@
         });
         byId('register-form').addEventListener('submit', (event) => {
             event.preventDefault();
-            if (!state.mullvadSignedIn || byId('register').disabled) {
-                return;
-            }
-            const payload = {relay: byId('relay').value, name: byId('register-name').value.trim(),
-                port: Number(byId('register-port').value)};
-            void mutate(event.submitter, () => api('register', payload), 'Mullvad server added.', (result) => {
-                if (result.profile) {
-                    state.tests.delete('exit:' + result.profile);
+            void addSelectedMullvadServer(event.submitter || byId('register')).then(() => {
+                if (state.mullvadSignedIn) {
+                    refreshMullvadAccount();
                 }
-                byId('register-name').value = '';
-                byId('register-port').value = '51820';
-                byId('relay').value = '';
-            }).then(() => {
-                renderRelayChoice();
-                refreshMullvadAccount();
             });
         });
         byId('use-lan').addEventListener('click', () => {

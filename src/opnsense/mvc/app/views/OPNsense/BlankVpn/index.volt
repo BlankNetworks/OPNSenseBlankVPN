@@ -94,6 +94,7 @@
                     </div>
                     <div class="bv-actions">
                         <button id="bv-register" type="submit" class="btn btn-primary" disabled>Add server</button>
+                        <small id="bv-register-status" class="bv-test-result" role="status" aria-live="polite"></small>
                         <p class="text-muted">Each saved Mullvad server has its own tunnel. Assign it in Network Settings.</p>
                     </div>
                 </form>

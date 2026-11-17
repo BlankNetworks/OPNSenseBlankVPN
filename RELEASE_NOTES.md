@@ -205,6 +205,12 @@
 - Cover the full four-core table, failed status response, retry, and update check in the browser fixture at desktop and mobile widths.
 - Keep the core archive picker inside the Core panel on narrow screens; opening the panel no longer adds page overflow.
 
+## 0.8.51
+
+- Make Mullvad **Add server** show its pending, successful, and failed state next to the button. Keep the button disabled during router operations so repeated clicks cannot be silently ignored.
+- Show actionable inline guidance when the Mullvad session or server selection is unavailable, and retain the router error when registration fails.
+- Cover rejected and successful Mullvad server additions in the responsive browser fixture.
+
 ## 0.8.50
 
 - Load the saved VPN and proxy catalog when opening Groups and display a clear loading/error status instead of leaving the server pickers empty. Cover selecting, ordering, and saving VPN and proxy members in the browser fixture.

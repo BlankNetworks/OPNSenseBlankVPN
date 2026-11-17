@@ -2,6 +2,7 @@ const requests = [];
 let settingsError = null;
 let exitTestError = null;
 let bulkRemoveError = null;
+let registerError = null;
 let coreStatusError = false;
 let inlineAssignError = false;
 let tailnetTraffic = 'unseen';
@@ -182,6 +183,7 @@ window.jQuery.ajax = async (request) => {
             interface:'wg2',dns:['10.0.0.2']});
     }
     if (action === 'register') {
+        if (registerError) return {ok:false, error:registerError};
         reply.dashboard.profiles.push({id:'vpn2',name:data.name,provider:'mullvad',relay:data.relay,
             interface:'wg3',port:data.port,dns:['10.64.0.1']});
         return {ok:true, profile:'vpn2'};
@@ -649,6 +651,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(bv('register').textContent === 'Add server' && !bv('register').disabled && !bv('retarget'),
         'Mullvad should offer an independent Add server action.');
     const routingBeforeAdd = structuredClone({assignments:reply.dashboard.assignments, settings:reply.dashboard.settings});
+    registerError = 'Test Mullvad registration failure';
+    bv('register-form').requestSubmit(bv('register'));
+    await wait();
+    assert(bv('register-status').textContent.includes('not added') &&
+        bv('message-detail').textContent.includes(registerError),
+        'A rejected Mullvad server add must show both an inline result and the router error.');
+    registerError = null;
     const requestCountBeforeAdd = requests.length;
     bv('register-form').requestSubmit(bv('register'));
     await wait();
@@ -658,6 +667,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         addRequests[0].data.relay === 'jp-test-wg-001' && addRequests[0].data.name === 'Japan home' &&
         bv('register-port').value === '51820',
         'Add server must send the selected UDP port and reset the port selector for the next tunnel.');
+    assert(bv('register-status').textContent.includes('Server added'),
+        'A successful Mullvad server add must confirm that the server was saved.');
     assert(reply.dashboard.profiles[0].relay === 'ca-test-wg-001' &&
         bv('profile-list').textContent.includes('Japan home') &&
         [...bv('network-profile').options].some(option => option.value === 'vpn2') &&
