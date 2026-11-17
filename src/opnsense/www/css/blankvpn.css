@@ -134,6 +134,52 @@
     color: var(--bv-accent);
 }
 
+.blankvpn .bv-group-columns {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+}
+
+.blankvpn .bv-group-columns > section {
+    min-width: 0;
+    padding: 1rem;
+    border: 1px solid var(--bv-line);
+    border-radius: .6rem;
+}
+
+.blankvpn #bv-group-vpn-list,
+.blankvpn #bv-group-proxy-list {
+    max-height: 24rem;
+    overflow: auto;
+}
+
+.blankvpn .bv-group-columns .bv-check {
+    display: flex;
+    align-items: flex-start;
+    gap: .4rem;
+    margin: .5rem 0;
+}
+
+.blankvpn #bv-group-members li,
+.blankvpn .bv-group-saved {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .5rem;
+    padding: .45rem 0;
+    border-bottom: 1px solid var(--bv-line);
+}
+
+.blankvpn .bv-group-saved p {
+    flex: 1 1 100%;
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+    .blankvpn .bv-group-columns { grid-template-columns: 1fr; }
+}
+
 .blankvpn .bv-panel {
     padding: clamp(1rem, 2.4vw, 1.65rem);
     margin: 0 0 1rem;

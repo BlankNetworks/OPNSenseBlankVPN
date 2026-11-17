@@ -362,6 +362,9 @@ final class Operations
                 $watchServices = Policy::usesMultiPath($mode);
                 if (Policy::usesBase($mode)) {
                     $exits[] = $settings['networkProfile'];
+                    if (($settings['networkBackupProfile'] ?? '') !== '') {
+                        $exits[] = $settings['networkBackupProfile'];
+                    }
                 }
             }
         } else {
@@ -397,6 +400,9 @@ final class Operations
         if ($settings['coverage'] === 'network') {
             if (Policy::usesBase($settings['networkMode'])) {
                 $selected[] = $settings['networkProfile'];
+                if (($settings['networkBackupProfile'] ?? '') !== '') {
+                    $selected[] = $settings['networkBackupProfile'];
+                }
             }
         } else {
             foreach ($assignments as $row) {
@@ -477,6 +483,7 @@ final class Operations
         if ($after === null) {
             throw new \RuntimeException('The active firewall rules could not be read after updating routing paths.');
         }
+        $settings['routeGroups'] = RouteGroups::all($model);
         $services = SmartRouting::forwardServices($settings, SmartRouting::services($model));
         $scopes = array_unique([
             ...$reset, ...self::killSwitchStateScopes($settings, $assignments, $services, $before, $after, $failedExits, $legacyReset)
@@ -509,6 +516,7 @@ final class Operations
         if (isset($settings['scopes'])) {
             $results = [];
             foreach ($settings['scopes'] as $scope) {
+                $scope['routeGroups'] = $settings['routeGroups'] ?? [];
                 array_push($results, ...self::killSwitchStateScopes(
                     $scope, Policy::scopedAssignments($scope, $assignments),
                     SmartRouting::forScope($services, $scope['scope']), $before, $after, $failedExits, $legacyReset
@@ -567,7 +575,9 @@ final class Operations
             if ($network) {
                 $id = 'network:' . $interface;
                 $mode = $settings['networkMode'];
-                $outage = $legacyReset || (Policy::usesBase($mode) && in_array($settings['networkProfile'], $failedExits, true)) ||
+                $outage = $legacyReset || (Policy::usesBase($mode) && (
+                    RouteGroups::failedChoice($settings['routeGroups'] ?? [], $settings['networkProfile'], $failedExits) ||
+                    RouteGroups::failedChoice($settings['routeGroups'] ?? [], $settings['networkBackupProfile'] ?? '', $failedExits))) ||
                     (Policy::usesMultiPath($mode) && $serviceOutage);
                 if (self::routingPathChanged($id, $before, $after, $outage) ||
                     (Policy::usesMultiPath($mode) && $serviceChanged) ||
@@ -589,7 +599,8 @@ final class Operations
             }
             foreach ($byInterface[$interface] ?? [] as $id => $row) {
                 $mode = Policy::mode($row);
-                $outage = $legacyReset || (Policy::usesBase($mode) && in_array($row['profile'] ?? '', $failedExits, true)) ||
+                $outage = $legacyReset || (Policy::usesBase($mode) &&
+                    RouteGroups::failedChoice($settings['routeGroups'] ?? [], $row['profile'] ?? '', $failedExits)) ||
                     (Policy::usesMultiPath($mode) && $serviceOutage);
                 if (self::routingPathChanged($id, $before, $after, $outage) ||
                     ($directRemoved && Policy::killSwitch($row)) ||

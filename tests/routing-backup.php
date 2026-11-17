@@ -9,6 +9,7 @@ use OPNsense\BlankVpn\SmartRouting;
 $source = __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/';
 require $source . 'Policy.php';
 require $source . 'SmartRouting.php';
+require $source . 'RouteGroups.php';
 require $source . 'RoutingBackup.php';
 
 function check(bool $condition, string $message): void
@@ -36,7 +37,7 @@ $service = '9511230c-1e2e-4fc5-8a44-6053d61a3a1f';
 $policy = [
     'settings' => [
         'enabled' => '1', 'interfaces' => 'lan,opt2', 'coverage' => 'device',
-        'networkMode' => 'disabled', 'networkProfile' => '', 'networkKillSwitch' => '',
+        'networkMode' => 'disabled', 'networkProfile' => '', 'networkBackupProfile' => '', 'networkKillSwitch' => '',
         'strictInterfaces' => 'opt2', 'smartInterfaces' => 'lan', 'smartAssignedOnly' => '0',
         'tailscaleInterfaces' => '', 'localNetworks' => '192.168.2.0/24',
     ],
@@ -49,6 +50,7 @@ $policy = [
         'onDemand' => '0', 'bindMac' => '1', 'networkBypass' => '1', 'networkBypassIpv6' => '',
     ]],
     'services' => [['id' => $service, 'name' => 'Country suffix', 'domains' => ['.cn'], 'profile' => $exit]],
+    'groups' => [],
     'routes' => [$exit => str_repeat('d', 64)],
 ];
 
@@ -109,6 +111,7 @@ check(RoutingBackup::decode(json_encode(RoutingBackup::envelope($combined, $key)
     'A combined per-device policy round-trips.');
 $combined['settings'] = array_replace($combined['settings'], [
     'coverage' => 'network', 'networkMode' => 'full_multi', 'networkProfile' => $exit, 'networkKillSwitch' => '1',
+    'networkBackupProfile' => '',
 ]);
 check(RoutingBackup::decode(json_encode(RoutingBackup::envelope($combined, $key)), $key) === $combined,
     'A combined Whole-Network policy retains its base server.');
@@ -118,7 +121,7 @@ expectFail(fn () => RoutingBackup::envelope($combined, $key), 'invalid device ru
 $scoped = $policy;
 $scoped['settings'] += [
     'tailnetEnabled' => '1', 'tailnetCoverage' => 'network', 'tailnetNetworkMode' => 'full_multi',
-    'tailnetNetworkProfile' => $exit, 'tailnetNetworkKillSwitch' => '1'
+    'tailnetNetworkProfile' => $exit, 'tailnetNetworkBackupProfile' => '', 'tailnetNetworkKillSwitch' => '1'
 ];
 $scoped['services'][0]['scope'] = 'local';
 $scoped['services'][] = [
@@ -129,5 +132,20 @@ check(RoutingBackup::decode(json_encode(RoutingBackup::envelope($scoped, $key)),
     'Independent coverage and identical lists limited to separate scopes survive signed backup and restore.');
 $scoped['services'][1]['scope'] = 'both';
 expectFail(fn () => RoutingBackup::envelope($scoped, $key), 'overlaps');
+
+$backupExit = '03c2dbd2-bb7b-4672-91b4-7f1b68b3a15c';
+$groupId = 'group-3f785570-f1fc-4212-918f-4747deadbeef';
+$groupPolicy = $policy;
+$groupPolicy['settings'] = array_replace($groupPolicy['settings'], [
+    'enabled' => '1', 'coverage' => 'network', 'networkMode' => 'full', 'networkProfile' => $groupId,
+]);
+$groupPolicy['groups'] = [['id' => $groupId, 'name' => 'USA', 'members' => [$exit, $backupExit]]];
+$groupPolicy['routes'][$backupExit] = str_repeat('e', 64);
+$roundTrip = RoutingBackup::decode(json_encode(RoutingBackup::envelope($groupPolicy, $key)), $key);
+$expectedGroupRoutes = $groupPolicy['routes'];
+ksort($expectedGroupRoutes);
+check($roundTrip['groups'] === $groupPolicy['groups'] && $roundTrip['routes'] === $expectedGroupRoutes &&
+    $roundTrip['settings']['networkProfile'] === $groupId,
+    'Ordered failover groups and their member route signatures survive backup and restore.');
 
 echo "Routing backup fixtures passed.\n";

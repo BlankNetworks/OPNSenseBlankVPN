@@ -40,6 +40,7 @@ final class Policy
         $mode = $stored['networkMode'] ?? 'disabled';
         $result['networkMode'] = self::validNetworkMode($mode) ? $mode : 'disabled';
         $result['networkProfile'] = $stored['networkProfile'] ?? '';
+        $result['networkBackupProfile'] = $stored['networkBackupProfile'] ?? '';
         $killSwitch = $stored['networkKillSwitch'] ?? '';
         $result['networkKillSwitch'] = $killSwitch === '1' || ($killSwitch === '' && $result['networkMode'] !== 'multi');
         $tailnetMode = $stored['tailnetNetworkMode'] ?? 'disabled';
@@ -51,6 +52,7 @@ final class Policy
         $result['tailnetCoverage'] = ($stored['tailnetCoverage'] ?? '') === 'network' ? 'network' : 'device';
         $result['tailnetNetworkMode'] = self::validNetworkMode($tailnetMode) ? $tailnetMode : 'disabled';
         $result['tailnetNetworkProfile'] = $stored['tailnetNetworkProfile'] ?? '';
+        $result['tailnetNetworkBackupProfile'] = $stored['tailnetNetworkBackupProfile'] ?? '';
         $tailnetKillSwitch = $stored['tailnetNetworkKillSwitch'] ?? '';
         $result['tailnetNetworkKillSwitch'] = $tailnetKillSwitch === '1' ||
             ($tailnetKillSwitch === '' && $result['tailnetNetworkMode'] !== 'multi');
@@ -115,7 +117,7 @@ final class Policy
         $settings['scope'] = $scope;
         $transit = $settings['tailscaleInterfaces'];
         if ($scope === 'tailscale') {
-            foreach (['enabled', 'coverage', 'networkMode', 'networkProfile', 'networkKillSwitch'] as $field) {
+            foreach (['enabled', 'coverage', 'networkMode', 'networkProfile', 'networkBackupProfile', 'networkKillSwitch'] as $field) {
                 $settings[$field] = $settings['tailnet' . ucfirst($field)];
             }
             $settings['interfaces'] = $transit;
@@ -179,9 +181,10 @@ final class Policy
         return $profiles;
     }
 
-    public static function routes(BlankVpn $model): array
+    public static function routes(BlankVpn $model, bool $includeGroups = true): array
     {
-        return self::profiles($model) + NativeVpn::routes($model) + ProxyRuntime::routes($model);
+        $routes = self::profiles($model) + NativeVpn::routes($model) + ProxyRuntime::routes($model);
+        return $includeGroups ? $routes + RouteGroups::aliases($model, $routes, Firewall::health()) : $routes;
     }
 
     public static function assignments(BlankVpn $model, bool $activeOnly = false): array
@@ -219,8 +222,14 @@ final class Policy
     public static function combinedProfiles(array $settings, array $assignments): array
     {
         if ($settings['coverage'] === 'network') {
-            return $settings['networkMode'] === 'full_multi' && $settings['networkProfile'] !== ''
-                ? [$settings['networkProfile'] => true] : [];
+            if ($settings['networkMode'] !== 'full_multi' || $settings['networkProfile'] === '') {
+                return [];
+            }
+            $profiles = [$settings['networkProfile'] => true];
+            if (($settings['networkBackupProfile'] ?? '') !== '') {
+                $profiles[$settings['networkBackupProfile']] = true;
+            }
+            return $profiles;
         }
         $profiles = [];
         foreach ($assignments as $row) {

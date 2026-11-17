@@ -205,6 +205,13 @@
 - Cover the full four-core table, failed status response, retry, and update check in the browser fixture at desktop and mobile widths.
 - Keep the core archive picker inside the Core panel on narrow screens; opening the panel no longer adds page overflow.
 
+## 0.8.49
+
+- Add named routing groups with ordered VPN and proxy server members. Users can create and edit groups from the new Groups tab and select groups anywhere a routing destination is chosen.
+- Add a backup server to Local and Tailscale Whole-Network coverage. Health checks move traffic to the next healthy group member or backup; when all configured choices fail, the existing Kill Switch policy decides whether traffic is blocked.
+- Probe a rotating group member while every member is down, allowing recovered servers to be discovered without keeping every standby proxy runtime active.
+- Persist groups and Whole-Network backups in routing backups, including compatibility with older backup files. Cover group failover, backup failover, Kill Switch, recovery probing, API validation, and the responsive Groups UI.
+
 ## 0.8.48
 
 - Give Local and Tailscale **Devices and Routing Rules** tables the same Device, Address, Availability, Server, Routing, and Ping columns. Keep the interface name beneath a LAN address and update Availability during device presence polls.

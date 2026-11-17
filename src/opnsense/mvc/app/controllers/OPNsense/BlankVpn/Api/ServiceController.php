@@ -18,6 +18,7 @@ use OPNsense\BlankVpn\MystVpn;
 use OPNsense\BlankVpn\NativeVpn;
 use OPNsense\BlankVpn\Operations;
 use OPNsense\BlankVpn\Policy;
+use OPNsense\BlankVpn\RouteGroups;
 use OPNsense\BlankVpn\ProxyCatalog;
 use OPNsense\BlankVpn\ProxyImport;
 use OPNsense\BlankVpn\ProxyRuntime;
@@ -348,6 +349,7 @@ class ServiceController extends ApiControllerBase
             return $discovery + [
                 'language' => Language::dashboard(),
                 'profiles' => array_values($profiles),
+                'groups' => array_values(RouteGroups::all($model)),
                 'proxyCores' => ProxyRuntime::capabilities(),
                 'canManageCores' => self::nativeWritesAvailable() && is_string($username) &&
                     $acl->isPageAccessible($username, '/api/blankvpn/core/status'),
@@ -1410,6 +1412,7 @@ class ServiceController extends ApiControllerBase
             $coverage = $this->input('coverage', 12, $current['coverage']);
             $networkMode = $this->input('networkMode', 12, $current['networkMode']);
             $networkProfile = $this->input('networkProfile', 80, $current['networkProfile']);
+            $networkBackupProfile = $this->input('networkBackupProfile', 80, $current['networkBackupProfile']);
             $networkKillSwitch = $this->request->hasPost('networkKillSwitch')
                 ? ($this->flag('networkKillSwitch') ? '1' : '0') : null;
             if (!in_array($coverage, ['network', 'device'], true) ||
@@ -1418,6 +1421,7 @@ class ServiceController extends ApiControllerBase
             }
             if ($coverage !== 'network' || !Policy::usesBase($networkMode)) {
                 $networkProfile = '';
+                $networkBackupProfile = '';
             }
             $this->validateDashboardBinding($hostname, $bind);
             $interfaces = array_values(array_unique([...$interfaces, ...$tailscale]));
@@ -1448,7 +1452,7 @@ class ServiceController extends ApiControllerBase
             }
             Operations::change(function (BlankVpn $model) use (
                 $enabled, $interfaces, $strict, $smart, $tailscale, $assignedOnly, $networks,
-                $hostname, $bind, $coverage, $networkMode, $networkProfile, $networkKillSwitch
+                $hostname, $bind, $coverage, $networkMode, $networkProfile, $networkBackupProfile, $networkKillSwitch
             ) {
                 $before = Policy::settings($model);
                 $route = [];
@@ -1465,6 +1469,14 @@ class ServiceController extends ApiControllerBase
                         $route = Policy::routes($model)[$networkProfile] ?? [];
                         if ($route === [] || !SmartRouting::canResolve($route) || !self::routeConfigured($route)) {
                             throw new \DomainException('Choose a configured VPN tunnel or an enabled proxy with DNS for Whole-Network coverage.');
+                        }
+                        if ($networkBackupProfile !== '') {
+                            $networkBackupProfile = $this->resolveProxyChoice($model, $networkBackupProfile);
+                            $backup = Policy::routes($model)[$networkBackupProfile] ?? [];
+                            if ($networkBackupProfile === $networkProfile || $backup === [] ||
+                                !SmartRouting::canResolve($backup) || !self::routeConfigured($backup)) {
+                                throw new \DomainException('Choose a different configured server for Whole-Network backup.');
+                            }
                         }
                     }
                 }
@@ -1502,6 +1514,7 @@ class ServiceController extends ApiControllerBase
                 $model->settings->coverage = $coverage;
                 $model->settings->networkMode = $networkMode;
                 $model->settings->networkProfile = $networkProfile;
+                $model->settings->networkBackupProfile = $networkBackupProfile;
                 if ($networkKillSwitch !== null) {
                     $model->settings->networkKillSwitch = $networkKillSwitch;
                 }
@@ -1524,6 +1537,7 @@ class ServiceController extends ApiControllerBase
                     ? $newRouting['interfaces'] : [];
                 $networkChanged = $oldNetwork !== $newNetwork || ($newNetwork !== [] &&
                     ($networkMode !== $before['networkMode'] || $networkProfile !== $before['networkProfile'] ||
+                        $networkBackupProfile !== $before['networkBackupProfile'] ||
                         $after['networkKillSwitch'] !== $before['networkKillSwitch']));
                 $changedNetworkSegments = $networkChanged ? [...$oldNetwork, ...$newNetwork] : [];
                 array_push($reset, ...Policy::segmentNetworks(array_values(array_unique($changedNetworkSegments))));
@@ -1570,6 +1584,7 @@ class ServiceController extends ApiControllerBase
                 $coverage = $this->input('coverage', 12, $settings['tailnetCoverage']);
                 $mode = $this->input('networkMode', 12, $settings['tailnetNetworkMode']);
                 $profileId = $this->input('networkProfile', 80, $settings['tailnetNetworkProfile']);
+                $backupId = $this->input('networkBackupProfile', 80, $settings['tailnetNetworkBackupProfile']);
                 $kill = $this->request->hasPost('networkKillSwitch')
                     ? $this->flag('networkKillSwitch') : $settings['tailnetNetworkKillSwitch'];
                 if (!in_array($coverage, ['network', 'device'], true) || !Policy::validNetworkMode($mode)) {
@@ -1596,22 +1611,33 @@ class ServiceController extends ApiControllerBase
                 $profile = [];
                 if ($coverage !== 'network' || !Policy::usesBase($mode)) {
                     $profileId = '';
+                    $backupId = '';
                 } elseif ($enabled) {
                     $profileId = $this->resolveProxyChoice($model, $profileId);
                     $profile = Policy::routes($model)[$profileId] ?? [];
                     if ($profile === [] || !SmartRouting::canResolve($profile) || !self::routeConfigured($profile)) {
                         throw new \DomainException('Choose a configured VPN tunnel or an enabled proxy with DNS for Tailscale.');
                     }
+                    if ($backupId !== '') {
+                        $backupId = $this->resolveProxyChoice($model, $backupId);
+                        $backup = Policy::routes($model)[$backupId] ?? [];
+                        if ($backupId === $profileId || $backup === [] || !SmartRouting::canResolve($backup) ||
+                            !self::routeConfigured($backup)) {
+                            throw new \DomainException('Choose a different configured server for the Tailscale backup.');
+                        }
+                    }
                 }
                 $model->settings->tailnetEnabled = $enabled ? '1' : '0';
                 $model->settings->tailnetCoverage = $coverage;
                 $model->settings->tailnetNetworkMode = $mode;
                 $model->settings->tailnetNetworkProfile = $profileId;
+                $model->settings->tailnetNetworkBackupProfile = $backupId;
                 $model->settings->tailnetNetworkKillSwitch = $kill ? '1' : '0';
                 $new = Policy::scope(Policy::settings($model), 'tailscale', $rows);
                 $oldNetwork = $old['enabled'] && $old['coverage'] === 'network' && $old['networkMode'] !== 'disabled';
                 $changed = $old['enabled'] !== $new['enabled'] || $old['coverage'] !== $coverage ||
                     $old['networkMode'] !== $mode || $old['networkProfile'] !== $profileId ||
+                    $old['networkBackupProfile'] !== $backupId ||
                     $old['networkKillSwitch'] !== $kill;
                 $activeRows = Policy::deviceAssignments($old, $rows) + Policy::deviceAssignments($new, $rows);
                 $reset = !$changed ? [] : ($oldNetwork || $activeNetwork ? [Policy::TAILSCALE_V4, Policy::TAILSCALE_V6] :
@@ -2212,6 +2238,68 @@ class ServiceController extends ApiControllerBase
         }), true, true);
     }
 
+    public function saveGroupAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $name = trim($this->input('name', 80));
+            $id = trim($this->input('id', 64));
+            $members = json_decode($this->input('members', 16384), true);
+            if (!is_array($members) || !array_is_list($members)) {
+                throw new \DomainException('Select the servers for this group in failover order.');
+            }
+            return Operations::change(function (BlankVpn $model) use ($id, $name, $members) {
+                $resolved = [];
+                foreach ($members as $member) {
+                    if (is_string($member)) {
+                        $resolved[] = $this->resolveProxyChoice($model, $member);
+                    }
+                }
+                $routes = Policy::routes($model, false);
+                $groupId = RouteGroups::save($model, $id === '' ? null : $id, $name, $resolved, $routes);
+                $settings = Policy::effectiveRouting($model);
+                $interfaces = [];
+                foreach (Policy::scopes($settings) as $scope) {
+                    if ($scope['coverage'] === 'network' && Policy::usesBase($scope['networkMode'])) {
+                        $interfaces = [...$interfaces, ...$scope['interfaces']];
+                    }
+                }
+                return [
+                    'reload' => Policy::anyEnabled(Policy::settings($model)),
+                    'killSwitchReset' => Policy::segmentNetworks(array_values(array_unique($interfaces))),
+                    'id' => $groupId
+                ];
+            });
+        }), true, true);
+    }
+
+    public function removeGroupAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $id = $this->input('id', 64);
+            if (!RouteGroups::isId($id)) {
+                throw new \DomainException('Choose a saved server group.');
+            }
+            return Operations::change(function (BlankVpn $model) use ($id) {
+                $group = RouteGroups::all($model)[$id] ?? null;
+                if ($group === null) {
+                    throw new \DomainException('This server group no longer exists.');
+                }
+                $settings = Policy::settings($model);
+                $refs = [$settings['networkProfile'], $settings['networkBackupProfile'],
+                    $settings['tailnetNetworkProfile'], $settings['tailnetNetworkBackupProfile']];
+                foreach (Policy::assignments($model) as $row) {
+                    array_push($refs, $row['profile'], $row['backup']);
+                }
+                array_push($refs, ...array_column(SmartRouting::services($model), 'profile'));
+                if (in_array($id, $refs, true)) {
+                    throw new \DomainException('Choose another destination everywhere this group is used before removing it.');
+                }
+                $model->groups->group->del(substr($id, strlen('group-')));
+                return ['reload' => false];
+            });
+        }), true, true);
+    }
+
     private function saveDomainList(string $id, string $profileId, ?string $name = null, ?array $domains = null, string $scope = ''
     ): array
     {
@@ -2299,12 +2387,18 @@ class ServiceController extends ApiControllerBase
     private function requireUnusedByRouting(BlankVpn $model, string $profileId): void
     {
         $settings = Policy::settings($model);
-        if (in_array($profileId, [$settings['networkProfile'], $settings['tailnetNetworkProfile']], true)) {
+        if (in_array($profileId, [$settings['networkProfile'] ?? '', $settings['networkBackupProfile'] ?? '',
+            $settings['tailnetNetworkProfile'] ?? '', $settings['tailnetNetworkBackupProfile'] ?? ''], true)) {
             throw new \DomainException('Choose a different exit for Whole-Network coverage first.');
         }
         foreach (SmartRouting::services($model) as $service) {
             if ($service['profile'] === $profileId) {
                 throw new \DomainException('Move Multi-Path lists off this exit first.');
+            }
+        }
+        foreach (RouteGroups::all($model) as $group) {
+            if (in_array($profileId, $group['members'], true)) {
+                throw new \DomainException('Remove this server from its saved groups before deleting or disabling it.');
             }
         }
     }

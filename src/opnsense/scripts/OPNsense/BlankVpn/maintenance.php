@@ -175,6 +175,7 @@ try {
                 $previousProxySet = array_fill_keys($previousProxies, true);
                 $forward = SmartRouting::forwardServices($settings, $services);
                 $selected = Operations::policyProbeExits($settings, $assignments, $forward);
+                $selected = array_fill_keys(RouteGroups::activeIds($model, array_keys($selected)), true);
                 $repair = Operations::repairManagedWireGuard(
                     array_intersect_key($wireGuardProfiles, $selected), $wireGuardRuntime
                 );
@@ -184,9 +185,10 @@ try {
                 $watchedExits = array_fill_keys(Operations::killSwitchProbeExits(
                     $settings, $assignments, $forward
                 ), true);
+                $watchedExits = array_fill_keys(RouteGroups::activeIds($model, array_keys($watchedExits)), true);
                 $failedExits = [];
                 $old = Firewall::health();
-                $routes = Policy::routes($model);
+                $routes = Policy::routes($model, false);
                 $health = array_intersect_key($old, $routes);
                 $changed = $repair['repaired'] || $runningProxies !== $previousProxies ||
                     @file_get_contents(Policy::STATE_DIR . '/local-networks') !==

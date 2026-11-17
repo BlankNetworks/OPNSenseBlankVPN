@@ -26,7 +26,8 @@ final class Firewall
     {
         $model = new BlankVpn();
         $settings = Policy::effectiveRouting($model);
-        $profiles = Policy::routes($model);
+        $profiles = Policy::routes($model, false);
+        $health = self::health();
         $interfaces = iterator_to_array($firewall->getInterfaceMapping());
         $nativeTailnet = Policy::nativeTailnetConfigured();
         if ((string)(Config::getInstance()->object()->OPNsense->tailscale->settings->enabled ?? '') === '1') {
@@ -65,6 +66,7 @@ final class Firewall
             self::registerProfile($firewall, $profile, $settings['enabled'], isset($settings['scopes']['tailscale']));
         }
         unset($profile);
+        $profiles += RouteGroups::aliases($model, $profiles, $health, true);
         if (!$settings['enabled']) {
             if ($nativeTailnet) {
                 // Disabling Blank VPN must leave the native Tailscale exit node on the ISP WAN.
@@ -82,7 +84,6 @@ final class Firewall
         $localFile = Policy::writeState('local-networks', implode("\n", $localNetworks) . "\n");
         $firewall->registerTable(Policy::LOCAL_TABLE, true, $localFile);
         $firewall->setGatewayGroups($proxyGateways);
-        $health = self::health();
         $diagnostics = new Diagnostics();
         $lists = SmartRouting::services($model);
         $scopes = Policy::scopes($settings);
@@ -252,7 +253,8 @@ final class Firewall
             return;
         }
         $base = Policy::usesBase($mode) ? ($profiles[$settings['networkProfile']] ?? []) : [];
-        $profile = self::selectProfile($firewall, $base, [], $health);
+        $backup = Policy::usesBase($mode) ? ($profiles[$settings['networkBackupProfile'] ?? ''] ?? []) : [];
+        $profile = self::selectProfile($firewall, $base, $backup, $health);
         foreach ($settings['interfaces'] as $interface) {
             if (empty($interfaces[$interface]['if'])) {
                 continue;

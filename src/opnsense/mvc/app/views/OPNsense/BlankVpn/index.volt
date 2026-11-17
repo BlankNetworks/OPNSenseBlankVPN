@@ -15,6 +15,7 @@
     <nav class="bv-navigation" aria-label="Blank VPN &amp; Proxy pages">
         <button type="button" data-bv-section="vpns" aria-controls="bv-tunnels" aria-pressed="true">VPN Login</button>
         <button type="button" data-bv-section="proxies" aria-controls="bv-proxies" aria-pressed="false" data-manage-only>Proxy Login</button>
+        <button type="button" data-bv-section="groups" aria-controls="bv-groups-page" aria-pressed="false" data-manage-only>Groups</button>
         <button type="button" data-bv-section="network" aria-controls="bv-network-page" aria-pressed="false">Network Settings</button>
         <button type="button" data-bv-section="smart" aria-controls="bv-smart-page" aria-pressed="false">Multi-Path Settings</button>
         <button type="button" data-bv-section="tailscale" aria-controls="bv-tailscale-page" aria-pressed="false">Tailscale Settings</button>
@@ -363,6 +364,25 @@
         <p class="text-muted">Imported servers are ready to assign. A proxy tunnel starts when a routing rule uses it.</p>
     </section>
 
+    <section id="bv-groups-page" class="bv-panel" data-bv-panel="groups" aria-labelledby="bv-groups-title" data-manage-only hidden>
+        <h2 id="bv-groups-title">Server Groups</h2>
+        <p class="text-muted">Select servers and add them in failover order. If a server is unavailable, routing uses the next available server.</p>
+        <form id="bv-group-form">
+            <div class="bv-group-columns">
+                <section aria-labelledby="bv-group-vpn-title"><h3 id="bv-group-vpn-title">VPN Servers</h3><div id="bv-group-vpn-list"></div></section>
+                <section aria-labelledby="bv-group-proxy-title"><h3 id="bv-group-proxy-title">Proxy Servers</h3><div id="bv-group-proxy-list"></div></section>
+                <section aria-labelledby="bv-group-editor-title"><h3 id="bv-group-editor-title">Group</h3>
+                    <label>Group name <input id="bv-group-name" class="form-control" maxlength="80" required></label>
+                    <button id="bv-group-add" type="button" class="btn btn-default">Add selected servers</button>
+                    <ol id="bv-group-members"></ol>
+                    <div class="bv-actions"><button type="submit" id="bv-group-save" class="btn btn-primary">Save Group</button>
+                        <button type="button" id="bv-group-cancel" class="btn btn-default">Cancel</button></div>
+                </section>
+            </div>
+        </form>
+        <section aria-labelledby="bv-saved-groups-title"><h3 id="bv-saved-groups-title">Saved server lists</h3><div id="bv-saved-groups"></div></section>
+    </section>
+
     <div id="bv-network-page" data-bv-panel="network" hidden>
         <section class="bv-panel" aria-labelledby="bv-settings-title">
             <div class="bv-heading">
@@ -406,6 +426,9 @@
                     </label>
                     <label id="bv-network-profile-field" hidden><span id="bv-network-profile-label">Saved server</span>
                         <select id="bv-network-profile" class="form-control"></select>
+                    </label>
+                    <label id="bv-network-backup-field" hidden>Backup server (optional)
+                        <select id="bv-network-backup-profile" class="form-control"></select>
                     </label>
                 </div>
                 <p id="bv-coverage-note" class="text-muted" aria-live="polite"></p>
@@ -456,6 +479,9 @@
                     </label>
                     <label id="bv-tailnet-network-profile-field" hidden><span id="bv-tailnet-network-profile-label">Saved server</span>
                         <select id="bv-tailnet-network-profile" class="form-control"></select>
+                    </label>
+                    <label id="bv-tailnet-network-backup-field" hidden>Backup server (optional)
+                        <select id="bv-tailnet-network-backup-profile" class="form-control"></select>
                     </label>
                 </div>
                 <label class="bv-check" id="bv-tailnet-network-kill-field" hidden>

@@ -111,6 +111,7 @@ namespace OPNsense\BlankVpn {
     {
         public object $settings;
         public object $services;
+        public object $groups;
 
         public function __construct()
         {
@@ -125,6 +126,10 @@ namespace OPNsense\BlankVpn {
                 {
                     return [];
                 }
+            }];
+            $this->groups = (object)['group' => new class {
+                public array $items = [];
+                public function iterateItems(): array { return $this->items; }
             }];
         }
     }
@@ -187,11 +192,12 @@ namespace {
     use OPNsense\BlankVpn\NativeVpn;
     use OPNsense\BlankVpn\Operations;
     use OPNsense\BlankVpn\Policy;
+    use OPNsense\BlankVpn\RouteGroups;
     use OPNsense\BlankVpn\Resolver;
     use OPNsense\BlankVpn\SmartRouting;
     use OPNsense\Firewall\Plugin;
 
-    foreach (['Policy', 'NativeVpn', 'Resolver', 'SmartRouting', 'ProxyRuntime', 'WanEgress', 'Firewall', 'Operations'] as $file) {
+    foreach (['Policy', 'NativeVpn', 'Resolver', 'SmartRouting', 'RouteGroups', 'ProxyRuntime', 'WanEgress', 'Firewall', 'Operations'] as $file) {
         require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/' . $file . '.php';
     }
 
@@ -605,6 +611,43 @@ namespace {
     checkRouting($networkPass['gateway'] === 'VPN' && $networkPass['priority'] < $networkBlock['priority'] &&
         $networkBlock['from'] === 'any' && $networkBlock['to_not'] && $whole->nat[0]['from'] === 'lan',
         'Whole-Network coverage needs a gateway pass, LAN-scoped NAT and an internet guard.');
+    $wholeBackup = new Plugin();
+    $networkBackupSettings = array_replace($networkSettings, ['networkBackupProfile' => 'us']);
+    $backupProfiles = $profiles + ['us' => array_replace($profiles['jp'], [
+        'id' => 'us', 'kind' => 'native', 'gateway' => 'NORD', 'interface' => 'ovpnc1', 'logicalInterface' => 'opt2'
+    ])];
+    $network->invoke(null, $wholeBackup, $networkBackupSettings, $interfaces, $backupProfiles,
+        ['jp' => ['reachable' => false]]);
+    checkRouting(($wholeBackup->rules[Policy::marker('device', 'network:lan')]['gateway'] ?? '') === 'NORD',
+        'Whole-Network coverage selects its configured backup when the primary exit probe fails.');
+    $wholeBackupDown = new Plugin();
+    $network->invoke(null, $wholeBackupDown, $networkBackupSettings, $interfaces, $backupProfiles,
+        ['jp' => ['reachable' => false], 'us' => ['reachable' => false]]);
+    checkRouting(!isset($wholeBackupDown->rules[Policy::marker('device', 'network:lan')]) &&
+        isset($wholeBackupDown->rules[Policy::marker('kill', 'network:lan')]),
+        'Whole-Network Kill Switch blocks when both the primary and backup exit fail.');
+    $groupUuid = '3f785570-f1fc-4212-918f-4747deadbeef';
+    $groupId = 'group-' . $groupUuid;
+    $groupModel = new BlankVpn();
+    $groupModel->groups->group->items[$groupUuid] = new class {
+        public function getNodeContent(): array
+        {
+            return ['name' => 'USA', 'members' => json_encode(['jp', 'us'], JSON_THROW_ON_ERROR)];
+        }
+    };
+    $groupHealth = ['jp' => ['reachable' => false]];
+    $groupRoute = RouteGroups::aliases($groupModel, $backupProfiles, $groupHealth)[$groupId] ?? [];
+    $groupPolicies = $backupProfiles + [$groupId => $groupRoute];
+    $groupNetwork = new Plugin();
+    $network->invoke(null, $groupNetwork,
+        array_replace($networkSettings, ['networkProfile' => $groupId]), $interfaces, $groupPolicies, $groupHealth);
+    checkRouting(($groupRoute['id'] ?? '') === 'us' &&
+        ($groupNetwork->rules[Policy::marker('device', 'network:lan')]['gateway'] ?? '') === 'NORD',
+        'An ordered server group advances from its failed first member and routes Whole-Network traffic through the next member.');
+    $recoveryProbe = RouteGroups::aliases($groupModel, $backupProfiles,
+        ['jp' => ['reachable' => false], 'us' => ['reachable' => false]], false, 1)[$groupId] ?? [];
+    checkRouting(($recoveryProbe['id'] ?? '') === 'us',
+        'When every group member is down, once-per-minute recovery probes rotate through the saved members.');
     $wholeDown = new Plugin();
     $network->invoke(null, $wholeDown, $networkSettings, $interfaces, $profiles, ['jp' => ['reachable' => false]]);
     checkRouting(!isset($wholeDown->rules[Policy::marker('device', 'network:lan')]) &&

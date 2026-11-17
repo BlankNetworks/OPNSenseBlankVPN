@@ -124,7 +124,7 @@ namespace {
     use OPNsense\BlankVpn\SmartRouting;
     use OPNsense\BlankVpn\WireGuard;
 
-    foreach (['ProxyCatalog', 'ProxyImport', 'VpnProviders'] as $library) {
+    foreach (['ProxyCatalog', 'ProxyImport', 'VpnProviders', 'RouteGroups'] as $library) {
         require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/' . $library . '.php';
     }
     require __DIR__ . '/../src/opnsense/mvc/app/controllers/OPNsense/BlankVpn/Api/ServiceController.php';

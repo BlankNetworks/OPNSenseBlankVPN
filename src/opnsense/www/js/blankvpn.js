@@ -33,6 +33,8 @@
         const testDisplays = new WeakMap();
         const state = {
             profiles: [],
+            groups: [],
+            groupDraft: {id: '', name: '', members: []},
             selectedVpns: new Set(),
             selectedProxies: new Set(),
             assignments: [],
@@ -381,6 +383,7 @@
         }
 
         function providerName(profile) {
+            if (profile.kind === 'group') return 'Server Groups';
             if (state.vpnProviders[profile.provider]) {
                 return state.vpnProviders[profile.provider].name;
             }
@@ -397,7 +400,8 @@
         }
 
         function exitChoice(profile) {
-            return {value: profile.id, label: profile.name || profile.relay || profile.id, group: providerName(profile)};
+            return {value: profile.id, label: profile.kind === 'group' ? profile.name : profile.name || profile.relay || profile.id,
+                group: providerName(profile)};
         }
 
         function renderProvider() {
@@ -590,6 +594,9 @@
             if (section === 'smart') {
                 renderServices();
             }
+            if (section === 'groups') {
+                renderGroups();
+            }
             if (section === 'system') {
                 renderSystem();
                 if (state.canManageUpdates) {
@@ -607,10 +614,11 @@
 
         function profileName(id) {
             const profile = state.profiles.find((item) => item.id === id);
+            const group = state.groups.find((item) => item.id === id);
             const proxy = typeof id === 'string' && id.startsWith('proxy-')
                 ? state.proxyNodes.find((item) => 'proxy-' + item.id === id) : null;
             return id === bypassDestination ? 'Bypass (direct internet)'
-                : profile?.name || profile?.relay || proxy?.name || (id ? 'Unavailable server' : 'Normal internet');
+                : group ? group.name : profile?.name || profile?.relay || proxy?.name || (id ? 'Unavailable server' : 'Normal internet');
         }
 
         function networkName(id) {
@@ -1406,6 +1414,7 @@
                 coverage: settings.tailnetCoverage,
                 networkMode: settings.tailnetNetworkMode,
                 networkProfile: settings.tailnetNetworkProfile,
+                networkBackupProfile: settings.tailnetNetworkBackupProfile,
                 networkKillSwitch: settings.tailnetNetworkKillSwitch,
                 networkRouting: settings.tailnetNetworkRouting
             };
@@ -1437,6 +1446,9 @@
                     choices.push({value: savedExit, label: 'Unavailable server'});
                 }
                 options(select, choices, 'Choose a server', savedExit);
+                const backup = field('network-backup-profile');
+                const savedBackup = dirty ? backup.value : (saved?.networkBackupProfile || '');
+                options(backup, choices, 'No backup server', savedBackup);
                 if (saved && !dirty) {
                     field('coverage').value = saved.coverage || 'device';
                     field('network-mode').value = saved.networkMode || 'disabled';
@@ -1476,13 +1488,65 @@
         }
 
         function hasVpnDns(profile) {
-            return profile.kind === 'proxy' || list(profile.dns).some((ip) => !ip.includes(':'));
+            return profile.kind === 'proxy' || profile.kind === 'group' || list(profile.dns).some((ip) => !ip.includes(':'));
         }
 
         function routingServers() {
             const activeNodes = new Set(state.profiles.map((profile) => profile.node).filter(Boolean));
-            return [...state.profiles.filter((profile) => !profile.disabled), ...state.proxyNodes.filter((node) => !node.disabled && !activeNodes.has(node.id))
-                .map((node) => ({...node, id: 'proxy-' + node.id, kind: 'proxy'}))].sort(compareServers);
+            const servers = [...state.profiles.filter((profile) => !profile.disabled), ...state.proxyNodes.filter((node) => !node.disabled && !activeNodes.has(node.id))
+                .map((node) => ({...node, id: 'proxy-' + node.id, kind: 'proxy'}))];
+            const groups = state.groups.map((group) => ({id: group.id, name: group.name, kind: 'group', members: group.members}));
+            return [...servers, ...groups].sort(compareServers);
+        }
+
+        function renderGroups() {
+            if (state.section !== 'groups') return;
+            const servers = routingServers().filter((item) => item.kind !== 'group');
+            for (const [kind, targetId] of [['vpn', 'group-vpn-list'], ['proxy', 'group-proxy-list']]) {
+                const target = byId(targetId);
+                target.replaceChildren();
+                const candidates = servers.filter((item) => (kind === 'proxy') === (item.kind === 'proxy'));
+                if (!candidates.length) {
+                    const note = document.createElement('p'); note.className = 'text-muted';
+                    note.textContent = kind === 'vpn' ? 'No VPN servers are available.' : 'No proxy servers are available.';
+                    target.append(note);
+                }
+                for (const server of candidates) {
+                    const label = document.createElement('label'); label.className = 'bv-check';
+                    const input = document.createElement('input'); input.type = 'checkbox';
+                    input.value = server.id; input.dataset.groupChoice = '1';
+                    input.checked = state.groupDraft.members.includes(server.id);
+                    input.disabled = state.groupDraft.members.includes(server.id);
+                    label.append(input, document.createTextNode(' ' + server.name)); target.append(label);
+                }
+            }
+            byId('group-name').value = state.groupDraft.name;
+            byId('group-editor-title').textContent = state.groupDraft.id ? 'Edit Group' : 'Group';
+            const members = byId('group-members'); members.replaceChildren();
+            for (const [index, id] of state.groupDraft.members.entries()) {
+                const server = servers.find((item) => item.id === id);
+                const row = document.createElement('li');
+                const title = document.createElement('span'); title.textContent = server?.name || id; row.append(title);
+                for (const [label, delta] of [['Up', -1], ['Down', 1]]) {
+                    const move = button(label, () => {
+                        const next = index + delta;
+                        if (next < 0 || next >= state.groupDraft.members.length) return;
+                        const items = state.groupDraft.members; [items[index], items[next]] = [items[next], items[index]]; renderGroups();
+                    }); move.disabled = index + delta < 0 || index + delta >= state.groupDraft.members.length; row.append(move);
+                }
+                row.append(button('Remove', () => { state.groupDraft.members.splice(index, 1); renderGroups(); })); members.append(row);
+            }
+            const saved = byId('saved-groups'); saved.replaceChildren();
+            for (const group of state.groups) {
+                const row = document.createElement('div'); row.className = 'bv-group-saved';
+                const title = document.createElement('strong'); title.textContent = group.name; row.append(title);
+                const names = group.members.map((id) => servers.find((item) => item.id === id)?.name || id);
+                const description = document.createElement('p'); description.className = 'text-muted';
+                description.textContent = names.join(' → '); row.append(description);
+                row.append(button('Edit', () => { state.groupDraft = {id: group.id, name: group.name, members: [...group.members]}; renderGroups(); }));
+                row.append(button('Remove', () => void mutate(null, () => api('removeGroup', {id: group.id}), 'Group removed.', refreshDashboard)));
+                saved.append(row);
+            }
         }
 
         function updateCoverage(tailnet = false) {
@@ -1507,10 +1571,12 @@
             const killSwitch = kill.checked;
             field('network-profile-label').textContent = combined ? 'Base server' : 'Saved server';
             field('network-profile-field').hidden = !network || !baseServer;
+            field('network-backup-field').hidden = !network || !baseServer;
             exit.required = network && baseServer;
             const summary = {
                 full: exit.value
-                    ? 'Default traffic uses ' + profileName(exit.value) + '.'
+                    ? 'Default traffic uses ' + profileName(exit.value) + (field('network-backup-profile').value
+                        ? ', then ' + profileName(field('network-backup-profile').value) + ' if the first server fails.' : '.')
                         + (killSwitch ? ' The Kill Switch blocks internet if the server goes offline. Bypass is unavailable while the Kill Switch is on.'
                             : ' Traffic uses direct internet if the server goes offline.')
                     : 'Add a VPN or proxy server, then select it here.',
@@ -1518,7 +1584,9 @@
                     + (killSwitch ? 'Only destinations with a working VPN or proxy can connect. Bypass is unavailable while the Kill Switch is on.'
                         : 'Other traffic uses regular internet.'),
                 full_multi: exit.value
-                    ? 'Default traffic uses ' + profileName(exit.value) + '. Matching destinations use their Multi-Path servers. '
+                    ? 'Default traffic uses ' + profileName(exit.value) + (field('network-backup-profile').value
+                        ? ', then ' + profileName(field('network-backup-profile').value) + ' if the first server fails.' : '.')
+                        + ' Matching destinations use their Multi-Path servers. '
                         + (killSwitch ? 'If a Multi-Path server goes offline, only its destinations are blocked. If the base server goes offline, only default traffic is blocked. Bypass is unavailable while the Kill Switch is on.'
                             : 'Traffic assigned to the base server uses direct internet if it goes offline. Bypass uses direct internet.')
                     : 'Choose a base server for default traffic. Set destination overrides in Multi-Path.',
@@ -1834,6 +1902,7 @@
                     renderProfiles();
                     renderSettings();
                     renderServices();
+                    if (state.section === 'groups') renderGroups();
                 }
             } catch (error) {
                 notice(errorMessage(error, 'Proxy catalog unavailable.'), 'danger');
@@ -2071,6 +2140,7 @@
                 const data = await api('dashboard');
                 applyLanguage(data.language);
                 state.profiles = array(data.profiles);
+                state.groups = array(data.groups);
                 for (const profile of state.profiles) {
                     if (profile.provider !== 'mullvad' || profile.reachability !== 'router probe succeeded') {
                         continue;
@@ -2156,6 +2226,7 @@
                 renderProxyCatalog();
                 renderSettings();
                 renderTailscale();
+                if (state.section === 'groups') renderGroups();
                 renderWarnings(array(data.warnings));
                 if (state.canManage && !state.proxyCatalogLoaded) {
                     await refreshProxyCatalog();
@@ -3315,6 +3386,26 @@
         for (const button of root.querySelectorAll('[data-bv-section]')) {
             button.addEventListener('click', () => showSection(button.dataset.bvSection));
         }
+        byId('group-add').addEventListener('click', () => {
+            const additions = [...root.querySelectorAll('[data-group-choice]:checked')].map((input) => input.value);
+            state.groupDraft.members = [...new Set([...state.groupDraft.members, ...additions])];
+            renderGroups();
+        });
+        byId('group-name').addEventListener('input', (event) => { state.groupDraft.name = event.target.value; });
+        byId('group-cancel').addEventListener('click', () => {
+            state.groupDraft = {id: '', name: '', members: []}; renderGroups();
+        });
+        byId('group-form').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const draft = {...state.groupDraft, name: byId('group-name').value.trim()};
+            if (!draft.members.length) {
+                notice('Add at least one VPN or proxy server to the group.', 'warning'); return;
+            }
+            const payload = {id: draft.id, name: draft.name, members: JSON.stringify(draft.members)};
+            void mutate(event.submitter, () => api('saveGroup', payload), 'Server group saved.', () => {
+                state.groupDraft = {id: '', name: '', members: []};
+            });
+        });
 
         function manualFields() {
             const protocol = byId('manual-protocol').value;
@@ -3548,6 +3639,7 @@
                 coverage: byId('tailnet-coverage').value,
                 networkMode: byId('tailnet-network-mode').value,
                 networkProfile: byId('tailnet-network-profile').required ? byId('tailnet-network-profile').value : '',
+                networkBackupProfile: byId('tailnet-network-backup-field').hidden ? '' : byId('tailnet-network-backup-profile').value,
                 networkKillSwitch: byId('tailnet-network-kill').checked
             };
             const saved = coverageSettings(true);
@@ -3600,6 +3692,7 @@
                 coverage: byId('coverage').value,
                 networkMode,
                 networkProfile: byId('network-profile').required ? byId('network-profile').value : '',
+                networkBackupProfile: byId('network-backup-field').hidden ? '' : byId('network-backup-profile').value,
                 interfaces,
                 strictInterfaces: selected('strict'),
                 smartInterfaces: selected('smart'),
@@ -3616,6 +3709,7 @@
             const wideChange = payload.enabled && payload.coverage === 'network' && payload.networkMode !== 'disabled'
                 && (!current?.enabled || current.coverage !== 'network' || current.networkMode !== payload.networkMode
                     || current.networkProfile !== payload.networkProfile
+                    || current.networkBackupProfile !== payload.networkBackupProfile
                     || current.networkKillSwitch !== payload.networkKillSwitch
                     || list(current.interfaces).filter((id) => !list(current.tailscaleInterfaces).includes(id)).join(',') !== payload.interfaces.join(','));
             const networkLabel = networkMode === 'full_multi' ? 'Whole-Network + Multi-Path' : modes[networkMode];

@@ -330,6 +330,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         'Adding and managing saved servers must appear in separate VPN Login sections.');
     assert(!requests.some(x => x.action === 'relays'), 'server list loaded before sign-in');
     assert(getComputedStyle(bv('appearance')).backgroundImage === 'none', 'host select decoration was not suppressed');
+    document.querySelector('[data-bv-section="groups"]').click();
+    assert(!bv('groups-page').hidden && bv('group-vpn-list') && bv('group-proxy-list') && bv('saved-groups'),
+        'The Groups tab must open with VPN, proxy, and saved-list columns.');
     document.querySelector('[data-bv-section="network"]').click();
     const expectedDeviceColumns = 'Device,Address,Availability,Server,Routing,Ping,Actions';
     for (const table of [bv('device-list'), bv('tailnet-device-list')]) {

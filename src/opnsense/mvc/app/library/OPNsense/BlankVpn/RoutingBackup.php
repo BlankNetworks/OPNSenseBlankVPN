@@ -15,11 +15,11 @@ final class RoutingBackup
     private const VERSION = 1;
     private const KEY = 'routing-backup-identity';
     private const SETTINGS = [
-        'enabled', 'interfaces', 'coverage', 'networkMode', 'networkProfile', 'networkKillSwitch',
+        'enabled', 'interfaces', 'coverage', 'networkMode', 'networkProfile', 'networkBackupProfile', 'networkKillSwitch',
         'strictInterfaces', 'smartInterfaces', 'smartAssignedOnly', 'tailscaleInterfaces', 'localNetworks',
     ];
     private const TAILNET_SETTINGS = [
-        'tailnetEnabled', 'tailnetCoverage', 'tailnetNetworkMode', 'tailnetNetworkProfile', 'tailnetNetworkKillSwitch',
+        'tailnetEnabled', 'tailnetCoverage', 'tailnetNetworkMode', 'tailnetNetworkProfile', 'tailnetNetworkBackupProfile', 'tailnetNetworkKillSwitch',
     ];
     private const ASSIGNMENT = [
         'ip', 'interface', 'mac', 'ipv6', 'paused', 'kind', 'mode', 'label', 'profile', 'backup', 'killSwitch',
@@ -58,7 +58,8 @@ final class RoutingBackup
 
         $settings = $incoming['settings'] + [
             'tailnetEnabled' => '0', 'tailnetCoverage' => 'device', 'tailnetNetworkMode' => 'disabled',
-            'tailnetNetworkProfile' => '', 'tailnetNetworkKillSwitch' => '',
+            'tailnetNetworkProfile' => '', 'tailnetNetworkBackupProfile' => '', 'tailnetNetworkKillSwitch' => '',
+            'networkBackupProfile' => '',
         ];
         foreach ($settings as $field => $value) {
             $model->settings->$field = in_array($field, ['enabled', 'tailnetEnabled'], true) ? '0' : $value;
@@ -82,6 +83,14 @@ final class RoutingBackup
             $node->domains = implode(',', $row['domains']);
             $node->profile = $row['profile'];
             $node->scope = $row['scope'] ?? 'both';
+        }
+        foreach (array_keys(RouteGroups::all($model)) as $id) {
+            $model->groups->group->del(substr($id, strlen('group-')));
+        }
+        foreach ($incoming['groups'] as $row) {
+            $node = $model->groups->group->add(substr($row['id'], strlen('group-')));
+            $node->name = $row['name'];
+            $node->members = json_encode($row['members'], JSON_THROW_ON_ERROR);
         }
         if (count($model->performValidation()) !== 0) {
             throw new DomainException('OPNsense rejected the routing settings. Review existing interfaces and routes.');
@@ -243,8 +252,9 @@ final class RoutingBackup
             $assignments[] = ['id' => $id] + $row;
         }
         $services = array_values(SmartRouting::services($model));
-        $references = self::references($settings, $assignments, $services);
-        $routes = self::routeManifest($model, Policy::routes($model), $references);
+        $groups = array_values(RouteGroups::all($model));
+        $references = self::references($settings, $assignments, $services, $groups);
+        $routes = self::routeManifest($model, Policy::routes($model, false), $references);
         if ($requireComplete && count($routes) !== count($references)) {
             throw new DomainException('A routing policy refers to a missing exit. Correct the policy before exporting it.');
         }
@@ -257,7 +267,7 @@ final class RoutingBackup
                 throw new DomainException('A routing policy refers to a missing interface. Correct it before exporting.');
             }
         }
-        return compact('settings', 'mullvadCatalog', 'interfaces', 'assignments', 'services', 'routes');
+        return compact('settings', 'mullvadCatalog', 'interfaces', 'assignments', 'services', 'groups', 'routes');
     }
 
     private static function interfaceSignature(array $interface): string
@@ -333,6 +343,14 @@ final class RoutingBackup
                 $row = array_diff_key($row, array_diff_key(self::BYPASS_DEFAULTS, $document['assignments'][$index]));
             }
             unset($row);
+            if (!array_key_exists('groups', $document)) {
+                unset($legacy['groups']);
+            }
+            foreach (['networkBackupProfile', 'tailnetNetworkBackupProfile'] as $field) {
+                if (!array_key_exists($field, $document['settings'] ?? [])) {
+                    unset($legacy['settings'][$field]);
+                }
+            }
             if (!is_string($integrity) || $legacy === $policy || !hash_equals(self::integrity($key, $legacy), $integrity)) {
                 throw new DomainException('The backup file has changed since it was exported. Select the original file.');
             }
@@ -342,24 +360,63 @@ final class RoutingBackup
 
     private static function validatePolicy(array $document): array
     {
-        self::keys($document, ['settings', 'mullvadCatalog', 'interfaces', 'assignments', 'services', 'routes']);
+        self::keys($document, ['settings', 'mullvadCatalog', 'interfaces', 'assignments', 'services', 'groups', 'routes']);
+        $groups = $document['groups'] ?? [];
+        if (!is_array($groups) || !array_is_list($groups) || count($groups) > 128) {
+            throw new DomainException('The backup contains an invalid server group list.');
+        }
+        $groupMap = [];
+        foreach ($groups as $row) {
+            self::keys($row, ['id', 'name', 'members']);
+            $id = self::text($row['id'] ?? null, 64);
+            $name = self::text($row['name'] ?? null, 80, '/^[^\p{C}<>]{1,80}$/uD');
+            $members = $row['members'] ?? null;
+            if (!RouteGroups::isId($id) || isset($groupMap[$id]) || !is_array($members) ||
+                !array_is_list($members) || count($members) < 1 || count($members) > 128 ||
+                count(array_unique($members)) !== count($members)) {
+                throw new DomainException('The backup contains an invalid server group.');
+            }
+            foreach ($members as $member) {
+                if (!self::uuid($member)) {
+                    throw new DomainException('The backup contains an invalid group member.');
+                }
+            }
+            $groupMap[$id] = ['id' => $id, 'name' => $name, 'members' => $members];
+        }
         $settings = $document['settings'] ?? null;
         if (!is_array($settings)) {
             throw new DomainException('The backup routing settings are invalid.');
         }
         self::keys($settings, [...self::SETTINGS, ...self::TAILNET_SETTINGS]);
+        $hasTailnetSettings = array_intersect(self::TAILNET_SETTINGS, array_keys($settings)) !== [];
+        $settings += ['networkBackupProfile' => ''];
+        if ($hasTailnetSettings) {
+            $settings += ['tailnetNetworkBackupProfile' => ''];
+        }
         foreach (self::SETTINGS as $name) {
             self::text($settings[$name] ?? null, 2048);
         }
         self::oneOf($settings['smartAssignedOnly'], ['0', '1']);
         self::validateCoverage($settings['enabled'], $settings['coverage'], $settings['networkMode'],
-            $settings['networkProfile'], $settings['networkKillSwitch']);
-        if (array_intersect(self::TAILNET_SETTINGS, array_keys($settings)) !== []) {
+            $settings['networkProfile'], $settings['networkKillSwitch'], $groupMap);
+        if ($settings['networkBackupProfile'] !== '' &&
+            (!($settings['coverage'] === 'network' && Policy::usesBase($settings['networkMode'])) ||
+                $settings['networkBackupProfile'] === $settings['networkProfile'] ||
+                !self::validDestination($settings['networkBackupProfile'], $groupMap))) {
+            throw new DomainException('The backup has an invalid Whole-Network backup exit.');
+        }
+        if ($hasTailnetSettings) {
             foreach (self::TAILNET_SETTINGS as $name) {
                 self::text($settings[$name] ?? null, 64);
             }
             self::validateCoverage($settings['tailnetEnabled'], $settings['tailnetCoverage'],
-                $settings['tailnetNetworkMode'], $settings['tailnetNetworkProfile'], $settings['tailnetNetworkKillSwitch']);
+                $settings['tailnetNetworkMode'], $settings['tailnetNetworkProfile'], $settings['tailnetNetworkKillSwitch'], $groupMap);
+            if ($settings['tailnetNetworkBackupProfile'] !== '' &&
+                (!($settings['tailnetCoverage'] === 'network' && Policy::usesBase($settings['tailnetNetworkMode'])) ||
+                    $settings['tailnetNetworkBackupProfile'] === $settings['tailnetNetworkProfile'] ||
+                    !self::validDestination($settings['tailnetNetworkBackupProfile'], $groupMap))) {
+                throw new DomainException('The backup has an invalid Tailscale backup exit.');
+            }
         }
         foreach (['interfaces', 'strictInterfaces', 'smartInterfaces', 'tailscaleInterfaces'] as $name) {
             $ids = self::csv($settings[$name]);
@@ -409,10 +466,10 @@ final class RoutingBackup
                 ($row['ipv6'] !== '' && Policy::ipv6Address($row['ipv6']) !== $row['ipv6']) ||
                 ($row['networkBypassIpv6'] !== '' &&
                     ($row['networkBypass'] !== '1' || $row['networkBypassIpv6'] !== $row['ipv6'])) ||
-                (Policy::usesBase($row['mode']) ? !self::uuid($row['profile']) : $row['profile'] !== '') ||
+                (Policy::usesBase($row['mode']) ? !self::validDestination($row['profile'], $groupMap) : $row['profile'] !== '') ||
                 ($row['mode'] === 'full_multi' && ($row['failure'] !== 'block' || $row['killSwitch'] !== '1')) ||
                 ($row['failure'] === 'backup'
-                    ? ($row['mode'] !== 'full' || $row['backup'] === $row['profile'] || !self::uuid($row['backup']))
+                    ? ($row['mode'] !== 'full' || $row['backup'] === $row['profile'] || !self::validDestination($row['backup'], $groupMap))
                     : $row['backup'] !== '')
             ) {
                 throw new DomainException('The backup contains an invalid device rule or exit reference.');
@@ -435,7 +492,7 @@ final class RoutingBackup
             self::oneOf($scope, ['local', 'tailscale', 'both']);
             self::text($row['name'] ?? null, 256, '/^[^\p{C}<>]{1,64}$/uD');
             $profile = self::text($row['profile'] ?? null, 64);
-            if ($profile !== '' && $profile !== SmartRouting::BYPASS && !self::uuid($profile)) {
+            if ($profile !== '' && $profile !== SmartRouting::BYPASS && !self::validDestination($profile, $groupMap)) {
                 throw new DomainException('The backup contains an invalid Multi-Path exit reference.');
             }
             $domains = $row['domains'] ?? null;
@@ -461,30 +518,46 @@ final class RoutingBackup
             }
         }
         $interfaces = self::signatures($document['interfaces'] ?? null, self::interfaces($settings));
-        $routes = self::signatures($document['routes'] ?? null, self::references($settings, $assignments, $services));
-        return compact('settings', 'mullvadCatalog', 'interfaces', 'assignments', 'services', 'routes');
+        $routes = self::signatures($document['routes'] ?? null, self::references($settings, $assignments, $services, $groups));
+        return compact('settings', 'mullvadCatalog', 'interfaces', 'assignments', 'services', 'groups', 'routes');
     }
 
-    private static function validateCoverage(string $enabled, string $coverage, string $mode, string $profile, string $kill): void
+    private static function validateCoverage(string $enabled, string $coverage, string $mode, string $profile, string $kill, array $groups = []): void
     {
         self::oneOf($enabled, ['0', '1']);
         self::oneOf($coverage, ['device', 'network']);
         self::oneOf($mode, ['disabled', 'full', 'multi', 'full_multi', 'blocked']);
         self::oneOf($kill, ['', '0', '1']);
         $usesBase = $coverage === 'network' && Policy::usesBase($mode);
-        if (($profile !== '' && (!$usesBase || !self::uuid($profile))) ||
+        if (($profile !== '' && (!$usesBase || !self::validDestination($profile, $groups))) ||
             ($enabled === '1' && $usesBase && $profile === '')) {
             throw new DomainException('The backup has an invalid Whole-Network exit.');
         }
     }
 
-    private static function references(array $settings, array $assignments, array $services): array
+    private static function references(array $settings, array $assignments, array $services, array $groups = []): array
     {
-        $ids = [$settings['networkProfile'] ?? '', $settings['tailnetNetworkProfile'] ?? '', ...array_column($assignments, 'profile'),
-            ...array_column($assignments, 'backup'), ...array_column($services, 'profile')];
-        $ids = array_values(array_unique(array_diff($ids, ['', SmartRouting::BYPASS])));
+        $choices = [$settings['networkProfile'] ?? '', $settings['networkBackupProfile'] ?? '',
+            $settings['tailnetNetworkProfile'] ?? '', $settings['tailnetNetworkBackupProfile'] ?? '',
+            ...array_column($assignments, 'profile'), ...array_column($assignments, 'backup'),
+            ...array_column($services, 'profile')];
+        $groupMembers = [];
+        foreach ($groups as $group) {
+            $groupMembers[$group['id']] = $group['members'];
+        }
+        $ids = [];
+        foreach ($choices as $choice) {
+            if ($choice === '' || $choice === SmartRouting::BYPASS) continue;
+            array_push($ids, ...($groupMembers[$choice] ?? [$choice]));
+        }
+        $ids = array_values(array_unique($ids));
         sort($ids);
         return $ids;
+    }
+
+    private static function validDestination(string $id, array $groups): bool
+    {
+        return self::uuid($id) || isset($groups[$id]);
     }
 
     private static function interfaces(array $settings): array

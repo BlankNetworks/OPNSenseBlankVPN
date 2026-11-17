@@ -63,9 +63,19 @@ final class ProxyRuntime
         foreach (Policy::scopes($settings) as $scope) {
             if ($scope['coverage'] === 'network' && Policy::usesBase($scope['networkMode'])) {
                 $selected[] = $scope['networkProfile'];
+                if (($scope['networkBackupProfile'] ?? '') !== '') {
+                    $selected[] = $scope['networkBackupProfile'];
+                }
             }
         }
-        return array_intersect_key(self::routes($model), array_fill_keys($selected, true));
+        $routes = self::routes($model);
+        $aliases = RouteGroups::aliases($model, Policy::routes($model, false), Firewall::health());
+        foreach ($selected as $choice) {
+            if (isset($aliases[$choice])) {
+                $selected[] = $aliases[$choice]['id'];
+            }
+        }
+        return array_intersect_key($routes, array_fill_keys($selected, true));
     }
 
     public static function route(string $id, int $slot, string $node, string $name, string $core, string $protocol): array

@@ -11,7 +11,7 @@ final class OnDemand
         $settings = Policy::effectiveRouting($model);
         $assignments = Policy::assignments($model, true);
         $services = SmartRouting::forwardServices($settings, SmartRouting::services($model));
-        return self::selectExits($settings, $assignments, $services);
+        return RouteGroups::activeIds($model, array_keys(self::selectExits($settings, $assignments, $services)));
     }
 
     public static function selectExits(array $settings, array $assignments, array $activeServices): array
@@ -24,6 +24,9 @@ final class OnDemand
         foreach (Policy::scopes($settings) as $scope) {
             if ($scope['coverage'] === 'network' && Policy::usesBase($scope['networkMode'] ?? '')) {
                 $always[$scope['networkProfile']] = true;
+                if (($scope['networkBackupProfile'] ?? '') !== '') {
+                    $always[$scope['networkBackupProfile']] = true;
+                }
             }
         }
         foreach (Policy::deviceAssignments($settings, $assignments) as $row) {
