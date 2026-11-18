@@ -277,8 +277,7 @@ final class Resolver
             $scopePlan = self::listenerPlan($scope, $hostname, $host, $devices, $profiles, $services, $wanUpstreams,
                 self::usesWanFallback($scope), Policy::networkBypassAssignments($scope, $assignments) !== [],
                 $loaded, $baseDns, $matchers);
-            $wanted += $scopePlan['listeners'];
-            $matchers += $scopePlan['matcher'];
+            $wanted += $scopePlan;
         }
         return ['listeners' => $wanted, 'matcher' => array_values($matchers)];
     }
@@ -391,7 +390,7 @@ final class Resolver
                 $wanted[$port] = $config;
             }
         }
-        return ['listeners' => $wanted, 'matcher' => $matchers];
+        return $wanted;
     }
 
     private static function specialRouteRules(
