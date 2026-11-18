@@ -111,7 +111,7 @@ namespace OPNsense\BlankVpn {
     {
         public object $settings;
         public object $services;
-        public object $groups;
+        private object $groupField;
 
         public function __construct()
         {
@@ -127,10 +127,20 @@ namespace OPNsense\BlankVpn {
                     return [];
                 }
             }];
-            $this->groups = (object)['group' => new class {
+            $this->groupField = (object)['group' => new class {
                 public array $items = [];
                 public function iterateItems(): array { return $this->items; }
             }];
+        }
+
+        public function __get(string $name): mixed
+        {
+            return $name === 'groups' ? $this->groupField : null;
+        }
+
+        public function __isset(string $name): bool
+        {
+            return false;
         }
     }
 
@@ -635,6 +645,9 @@ namespace {
             return ['name' => 'USA', 'members' => json_encode(['jp', 'us'], JSON_THROW_ON_ERROR)];
         }
     };
+    checkRouting(!isset($groupModel->groups) &&
+        (RouteGroups::all($groupModel)[$groupId]['name'] ?? '') === 'USA',
+        'Read groups from the OPNsense model even when magic-property isset reports false.');
     $groupHealth = ['jp' => ['reachable' => false]];
     $groupRoute = RouteGroups::aliases($groupModel, $backupProfiles, $groupHealth, false, null, false)[$groupId] ?? [];
     $groupPolicies = $backupProfiles + [$groupId => $groupRoute];

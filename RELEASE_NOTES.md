@@ -205,6 +205,11 @@
 - Cover the full four-core table, failed status response, retry, and update check in the browser fixture at desktop and mobile widths.
 - Keep the core archive picker inside the Core panel on narrow screens; opening the panel no longer adds page overflow.
 
+## 0.8.55
+
+- Fix group discovery after dashboard refresh. OPNsense model fields support property access but report `false` from `isset`; reading groups must iterate the model field directly.
+- Add a regression test for OPNsense magic-property behavior so saved groups remain visible in Groups, Multi-Path, Whole-Network, and device routing choices after refresh.
+
 ## 0.8.54
 
 - Keep the saved group name, members, and ID selected after **Save Group** so the just-saved list remains visible and another save updates it instead of creating a duplicate.

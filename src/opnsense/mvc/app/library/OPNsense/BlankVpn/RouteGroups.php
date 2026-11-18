@@ -17,9 +17,6 @@ final class RouteGroups
     public static function all(BlankVpn $model): array
     {
         $groups = [];
-        if (!isset($model->groups)) {
-            return [];
-        }
         foreach ($model->groups->group->iterateItems() as $rawId => $node) {
             $id = self::PREFIX . $rawId;
             $row = Policy::fields($node);
