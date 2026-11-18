@@ -156,10 +156,8 @@ final class Resolver
                 ? Firewall::parseLoadedRules(self::command(['/sbin/pfctl', '-sr'], false)) : [];
             $profiles = self::verifiedDnsProfiles($profiles, $loaded);
             $wanUpstreams = WanEgress::dnsUpstreams($wan, $loaded);
-            $plan = self::scopedListenerPlan($settings, $hostname, $host, $assignments, $profiles, $services,
-                $wanUpstreams, $loaded, Firewall::health());
-            $wanted = $plan['listeners'];
-            $matcherConfig['listeners'] = $plan['matcher'];
+            $wanted = self::scopedListenerPlan($settings, $hostname, $host, $assignments, $profiles, $services,
+                $wanUpstreams, $loaded, Firewall::health(), $matcherConfig['listeners']);
         }
 
         if ($matcherConfig['listeners'] !== []) {
@@ -259,7 +257,8 @@ final class Resolver
         array $services,
         array $wanUpstreams,
         array $loaded,
-        array $health
+        array $health,
+        array &$matchers = []
     ): array {
         $baseDns = [];
         foreach ($profiles as $id => $profile) {
@@ -271,7 +270,6 @@ final class Resolver
             }
         }
         $wanted = [];
-        $matchers = [];
         foreach (Policy::scopes($settings) as $scope) {
             $devices = $scope['coverage'] === 'device' ? Policy::scopedAssignments($scope, $assignments) : [];
             $scopePlan = self::listenerPlan($scope, $hostname, $host, $devices, $profiles, $services, $wanUpstreams,
@@ -279,7 +277,8 @@ final class Resolver
                 $loaded, $baseDns, $matchers);
             $wanted += $scopePlan;
         }
-        return ['listeners' => $wanted, 'matcher' => array_values($matchers)];
+        $matchers = array_values($matchers);
+        return $wanted;
     }
 
     private static function listenerPlan(
