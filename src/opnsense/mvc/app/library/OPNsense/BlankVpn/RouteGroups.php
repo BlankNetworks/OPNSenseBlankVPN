@@ -17,7 +17,15 @@ final class RouteGroups
     public static function all(BlankVpn $model): array
     {
         $groups = [];
-        foreach ($model->groups->group->iterateItems() as $rawId => $node) {
+        // OPNsense model fields can be readable through magic access even
+        // when isset($model->groups) returns false. Some older/minimal models
+        // also omit this field entirely, so validate the resolved objects.
+        $groupField = @$model->groups;
+        $items = is_object($groupField) ? @$groupField->group : null;
+        if (!is_object($items) || !is_callable([$items, 'iterateItems'])) {
+            return [];
+        }
+        foreach ($items->iterateItems() as $rawId => $node) {
             $id = self::PREFIX . $rawId;
             $row = Policy::fields($node);
             $members = json_decode($row['members'] ?? '', true);
