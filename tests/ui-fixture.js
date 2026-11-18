@@ -1527,8 +1527,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     assert(listDownload === 'YouTube.txt' && (await listBlob.text()).includes('youtube.com'),
         'A saved Multi-Path list must download from its row.');
-    assert([...youtubeRow.cells[3].querySelectorAll('button')].map(button => button.textContent).join(',') ===
-        'Ping,Edit,Download,Remove', 'Multi-Path row actions must be Ping, Edit, Download, Remove.');
+    const multiPathActions = [...youtubeRow.cells[4].querySelectorAll('button')].map(button => button.textContent).join(',');
+    assert(multiPathActions === 'Ping,Edit,Download,Remove',
+        'Multi-Path row actions must be Ping, Edit, Download, Remove; found ' + multiPathActions + '.');
     const downRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('Unavailable route'));
     assert(downRow.cells[2].textContent.includes('Selected server unavailable · Matching traffic blocked') &&
         !youtubeRow.cells[2].textContent.includes('Matching traffic blocked'),
