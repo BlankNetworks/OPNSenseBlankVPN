@@ -205,6 +205,12 @@
 - Cover the full four-core table, failed status response, retry, and update check in the browser fixture at desktop and mobile widths.
 - Keep the core archive picker inside the Core panel on narrow screens; opening the panel no longer adds page overflow.
 
+## 0.8.53
+
+- Show a live Save Group result and reflect a successful save immediately in the saved group list and every routing server picker, even if a later dashboard refresh fails.
+- Keep groups out of VPN Login and Proxy Login. Removing a group deletes only that named selection; its VPN and proxy member servers remain saved.
+- Cover saved-list visibility, routing choices, login-list separation, and group-only removal in the browser fixture.
+
 ## 0.8.52
 
 - Fix Mullvad tunnel creation when reusing the router's single device key across servers. Check the relay's public endpoint against the active WAN route, and do not mistake the already-local inner tunnel address for a remote WAN destination.

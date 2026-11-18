@@ -366,6 +366,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(x => x.action === 'saveGroup' && x.data.name === 'Test failover' &&
         JSON.parse(x.data.members).join(',') === 'vpn1,proxy-proxy-1'),
         'Saving a group must persist its selected servers in order.');
+    const savedGroup = reply.dashboard.groups.find(group => group.name === 'Test failover');
+    assert(savedGroup && bv('saved-groups').textContent.includes('Test failover') &&
+        bv('group-save-status').textContent.includes('available in routing') &&
+        [...bv('network-profile').options].some(option => option.value === savedGroup.id),
+        'A saved group must appear in Groups and routing selections immediately.');
+    assert(!bv('profile-list').textContent.includes('Test failover') &&
+        !bv('proxy-list').textContent.includes('Test failover'),
+        'Groups must stay out of VPN Login and Proxy Login server lists.');
+    [...bv('saved-groups').querySelectorAll('button')].find(button => button.textContent === 'Remove').click();
+    await wait();
+    assert(!reply.dashboard.groups.some(group => group.id === savedGroup.id) &&
+        reply.dashboard.profiles.some(profile => profile.id === 'vpn1' && profile.name === 'Canada') &&
+        reply.proxyCatalog.nodes.some(node => node.id === 'proxy-1'),
+        'Removing a group must remove only its group selection and preserve every member server.');
     document.querySelector('[data-bv-section="network"]').click();
     const expectedDeviceColumns = 'Device,Address,Availability,Server,Routing,Ping,Actions';
     for (const table of [bv('device-list'), bv('tailnet-device-list')]) {

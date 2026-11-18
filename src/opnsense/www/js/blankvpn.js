@@ -1502,6 +1502,13 @@
             return [...servers, ...groups].sort(compareServers);
         }
 
+        function renderRoutingChoices() {
+            renderProfiles();
+            renderSettings();
+            renderServices();
+            if (state.section === 'groups') renderGroups();
+        }
+
         function renderGroups() {
             if (state.section !== 'groups') return;
             byId('group-catalog-status').textContent = state.proxyCatalogLoaded ? ''
@@ -1549,7 +1556,11 @@
                 const description = document.createElement('p'); description.className = 'text-muted';
                 description.textContent = names.join(' → '); row.append(description);
                 row.append(button('Edit', () => { state.groupDraft = {id: group.id, name: group.name, members: [...group.members]}; renderGroups(); }));
-                row.append(button('Remove', () => void mutate(null, () => api('removeGroup', {id: group.id}), 'Group removed.', refreshDashboard)));
+                row.append(button('Remove', () => void mutate(null, () => api('removeGroup', {id: group.id}),
+                    'Group removed.', () => {
+                        state.groups = state.groups.filter((saved) => saved.id !== group.id);
+                        renderRoutingChoices();
+                    })));
                 saved.append(row);
             }
         }
@@ -3432,9 +3443,13 @@
         byId('group-add').addEventListener('click', () => {
             const additions = [...root.querySelectorAll('[data-group-choice]:checked')].map((input) => input.value);
             state.groupDraft.members = [...new Set([...state.groupDraft.members, ...additions])];
+            byId('group-save-status').textContent = '';
             renderGroups();
         });
-        byId('group-name').addEventListener('input', (event) => { state.groupDraft.name = event.target.value; });
+        byId('group-name').addEventListener('input', (event) => {
+            state.groupDraft.name = event.target.value;
+            byId('group-save-status').textContent = '';
+        });
         byId('group-cancel').addEventListener('click', () => {
             state.groupDraft = {id: '', name: '', members: []}; renderGroups();
         });
@@ -3442,11 +3457,29 @@
             event.preventDefault();
             const draft = {...state.groupDraft, name: byId('group-name').value.trim()};
             if (!draft.members.length) {
+                byId('group-save-status').textContent = 'Add at least one VPN or proxy server before saving.';
                 notice('Add at least one VPN or proxy server to the group.', 'warning'); return;
             }
+            if (state.busy) {
+                byId('group-save-status').textContent = 'Another router operation is still running. Wait for it to finish, then save again.';
+                return;
+            }
             const payload = {id: draft.id, name: draft.name, members: JSON.stringify(draft.members)};
-            void mutate(event.submitter, () => api('saveGroup', payload), 'Server group saved.', () => {
+            const status = byId('group-save-status');
+            status.textContent = 'Saving group…';
+            let saved = false;
+            void mutate(event.submitter || byId('group-save'), () => api('saveGroup', payload), 'Server group saved.', (result) => {
+                const group = {id: result.id, name: draft.name, members: [...draft.members]};
+                const index = state.groups.findIndex((item) => item.id === group.id);
+                if (index < 0) state.groups.push(group);
+                else state.groups[index] = group;
                 state.groupDraft = {id: '', name: '', members: []};
+                saved = true;
+                renderRoutingChoices();
+            }).then(() => {
+                status.textContent = saved
+                    ? 'Group saved. It is available in routing server selections; the VPN and proxy server lists are unchanged.'
+                    : 'Group was not saved. Read the error above, then correct it and try again.';
             });
         });
 

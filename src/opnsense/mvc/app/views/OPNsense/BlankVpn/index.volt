@@ -379,6 +379,7 @@
                     <ol id="bv-group-members"></ol>
                     <div class="bv-actions"><button type="submit" id="bv-group-save" class="btn btn-primary">Save Group</button>
                         <button type="button" id="bv-group-cancel" class="btn btn-default">Cancel</button></div>
+                    <p id="bv-group-save-status" class="text-muted" role="status" aria-live="polite"></p>
                 </section>
             </div>
         </form>
