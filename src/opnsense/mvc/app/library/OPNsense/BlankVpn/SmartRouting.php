@@ -11,7 +11,8 @@ final class SmartRouting
 {
     public const BYPASS = 'bypass';
     public const PORT = Resolver::LOCAL_PORT + 6;
-    public const MAX_SERVICES = 16;
+    public const MAX_SERVICES = 17;
+    public const MAX_CUSTOM_SERVICES = 16;
     public const MAX_DOMAINS = 1000;
     public const MAX_DOMAIN_BYTES = 131072;
     public const TABLE_MAX_AGE = 86400;
@@ -32,10 +33,18 @@ final class SmartRouting
         $services = [];
         foreach ($model->services->service->iterateItems() as $id => $node) {
             $row = Policy::fields($node);
+            if ($id === ChinaRules::ID && ($row['domains'] ?? '') === ChinaRules::MARKER) {
+                $services[$id] = ChinaRules::service($row);
+                continue;
+            }
             $services[$id] = [
                 'id' => $id, 'name' => $row['name'], 'profile' => $row['profile'] ?? '',
                 'domains' => self::destinations($row['domains']), 'scope' => ($row['scope'] ?? '') ?: 'both'
             ];
+        }
+        if (!isset($services[ChinaRules::ID])) {
+            // A reserved ID keeps the built-in feed independent from user lists.
+            $services[ChinaRules::ID] = ChinaRules::service(['profile' => '', 'scope' => 'both']);
         }
         return $services;
     }
@@ -111,8 +120,16 @@ final class SmartRouting
 
     public static function bypassTable(array $services): string
     {
-        $domains = self::domainEntries(array_merge(...array_column($services, 'domains')));
-        return self::tableName('bvb_', $domains);
+        $domains = [];
+        $managed = false;
+        foreach ($services as $service) {
+            if (!empty($service['managed'])) {
+                $managed = true;
+                continue;
+            }
+            array_push($domains, ...self::domainEntries($service['domains']));
+        }
+        return self::tableName('bvb_', $domains, $managed ? [ChinaRules::digest()] : []);
     }
 
     public static function domains(string $input): array
@@ -278,11 +295,17 @@ final class SmartRouting
 
     public static function table(array $service): string
     {
+        if (!empty($service['managed']) && self::hasDomains($service['domains'])) {
+            return self::tableName('bvs_', [], [$service['id'], (string)$service['profile'], ChinaRules::digest()]);
+        }
         return self::tableName('bvs_', self::domainEntries($service['domains']), [$service['id'], $service['profile']]);
     }
 
     public static function addressTable(array $service): string
     {
+        if (!empty($service['managed']) && self::addressEntries($service['domains']) !== []) {
+            return self::tableName('bvi_', [], [$service['id'], (string)$service['profile'], ChinaRules::digest()]);
+        }
         return self::tableName('bvi_', self::addressEntries($service['domains']), [$service['id'], $service['profile']]);
     }
 
@@ -332,12 +355,63 @@ final class SmartRouting
         foreach (self::boundServices($services) as $service) {
             $profile = $profiles[$service['profile']] ?? [];
             $source = explode('/', $profile['address'] ?? '')[0];
-            $servers = self::profileDns($profile);
+            // Resolver::verifiedDnsProfiles() removes provider DNS endpoints
+            // unless their tunnel route and fail-closed PF guard are loaded.
+            $servers = $profile['dns'] ?? [];
             $bypass = $service['profile'] === self::BYPASS;
             if ($bypass && $forwardOnly) {
                 continue;
             }
             $table = $bypass ? $bypassTable : self::table($service);
+            $serviceDomains = self::domainEntries($service['domains']);
+            if (!empty($service['managed'])) {
+                // Keep the large ruleset out of config.xml and avoid one dnsmasq line per domain.
+                foreach (array_chunk($serviceDomains, 128) as $chunk) {
+                    if (!$bypass) {
+                        $chunk = array_values(array_filter($chunk, static function (string $name) use ($bypassSuffixes): bool {
+                            $name = ltrim($name, '.');
+                            if (isset($bypassSuffixes[$name])) {
+                                return false;
+                            }
+                            foreach (self::parentDomains($name) as $parent) {
+                                if (isset($bypassSuffixes[$parent])) {
+                                    return false;
+                                }
+                            }
+                            return true;
+                        }));
+                    }
+                    if ($chunk === []) {
+                        continue;
+                    }
+                    $names = implode('/', array_map(static fn (string $name): string => ltrim($name, '.'), $chunk));
+                    if ($bypass) {
+                        $lines[] = "ipset=/{$names}/{$table}";
+                        if ($bypassUpstreams === []) {
+                            $lines[] = "local=/{$names}/";
+                        }
+                        foreach ($bypassUpstreams as $upstream) {
+                            $lines[] = "server=/{$names}/{$upstream}";
+                        }
+                    } elseif ($availableServices !== null && !isset($availableServices[$service['id']])) {
+                        $lines[] = "local=/{$names}/";
+                    } elseif ($forwardPort !== null) {
+                        $lines[] = "server=/{$names}/127.0.0.1#{$forwardPort}";
+                    } else {
+                        $lines[] = "ipset=/{$names}/{$table}";
+                        if (isset($profile['proxyDns'])) {
+                            $lines[] = "server=/{$names}/127.0.0.1#{$profile['proxyDns']}";
+                        } elseif (!filter_var($source, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || $servers === []) {
+                            $lines[] = "local=/{$names}/";
+                        } else {
+                            foreach ($servers as $server) {
+                                $lines[] = "server=/{$names}/{$server}@{$source}";
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             foreach (self::domainEntries($service['domains']) as $domain) {
                 $domain = ltrim($domain, '.');
                 if ($bypass) {

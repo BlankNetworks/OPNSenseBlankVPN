@@ -1,3 +1,27 @@
+## 0.8.60
+
+- Add an optional advanced DNS matcher for exact-name, keyword and regular-expression China rules. It starts in shadow mode; enabling it routes matches through the selected VPN, proxy or explicit WAN bypass resolver and learns answers only into the matching PF destination table.
+- Keep regular-expression matching semantics without widening exact or pattern rules into DNS suffix rules. Existing suffix, address/CIDR and custom Multi-Path behavior remains on the existing dnsmasq and PF paths.
+- Require verified tunnel DNS routes and their PF block guards before using provider DNS endpoints; unmatched provider resolvers fail closed when those checks are not present.
+- Use Blank VPN terminology in the interface and backend documentation. OpenWrt Passwall is referenced only as inspiration for the built-in China rule coverage.
+
+## 0.8.59
+
+- Extend Blank's built-in China list with `geosite:cn` domains and `geoip:cn` IPv4/IPv6 ranges from maintained geographic data files, alongside China domain and route feeds. The rule coverage is inspired by OpenWrt Passwall.
+- Parse the GeoSite and GeoIP protobuf data with bounded input sizes and validate the CN dataset before atomic replacement. Keep the prior dataset when any source is invalid or too small.
+- Treat the China IPv4 and IPv6 CIDR providers as alternatives, so a failed mirror does not block a valid update from the other provider.
+- Convert GeoSite regex entries to DNS suffixes only when the regular expression has identical suffix semantics. Keep exact-name, plain, and other regex entries out of routing and report their counts instead of silently widening their match.
+- Surface GeoSite/GeoIP counts and the number of exact or pattern rules whose matching semantics differ from Blank's DNS-suffix/PF model, so those differences are visible to operators.
+- Update the About and pinned SSH install documentation for 0.8.59.
+
+## 0.8.58
+
+- Add a built-in, unassigned China Multi-Path list seeded on install and upgrade. Refresh its large rule set from China domain and route sources inspired by OpenWrt Passwall, without storing the feed contents in `config.xml`.
+- Store validated, merged China domain, IPv4, and IPv6 feeds in a compressed private runtime cache. Failed or unexpectedly small downloads keep the last working rules; updates show per-family counts and source status.
+- Group large domain sets into compact DNS rules and use content-addressed PF tables so a refresh applies the new set without expanding ordinary custom-list limits.
+- Keep the China list in routing backups as a source marker and destination selection; the large downloaded data is refreshed from its upstream feeds on the target router.
+- Add the China feed update guidance and installer version to the About and SSH install documentation.
+
 - VPN Login has a VPN Service picker, an Add server action and a separate Saved VPN servers list. LAN and Tailscale assignments are managed in Network Settings.
 - Adding another Mullvad server preserves existing tunnels and rules. Removed tunnels make their device keys available for reuse.
 - Saved VPN servers show Standby, Ready, Error or Disabled. Error banners and failed tunnel test details can be dismissed.
@@ -210,6 +234,11 @@
 - Resolve proxy endpoint hostnames with encrypted bootstrap DNS in Mihomo, Xray, and sing-box instead of the router's ordinary system resolver. Keep proxy client DNS on the selected upstream and stop returning unsupported IPv6 answers from the proxy DNS listener.
 - Block a known routed device IPv6 address from using ISP egress even when its IPv4 failure action is set to WAN.
 - Add regression checks for encrypted proxy DNS configuration, single-device IPv6 fail-open, and document the tested privacy properties and limits for encrypted DNS, WebRTC, IPv6, and peer-to-peer traffic.
+
+## 0.8.57
+
+- In Multi-Path, show Service, Server, Routing, Ping, and Actions as separate columns. Give the Server selector a narrower maximum width and keep row actions wrapped within their column.
+- When Ping is pressed for a server group, test the first server in its saved order and display that server's result in the Ping column.
 
 ## 0.8.55
 

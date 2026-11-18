@@ -98,17 +98,17 @@ ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubuser
 
 To pin this release instead, use the following command. It also checks the installer digest before running it.
 
-Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.56** on a supported amd64 or aarch64 OPNsense router.
+Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.60** on a supported amd64 or aarch64 OPNsense router.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.56.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.56/scripts/install.sh && sha256 -c fd473bfa4f27fbea1a5f91b8b612f04071bbb8dc26d857a239797724096d2614 /tmp/blankvpn-install-0.8.56.sh && sh /tmp/blankvpn-install-0.8.56.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.60.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.60/scripts/install.sh && sha256 -c 55205bd9f471b93033e9e94710123d65c4fdc3c09b8cc56aa2ce53753713fb6b /tmp/blankvpn-install-0.8.60.sh && sh /tmp/blankvpn-install-0.8.60.sh'
 ```
 
 The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.
 
 ### Download on your computer
 
-1. Open the [0.8.56 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.56), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+1. Open the [0.8.60 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.60), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
 2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 
@@ -280,7 +280,10 @@ For a domain-based test, configure the peer to send ordinary UDP/TCP port 53 DNS
 
 ## Route Netflix or another service
 
-1. Open **Multi-Path Settings**. Choose the Netflix preset, paste your own domains, or load a plain-text or comma-separated file. Each list accepts up to 1,000 unique destinations and 128 KiB of input. Enter domains, IP addresses or CIDRs on separate lines or separated by commas. Lines may include `#` comments.
+1. Open **Multi-Path Settings**. The built-in **China** list is available after install and starts unassigned. Choose **Get Rules** or **Update Rules** to fetch China domain and IPv4/IPv6 route data, including GeoSite CN and GeoIP CN. The rule coverage is inspired by OpenWrt Passwall. Blank stores compressed data in its private runtime directory instead of `config.xml`; a failed or unexpectedly small update keeps the last working set. Rules update only when requested. The built-in list has capacity for 250,000 domains and 100,000 IP ranges. Custom lists still accept up to 1,000 destinations and 128 KiB of input. Choose another preset, paste your own domains, or import a plain-text or comma-separated custom file. Lines may include `#` comments. GeoSite regex rules that reduce exactly to a DNS suffix are imported by the existing dnsmasq path. Exact-name, keyword, and other regex entries use Blank's advanced hostname matcher. It starts in **Shadow** mode, which evaluates a match without changing routing. After reviewing the mode, press **Enable Advanced** on the China row to route those matches through the selected VPN or proxy. The matcher sends DNS through Blank's per-exit resolver, adds IPv4 and IPv6 answers to the selected PF table, and uses the existing table expiry cleanup. IPv6 remains blocked by Blank's tunnel egress guard. If no safe per-exit DNS path is ready, the query fails instead of falling back to the ISP. Existing suffix and IP/CIDR lists continue using their current DNSmasq/PF path.
+1. Open **Multi-Path Settings**. The built-in **China** list is available after install and starts unassigned. Choose **Get Rules** or **Update Rules** to fetch China domain and IPv4/IPv6 route data, including GeoSite CN and GeoIP CN. The rule coverage is inspired by OpenWrt Passwall. Blank stores compressed data in its private runtime directory instead of `config.xml`; a failed or unexpectedly small update keeps the last working set. Rules update only when requested. The built-in list has capacity for 250,000 domains and 100,000 IP ranges. Custom lists still accept up to 1,000 destinations and 128 KiB of input. Choose another preset, paste your own domains, or import a plain-text or comma-separated custom file. Lines may include `#` comments. GeoSite regex rules that reduce exactly to a DNS suffix are imported by the existing dnsmasq path. Exact-name, keyword, and other regex entries use Blank's advanced hostname matcher. It starts in **Shadow** mode, which evaluates a match without changing routing. After reviewing the mode, press **Enable Advanced** on the China row to route those matches through the selected VPN or proxy. The matcher sends DNS through Blank's per-exit resolver, adds IPv4 and IPv6 answers to the selected PF table, and uses the existing table expiry cleanup. IPv6 remains blocked by Blank's tunnel egress guard. If no safe per-exit DNS path is ready, the query fails instead of falling back to the ISP. Existing suffix and IP/CIDR lists continue using their current dnsmasq/PF path.
+
+Blank redirects client DNS over TCP/UDP port 53 to its selected resolver. With Kill Switch enabled, the firewall blocks routed client traffic if the protected tunnel path is unavailable, including IPv6 where that path is not supported. DNS-over-HTTPS and DNS-over-TLS use ordinary client traffic rules; Blank does not inspect encrypted DNS inside those connections. A route explicitly set to **Bypass** intentionally uses the local WAN/ISP.
 
    | Entry | Matches |
    | --- | --- |

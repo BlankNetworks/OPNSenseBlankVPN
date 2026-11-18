@@ -3,6 +3,7 @@
 require_once('/usr/local/etc/inc/config.inc');
 
 use OPNsense\BlankVpn\BlankVpn;
+use OPNsense\BlankVpn\ChinaRules;
 use OPNsense\BlankVpn\DeviceBindings;
 use OPNsense\BlankVpn\Diagnostics;
 use OPNsense\BlankVpn\Firewall;
@@ -91,6 +92,10 @@ try {
             break;
         case 'post_install':
             Operations::exclusive(function () {
+                Operations::change(static function (BlankVpn $model): array {
+                    ChinaRules::ensureList($model);
+                    return [];
+                });
                 $model = new BlankVpn();
                 $settings = Policy::settings($model);
                 if ($settings['dashboardBind'] === 'tailnet') {

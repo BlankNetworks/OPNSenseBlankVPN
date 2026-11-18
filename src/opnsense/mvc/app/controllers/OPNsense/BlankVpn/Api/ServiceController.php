@@ -8,6 +8,7 @@ use OPNsense\Core\Backend;
 use OPNsense\Core\Config;
 use OPNsense\BlankVpn\BlankVpn;
 use OPNsense\BlankVpn\DeviceIdentity;
+use OPNsense\BlankVpn\ChinaRules;
 use OPNsense\BlankVpn\Diagnostics;
 use OPNsense\BlankVpn\Firewall;
 use OPNsense\BlankVpn\Ivpn;
@@ -346,6 +347,14 @@ class ServiceController extends ApiControllerBase
             }
             $savedProviders['mysterium'] = !empty($mystAuth['authenticated']);
             $savedProviders['ivpn'] = !empty($ivpnAuth['saved']);
+            $chinaStatus = ChinaRules::status();
+            $publicServices = array_map(static function (array $service): array {
+                if (!empty($service['managed'])) {
+                    $service['entryCount'] = (int)($service['entryCount'] ?? count($service['domains']));
+                    $service['domains'] = [];
+                }
+                return $service;
+            }, array_values($services));
             return $discovery + [
                 'language' => Language::dashboard(),
                 'profiles' => array_values($profiles),
@@ -370,8 +379,9 @@ class ServiceController extends ApiControllerBase
                 'assignments' => array_values($assignments),
                 'settings' => $settings,
                 'activeSmartInterfaces' => $routing['smartInterfaces'],
-                'services' => array_values($services),
+                'services' => $publicServices,
                 'servicePresets' => SmartRouting::PRESETS,
+                'chinaRules' => $chinaStatus,
                 'canManage' => $canManage
             ];
         });
@@ -2238,6 +2248,72 @@ class ServiceController extends ApiControllerBase
         }), true, true);
     }
 
+    public function updateChinaRulesAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $previousStatus = ChinaRules::status();
+            $status = ChinaRules::update(static function (array $destinations): void {
+                self::validateChinaOverlap(new BlankVpn(), $destinations);
+            });
+            try {
+                $result = Operations::change(function (BlankVpn $model) use ($status) {
+                    $service = SmartRouting::services($model)[ChinaRules::ID] ?? null;
+                    $settings = Policy::effectiveRouting($model);
+                    if ($service !== null && $service['profile'] !== '') {
+                        self::validateChinaOverlap($model, ChinaRules::destinations());
+                    }
+                    $applied = $service === null || $service['profile'] === '' || $service['domains'] === []
+                        ? ['reload' => false]
+                        : $this->serviceChange($model, $settings, [$service]);
+                    return $applied + ['chinaRules' => $status];
+                });
+                ChinaRules::prune();
+                return $result;
+            } catch (\Throwable $error) {
+                ChinaRules::restore($previousStatus);
+                if (!empty($previousStatus['available'])) {
+                    try {
+                        Operations::change(static fn (BlankVpn $model): array => ['reload' => true]);
+                    } catch (\Throwable) {
+                        syslog(LOG_ERR, 'Blank VPN could not restore the previously active China routing rules.');
+                        throw new \DomainException('The previous China rules were restored in storage, but OPNsense could not reload them. Check the active firewall rules.');
+                    }
+                }
+                throw $error;
+            }
+        }), true, true);
+    }
+
+    public function setChinaMatcherAction()
+    {
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $enabled = $this->input('enabled', 1);
+            if (!in_array($enabled, ['0', '1'], true)) {
+                throw new \DomainException('Choose whether advanced China hostname matching is enabled.');
+            }
+            $previous = ChinaRules::matcherMode();
+            $next = $enabled === '1' ? 'route' : 'shadow';
+            ChinaRules::setMatcherMode($next);
+            try {
+                return Operations::change(static fn (BlankVpn $model): array => [
+                    'reload' => true, 'chinaRules' => ChinaRules::status(),
+                    'message' => $next === 'route'
+                        ? 'Advanced China hostname matching is enabled.'
+                        : 'Advanced China hostname matching is in shadow mode.',
+                ]);
+            } catch (\Throwable $error) {
+                ChinaRules::setMatcherMode($previous);
+                try {
+                    Operations::change(static fn (BlankVpn $model): array => ['reload' => true]);
+                } catch (\Throwable) {
+                    syslog(LOG_ERR, 'Blank VPN could not restore the previous China DNS matcher mode.');
+                    throw new \DomainException('The DNS matcher setting was restored, but routing could not be reloaded. Check the active firewall rules.');
+                }
+                throw $error;
+            }
+        }), true, true);
+    }
+
     public function saveGroupAction()
     {
         return $this->respond(fn () => Operations::exclusive(function () {
@@ -2314,10 +2390,17 @@ class ServiceController extends ApiControllerBase
             if ($id !== '' && $previous === null) {
                 throw new \DomainException('This Multi-Path list no longer exists.');
             }
-            if ($id === '' && count($services) >= SmartRouting::MAX_SERVICES) {
+            if ($id === '' && count(array_filter($services, static fn (array $service): bool => empty($service['managed']))) >=
+                SmartRouting::MAX_CUSTOM_SERVICES) {
                 throw new \DomainException('Remove an existing service before adding another.');
             }
-            $domains ??= $previous['domains'];
+            if (!empty($previous['managed']) && $name !== null) {
+                throw new \DomainException('The built-in China list is managed by its rule feeds and cannot be edited as a custom list.');
+            }
+            $domains ??= !empty($previous['managed']) ? ChinaRules::destinations() : $previous['domains'];
+            if (!empty($previous['managed']) && $profileId !== '' && $domains === []) {
+                throw new \DomainException('Update the China rules before assigning this list.');
+            }
             $scope = $scope ?: ($previous['scope'] ?? 'local');
             if (!in_array($scope, ['local', 'tailscale', 'both'], true)) {
                 throw new \DomainException('Choose where to apply this Multi-Path list.');
@@ -2341,6 +2424,11 @@ class ServiceController extends ApiControllerBase
                 }
             }
             $node = $id === '' ? $model->services->service->add() : $model->services->service->getChild($id);
+            if ($node === null && !empty($previous['managed']) && $id === ChinaRules::ID) {
+                $node = $model->services->service->add($id);
+                $node->name = 'China';
+                $node->domains = ChinaRules::MARKER;
+            }
             if ($name !== null) {
                 $node->name = $name;
                 $node->domains = implode(',', $domains);
@@ -2374,12 +2462,32 @@ class ServiceController extends ApiControllerBase
         return ['reload' => $reload, 'killSwitchReset' => array_values(array_unique($reset))];
     }
 
+    private static function validateChinaOverlap(BlankVpn $model, array $destinations): void
+    {
+        $services = SmartRouting::services($model);
+        $china = $services[ChinaRules::ID] ?? null;
+        if ($china === null || $china['profile'] === '') {
+            return;
+        }
+        unset($services[ChinaRules::ID]);
+        $bypass = $china['profile'] === SmartRouting::BYPASS;
+        $others = array_filter($services, static fn (array $service): bool =>
+            ($service['profile'] ?? '') !== '' &&
+            (($service['profile'] === SmartRouting::BYPASS) === $bypass));
+        foreach (['local', 'tailscale'] as $scope) {
+            SmartRouting::checkOverlap(SmartRouting::forScope($others, $scope), ChinaRules::ID, $destinations);
+        }
+    }
+
     public function removeServiceAction()
     {
         return $this->respond(fn () => Operations::exclusive(function () {
             $id = $this->input('id', 64);
             return Operations::change(function (BlankVpn $model) use ($id) {
                 $service = SmartRouting::services($model)[$id] ?? null;
+                if (!empty($service['managed'])) {
+                    throw new \DomainException('The built-in China list cannot be removed.');
+                }
                 if ($service === null || !$model->services->service->del($id)) {
                     throw new \DomainException('This Multi-Path list no longer exists.');
                 }

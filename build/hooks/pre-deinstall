@@ -13,8 +13,10 @@ fi
     }
     $nodes = $config->xpath("/opnsense/OPNsense/BlankVpn");
     foreach ($nodes ?: [] as $vpn) {
+        $services = $vpn->xpath("services/service[domains != '@passwall-china']") ?: [];
         if ((string) $vpn->settings->enabled === "1" || (string) $vpn->settings->tailnetEnabled === "1" ||
-            count($vpn->xpath("profiles/profile | assignments/assignment | services/service | proxyRoutes/route | nativeRoutes/route") ?: []) !== 0) {
+            count($vpn->xpath("profiles/profile | assignments/assignment | proxyRoutes/route | nativeRoutes/route") ?: []) !== 0 ||
+            count($services) !== 0) {
             fwrite(STDERR, "Disable Blank VPN & Proxy and remove its service rules, assignments, and profiles before removing the package.\n");
             exit(1);
         }

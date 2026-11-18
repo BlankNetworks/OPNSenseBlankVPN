@@ -679,11 +679,19 @@
         </form>
         <div class="bv-scroll">
             <table class="table bv-table bv-services">
+                <colgroup>
+                    <col class="bv-service-name-column">
+                    <col class="bv-service-server-column">
+                    <col class="bv-service-routing-column">
+                    <col class="bv-service-ping-column">
+                    <col class="bv-service-actions-column">
+                </colgroup>
                 <thead>
                     <tr>
-                        <th scope="col">Service and entries</th>
+                        <th scope="col">Service</th>
                         <th scope="col">Server</th>
                         <th scope="col">Routing</th>
+                        <th scope="col">Ping</th>
                         <th scope="col"><span class="sr-only">Actions</span></th>
                     </tr>
                 </thead>

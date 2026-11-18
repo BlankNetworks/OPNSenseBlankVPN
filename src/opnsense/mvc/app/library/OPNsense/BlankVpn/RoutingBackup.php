@@ -251,7 +251,13 @@ final class RoutingBackup
             }
             $assignments[] = ['id' => $id] + $row;
         }
-        $services = array_values(SmartRouting::services($model));
+        $services = array_values(array_map(static function (array $service): array {
+            if (!empty($service['managed'])) {
+                $service['domains'] = [ChinaRules::MARKER];
+                unset($service['managed'], $service['entryCount']);
+            }
+            return $service;
+        }, SmartRouting::services($model)));
         $groups = array_values(RouteGroups::all($model));
         $references = self::references($settings, $assignments, $services, $groups);
         $routes = self::routeManifest($model, Policy::routes($model, false), $references);
@@ -499,13 +505,17 @@ final class RoutingBackup
             if (!is_array($domains) || !array_is_list($domains) || count($domains) > SmartRouting::MAX_DOMAINS) {
                 throw new DomainException('The backup contains an invalid Multi-Path domain list.');
             }
+            $managedChina = ($row['id'] ?? '') === ChinaRules::ID && $domains === [ChinaRules::MARKER];
+            if ($managedChina && !empty(ChinaRules::status()['available'])) {
+                $domains = ChinaRules::destinations();
+            }
             foreach ($domains as $domain) {
                 self::text($domain, 254);
             }
-            if (SmartRouting::destinations(implode(',', $domains)) !== $domains) {
+            if (!$managedChina && SmartRouting::destinations(implode(',', $domains)) !== $domains) {
                 throw new DomainException('The backup contains an improperly formatted Multi-Path domain list.');
             }
-            if ($profile !== '') {
+            if ($profile !== '' && (!$managedChina || $domains !== [ChinaRules::MARKER])) {
                 $sameMode = $profile === SmartRouting::BYPASS ? $bypass : $forward;
                 foreach ($scope === 'both' ? ['local', 'tailscale'] : [$scope] as $ingress) {
                     SmartRouting::checkOverlap(SmartRouting::forScope($sameMode, $ingress), '', $domains);

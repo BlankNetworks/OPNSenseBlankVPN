@@ -52,6 +52,7 @@
             proxyCatalogLoaded: false,
             proxyCatalogRequest: null,
             services: [],
+            chinaRules: {available: false},
             serviceTests: new Map(),
             proxyNodes: [],
             proxyFeeds: [],
@@ -1735,22 +1736,50 @@
                 for (const service of state.services) {
                     const row = body.insertRow();
                     const entries = list(service.domains);
+                    const entryCount = service.managed ? Number(service.entryCount || 0) : entries.length;
                     const saved = service.profile || '';
+                    const group = state.groups.find((item) => item.id === saved);
+                    const pingTargetId = group ? group.members?.[0] : saved;
+                    const pingTargetName = pingTargetId ? profileName(pingTargetId) : profileName(saved);
                     const scope = {local: 'Local', tailscale: 'Tailscale', both: 'Local and Tailscale'}[service.scope || 'both'];
-                    const summary = cell(row, service.name, 'Service and entries',
-                        scope + ' · ' + entries.length + (entries.length === 1 ? ' entry' : ' entries'));
+                    const managedDetail = service.managed
+                        ? (state.chinaRules.error
+                            ? 'China rule update failed · previous set kept · ' + state.chinaRules.error
+                            : state.chinaRules.available
+                                ? 'China rules · ' + Number(state.chinaRules.domains || 0).toLocaleString() + ' domains · '
+                                    + Number(state.chinaRules.ipv4 || 0).toLocaleString() + ' IPv4 · '
+                                    + Number(state.chinaRules.ipv6 || 0).toLocaleString() + ' IPv6 · GeoSite '
+                                    + Number(state.chinaRules.geoDomains || 0).toLocaleString() + ' · GeoIP '
+                                    + Number(state.chinaRules.geoNetworks || 0).toLocaleString()
+                                    + (Number(state.chinaRules.regexSuffixDomains || 0) > 0
+                                        ? ' · ' + Number(state.chinaRules.regexSuffixDomains).toLocaleString() + ' suffix-safe regex rules matched'
+                                        : '')
+                                    + (Number(state.chinaRules.unsupportedGeoRules || 0) > 0
+                                        ? ' · ' + Number(state.chinaRules.unsupportedGeoRules).toLocaleString() + ' advanced hostname rules'
+                                        : '')
+                                    + (Number(state.chinaRules.exactGeoDomains || 0) > 0
+                                        ? ' · ' + Number(state.chinaRules.exactGeoDomains).toLocaleString() + ' exact-name rules need exact matching'
+                                        : '')
+                                    + (Number(state.chinaRules.unsupportedGeoRules || 0) > 0
+                                        ? ' · Advanced matcher: ' + (state.chinaRules.matcherMode === 'route' ? 'active' : 'shadow')
+                                        : '')
+                                    + ' · updated '
+                                    + new Date(Number(state.chinaRules.updated) * 1000).toLocaleString()
+                                : 'China rules · Update required · unassigned by default')
+                        : scope + ' · ' + entryCount + (entryCount === 1 ? ' entry' : ' entries');
+                    cell(row, service.name, 'Service', managedDetail);
                     const pingResult = document.createElement('small');
                     pingResult.className = 'bv-service-ping';
                     pingResult.setAttribute('role', 'status');
                     const previousTest = state.serviceTests.get(service.id);
-                    pingResult.textContent = previousTest?.profile === saved ? previousTest.text : '';
-                    pingResult.dataset.result = previousTest?.profile === saved ? previousTest.kind : '';
-                    summary.append(pingResult);
+                    const testMatches = previousTest?.profile === saved && previousTest.target === pingTargetId;
+                    pingResult.textContent = testMatches ? previousTest.text : '';
+                    pingResult.dataset.result = testMatches ? previousTest.kind : '';
                     const destination = row.insertCell();
                     destination.dataset.label = 'Server';
                     if (state.canManage) {
                         const form = document.createElement('form');
-                        form.className = 'bv-inline-form';
+                        form.className = 'bv-inline-form bv-service-destination';
                         const select = document.createElement('select');
                         select.className = 'form-control';
                         select.setAttribute('aria-label', 'Destination for ' + service.name);
@@ -1803,26 +1832,33 @@
                     const inactive = blocked ? 'Internet blocked' : bypassPaused ? 'Bypass paused by Kill Switch' : 'Inactive';
                     cell(row, saved ? (status.join(' / ') || inactive) : 'Saved',
                         'Routing', Number.isInteger(service.learned) ? service.learned + ' learned addresses' : '');
+                    const pingCell = row.insertCell();
+                    pingCell.dataset.label = 'Ping';
+                    pingCell.append(pingResult);
                     const actions = row.insertCell();
+                    actions.dataset.label = 'Actions';
+                    actions.className = 'bv-service-actions';
                     if (state.canManage) {
                         const test = button('Ping', async () => {
                             test.disabled = true;
-                            pingResult.textContent = 'Testing ' + profileName(saved) + '…';
+                            const targetId = pingTargetId;
+                            pingResult.textContent = 'Testing ' + pingTargetName + '…';
                             pingResult.dataset.result = 'pending';
                             try {
-                                const profile = state.profiles.find((item) => item.id === saved);
-                                const node = state.proxyNodes.find((item) => 'proxy-' + item.id === saved);
+                                const profile = state.profiles.find((item) => item.id === targetId);
+                                const node = state.proxyNodes.find((item) => 'proxy-' + item.id === targetId);
                                 if (!profile && !node) {
-                                    throw new Error('The selected server is unavailable.');
+                                    throw new Error('The first server in this selection is unavailable.');
                                 }
-                                const reply = profile ? await api('testExit', {id: saved})
+                                const reply = profile ? await api('testExit', {id: targetId})
                                     : await api('testProxyNode', {id: node.id});
                                 const passed = reply.reachable === true;
-                                state.serviceTests.set(service.id, {profile: saved, kind: passed ? 'pass' : 'fail',
-                                    text: passed ? profileName(saved) + ' · HTTPS ' + reply.milliseconds + ' ms'
+                                state.serviceTests.set(service.id, {profile: saved, target: targetId,
+                                    kind: passed ? 'pass' : 'fail',
+                                    text: passed ? pingTargetName + ' · HTTPS ' + reply.milliseconds + ' ms'
                                         : reply.detail || 'The server did not respond.'});
                             } catch (error) {
-                                state.serviceTests.set(service.id, {profile: saved, kind: 'fail',
+                                state.serviceTests.set(service.id, {profile: saved, target: targetId, kind: 'fail',
                                     text: errorMessage(error, 'The server test failed.')});
                             } finally {
                                 const result = state.serviceTests.get(service.id);
@@ -1830,14 +1866,32 @@
                                 pingResult.dataset.result = result.kind;
                                 test.disabled = false;
                             }
-                        }, 'Ping server for ' + service.name);
-                        test.disabled = !saved || isBypass;
+                        }, 'Ping ' + (group ? 'first server for ' : 'server for ') + service.name);
+                        test.disabled = !saved || isBypass || !pingTargetId;
                         actions.append(test);
-                        actions.append(button('Edit', () => editService(service), 'Edit ' + service.name));
+                        if (!service.managed) {
+                            actions.append(button('Edit', () => editService(service), 'Edit ' + service.name));
+                        }
                     }
-                    actions.append(button('Download', () => downloadEntries(service.name, entries),
-                        'Download ' + service.name + ' list'));
-                    if (state.canManage) {
+                    if (service.managed && state.canManage) {
+                        actions.append(button(state.chinaRules.available ? 'Update Rules' : 'Get Rules', (event) => {
+                            void mutate(event.currentTarget, () => api('updateChinaRules'),
+                                'China rules updated and validated.');
+                        }, 'Update the China rules'));
+                        if (saved && state.chinaRules.available && Number(state.chinaRules.unsupportedGeoRules || 0) > 0) {
+                            const enableMatcher = state.chinaRules.matcherMode !== 'route';
+                            actions.append(button(enableMatcher ? 'Enable Advanced' : 'Disable Advanced', (event) => {
+                                void mutate(event.currentTarget, () => api('setChinaMatcher', {enabled: enableMatcher ? '1' : '0'}),
+                                    enableMatcher
+                                        ? 'Advanced China hostname matching enabled.'
+                                        : 'Advanced China hostname matching returned to shadow mode.');
+                            }, (enableMatcher ? 'Enable' : 'Disable') + ' exact, keyword, and regex route matching'));
+                        }
+                    } else {
+                        actions.append(button('Download', () => downloadEntries(service.name, entries),
+                            'Download ' + service.name + ' list'));
+                    }
+                    if (state.canManage && !service.managed) {
                         actions.append(button('Remove', (event) => {
                             if (window.confirm('Remove the Multi-Path list for ' + service.name + '?')) {
                                 void mutate(event.currentTarget, () => api('removeService', {id: service.id}),
@@ -2180,6 +2234,7 @@
                 state.tailnetStatusAvailable = data.tailnetStatusAvailable === true;
                 state.discoveryTruncated = data.truncated === true;
                 state.services = array(data.services);
+                state.chinaRules = data.chinaRules || {available: false};
                 const serviceIds = new Set(state.services.map((service) => service.id));
                 for (const id of state.serviceTests.keys()) {
                     if (!serviceIds.has(id)) {

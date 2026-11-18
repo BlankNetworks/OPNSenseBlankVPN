@@ -13,6 +13,11 @@ final class Resolver
     public const SERVICE_PORT = 46668;
     public const PROTECTED_MULTI_PORT = 46669;
     public const COMBINED_FALLBACK_PORT = 46670;
+    private const MATCHER_PORT_START = 49100;
+    private const MATCHER_PORT_LIMIT = 200;
+    private const MATCHER_SCRIPT = '/usr/local/opnsense/scripts/OPNsense/BlankVpn/dns_matcher.py';
+    private const MATCHER_CONFIG = 'dns-matcher.json';
+    private const MATCHER_PID = 'dns-matcher.pid';
     private const TAILNET_PORT_OFFSET = 2000;
     private const COMBINED_PORT_OFFSET = 200;
     private const PROTECTED_PORT_OFFSET = 400;
@@ -129,6 +134,7 @@ final class Resolver
     {
         $settings = Policy::effectiveRouting($model);
         $wanted = [];
+        $matcherConfig = ['version' => 1, 'mode' => ChinaRules::matcherMode(), 'listeners' => []];
         if ($settings['enabled']) {
             $hostname = $settings['hostname'];
             $bind = $hostname === 'blankvpn.local' ? 'lan' : $settings['dashboardBind'];
@@ -150,8 +156,14 @@ final class Resolver
                 ? Firewall::parseLoadedRules(self::command(['/sbin/pfctl', '-sr'], false)) : [];
             $profiles = self::verifiedDnsProfiles($profiles, $loaded);
             $wanUpstreams = WanEgress::dnsUpstreams($wan, $loaded);
-            $wanted = self::scopedListenerPlan($settings, $hostname, $host, $assignments, $profiles, $services,
+            $plan = self::scopedListenerPlan($settings, $hostname, $host, $assignments, $profiles, $services,
                 $wanUpstreams, $loaded, Firewall::health());
+            $wanted = $plan['listeners'];
+            $matcherConfig['listeners'] = $plan['matcher'];
+        }
+
+        if ($matcherConfig['listeners'] !== []) {
+            self::reconcileMatcher($matcherConfig);
         }
 
         $ipsetChecked = false;
@@ -192,6 +204,9 @@ final class Resolver
             if (self::running($port) === null) {
                 throw new \RuntimeException('The Blank VPN & Proxy DNS listener did not start.');
             }
+        }
+        if ($matcherConfig['listeners'] === []) {
+            self::stopMatcher();
         }
     }
 
@@ -256,13 +271,16 @@ final class Resolver
             }
         }
         $wanted = [];
+        $matchers = [];
         foreach (Policy::scopes($settings) as $scope) {
             $devices = $scope['coverage'] === 'device' ? Policy::scopedAssignments($scope, $assignments) : [];
-            $wanted += self::listenerPlan($scope, $hostname, $host, $devices, $profiles, $services, $wanUpstreams,
+            $scopePlan = self::listenerPlan($scope, $hostname, $host, $devices, $profiles, $services, $wanUpstreams,
                 self::usesWanFallback($scope), Policy::networkBypassAssignments($scope, $assignments) !== [],
-                $loaded, $baseDns);
+                $loaded, $baseDns, $matchers);
+            $wanted += $scopePlan['listeners'];
+            $matchers += $scopePlan['matcher'];
         }
-        return $wanted;
+        return ['listeners' => $wanted, 'matcher' => array_values($matchers)];
     }
 
     private static function listenerPlan(
@@ -276,7 +294,8 @@ final class Resolver
         bool $fallback,
         bool $deviceBypass,
         array $loaded,
-        ?array $baseDns = null
+        ?array $baseDns = null,
+        array &$matchers = []
     ): array {
         $protectedNetwork = $settings['coverage'] === 'network' && !empty($settings['networkKillSwitch']);
         $routed = SmartRouting::forwardServices($settings, $services);
@@ -293,6 +312,7 @@ final class Resolver
 
         // HTTPS and SVCB address hints do not enter PF's learned-IP tables.
         $available = self::liveDnsServices($settings, $routed, $profiles, $loaded);
+        $matcherRules = self::specialRouteRules($publicLists, $profiles, $available, $portFor, $wanUpstreams, $hostname, $host, $wanted);
         $forward = SmartRouting::dnsDirectives($publicLists, $profiles, forwardOnly: true, availableServices: $available);
         if ($forward !== [] && !$protectedNetwork) {
             $wanted[$servicePort] = self::configuration($servicePort, $hostname, $host,
@@ -331,10 +351,12 @@ final class Resolver
             $wanted[$port] = self::configuration($port, $hostname, $host,
                 [...$upstreams, ...$extra], $extra !== [], true, $protected);
         }
-        if ($directives !== [] && self::usesSharedDns($settings, $assignments)) {
+        if (($directives !== [] || $matcherRules !== []) && self::usesSharedDns($settings, $assignments)) {
             $port = $portFor(SmartRouting::PORT);
-            $wanted[$port] = self::configuration($port, $hostname, $host,
+            $config = self::configuration($port, $hostname, $host,
                 ['server=127.0.0.1#53', ...$directives], true);
+            $wanted[$port] = $matcherRules === [] ? $config
+                : self::withMatcher($config, $port, 53, $matcherRules, $matchers);
         }
         foreach (array_keys(Policy::combinedProfiles($settings, $assignments)) as $id) {
             $profile = $profiles[$id] ?? [];
@@ -343,19 +365,178 @@ final class Resolver
             $port = $protected ? self::protectedCombinedPort($profile) : self::combinedPort($profile);
             if ($port !== 0) {
                 $port = $portFor($port);
-                $wanted[$port] = self::configuration($port, $hostname, $host,
-                    [...self::profileUpstreams(($baseDns ?? $profiles)[$id] ?? []),
-                        ...($protected ? $protectedDirectives : $directives)], true, true);
+                $baseProfile = ($baseDns ?? $profiles)[$id] ?? [];
+                $baseDnsPort = $portFor((int)($baseProfile['dnsPort'] ?? 0));
+                if ($matcherRules !== [] && $baseDnsPort > 0) {
+                    $wanted[$baseDnsPort] = self::configuration($baseDnsPort, $hostname, $host,
+                        self::profileUpstreams($baseProfile), true, true, $protected);
+                }
+                $config = self::configuration($port, $hostname, $host,
+                    [...self::profileUpstreams($baseProfile), ...($protected ? $protectedDirectives : $directives)], true, true);
+                $wanted[$port] = $matcherRules === [] || $baseDnsPort === 0 ? $config
+                    : self::withMatcher($config, $port, $baseDnsPort, $matcherRules, $matchers);
             }
         }
         if ($fallback) {
             $upstreams = array_map(static fn (string $server): string => 'server=' . $server, $wanUpstreams);
             $combined = $settings['networkMode'] === 'full_multi';
             $port = $portFor($combined ? self::COMBINED_FALLBACK_PORT : self::FALLBACK_PORT);
-            $wanted[$port] = self::configuration($port, $hostname, $host,
+            $config = self::configuration($port, $hostname, $host,
                 [...$upstreams, ...($combined ? $directives : $bypassDirectives)], true, true);
+            if ($matcherRules !== [] && $combined && $wanUpstreams !== []) {
+                $bypassPort = $portFor(self::BYPASS_PORT);
+                $wanted[$bypassPort] = self::configuration($bypassPort, $hostname, $host, $upstreams, true, true);
+                $wanted[$port] = self::withMatcher($config, $port, $bypassPort, $matcherRules, $matchers);
+            } else {
+                $wanted[$port] = $config;
+            }
         }
-        return $wanted;
+        return ['listeners' => $wanted, 'matcher' => $matchers];
+    }
+
+    private static function specialRouteRules(
+        array $services,
+        array $profiles,
+        array $available,
+        callable $portFor,
+        array $wanUpstreams,
+        string $hostname,
+        string $host,
+        array &$wanted
+    ): array {
+        $rules = [];
+        foreach ($services as $service) {
+            if (($service['id'] ?? '') !== ChinaRules::ID || empty($service['managed']) ||
+                ($service['profile'] ?? '') === '') {
+                continue;
+            }
+            $special = ChinaRules::specialRules();
+            if ($special === []) {
+                continue;
+            }
+            if ($service['profile'] === SmartRouting::BYPASS) {
+                if ($wanUpstreams === []) {
+                    $upstreamPort = null;
+                } else {
+                    $upstreamPort = $portFor(self::BYPASS_PORT);
+                    $direct = array_map(static fn (string $server): string => 'server=' . $server, $wanUpstreams);
+                    $wanted[$upstreamPort] = self::configuration($upstreamPort, $hostname, $host, $direct, true, true);
+                }
+                $table = SmartRouting::bypassTable([$service]);
+            } else {
+                $profile = $profiles[$service['profile']] ?? [];
+                $dnsPort = (int)($profile['dnsPort'] ?? 0);
+                $upstreams = self::profileUpstreams($profile);
+                if ($dnsPort < 1 || $upstreams === [] || empty($available[$service['id']])) {
+                    $upstreamPort = null;
+                } else {
+                    $upstreamPort = $portFor($dnsPort);
+                    $wanted[$upstreamPort] ??= self::configuration($upstreamPort, $hostname, $host,
+                        $upstreams, true, true);
+                }
+                $table = SmartRouting::table($service);
+            }
+            foreach ($special as $rule) {
+                $rules[] = [
+                    'type' => $rule['type'], 'pattern' => $rule['pattern'],
+                    'upstreamPort' => $upstreamPort, 'table' => $table,
+                ];
+            }
+        }
+        return $rules;
+    }
+
+    private static function withMatcher(
+        string $config,
+        int $dnsPort,
+        int $defaultPort,
+        array $rules,
+        array &$matchers
+    ): string {
+        if (isset($matchers[$dnsPort])) {
+            return $config . 'server=/#/127.0.0.1#' . $matchers[$dnsPort]['port'] . "\n";
+        }
+        $index = count($matchers);
+        if ($index >= self::MATCHER_PORT_LIMIT) {
+            throw new \RuntimeException('The active DNS matching rules need more local matcher listeners than Blank can safely start.');
+        }
+        $matcherPort = self::MATCHER_PORT_START + $index;
+        $matchers[$dnsPort] = [
+            'port' => $matcherPort, 'defaultPort' => $defaultPort, 'rules' => array_values($rules),
+        ];
+        $rows = array_values(array_filter(explode("\n", rtrim($config, "\n")),
+            static fn (string $line): bool => !str_starts_with($line, 'server=') || str_starts_with($line, 'server=/')));
+        $rows[] = 'server=/#/127.0.0.1#' . $matcherPort;
+        return implode("\n", $rows) . "\n";
+    }
+
+    private static function reconcileMatcher(array $config): void
+    {
+        $path = Policy::STATE_DIR . '/' . self::MATCHER_CONFIG;
+        $pidPath = Policy::STATE_DIR . '/' . self::MATCHER_PID;
+        $serialized = json_encode($config, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $pid = self::matcherPid();
+        if ($pid !== null && is_file($path) && hash_equals(hash('sha256', $serialized), hash_file('sha256', $path) ?: '')) {
+            return;
+        }
+        if ($pid !== null) {
+            self::stopMatcher();
+        } elseif (is_file($pidPath) && !is_link($pidPath)) {
+            @unlink($pidPath);
+        }
+        Policy::writeState(self::MATCHER_CONFIG, $serialized);
+        self::command([
+            '/usr/sbin/daemon', '-f', '-p', $pidPath, '--', '/usr/local/bin/python3.13',
+            self::MATCHER_SCRIPT, '--config', $path,
+        ]);
+        foreach ($config['listeners'] as $listener) {
+            $ready = false;
+            for ($attempt = 0; $attempt < 20; $attempt++) {
+                $socket = @stream_socket_client('tcp://127.0.0.1:' . (int)$listener['port'], $errno, $error, 0.1);
+                if (is_resource($socket)) {
+                    fclose($socket);
+                    $ready = true;
+                    break;
+                }
+                usleep(50_000);
+            }
+            if (!$ready) {
+                self::stopMatcher();
+                throw new \RuntimeException('The Blank DNS matcher did not start its local listener.');
+            }
+        }
+    }
+
+    private static function matcherPid(): ?int
+    {
+        $path = Policy::STATE_DIR . '/' . self::MATCHER_PID;
+        $value = is_file($path) ? trim((string)file_get_contents($path, false, null, 0, 32)) : '';
+        if (!ctype_digit($value) || (int)$value < 2) {
+            return null;
+        }
+        $command = trim(self::command(['/bin/ps', '-ww', '-p', $value, '-o', 'command='], false));
+        return str_contains($command, self::MATCHER_SCRIPT) && str_contains($command, self::MATCHER_CONFIG)
+            ? (int)$value : null;
+    }
+
+    private static function stopMatcher(): void
+    {
+        $pid = self::matcherPid();
+        if ($pid !== null) {
+            self::command(['/bin/kill', '-TERM', (string)$pid], false);
+            for ($attempt = 0; $attempt < 20; $attempt++) {
+                if (self::matcherPid() === null) {
+                    break;
+                }
+                usleep(50_000);
+            }
+        }
+        foreach ([self::MATCHER_PID, self::MATCHER_CONFIG] as $file) {
+            $path = Policy::STATE_DIR . '/' . $file;
+            if (is_file($path) && !is_link($path)) {
+                @unlink($path);
+            }
+        }
     }
 
     private static function liveDnsServices(array $settings, array $services, array $profiles, array $loaded): array
@@ -399,7 +580,7 @@ final class Resolver
             !filter_var($source, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
             return [];
         }
-        return array_map(static fn (string $ip): string => "server={$ip}@{$source}", SmartRouting::profileDns($profile));
+        return array_map(static fn (string $ip): string => "server={$ip}@{$source}", $profile['dns'] ?? []);
     }
 
     private static function defaultDnsProfiles(array $settings, array $assignments): array

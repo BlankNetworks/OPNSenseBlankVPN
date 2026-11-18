@@ -941,11 +941,22 @@
     overflow-wrap: anywhere;
 }
 
+.blankvpn .bv-services {
+    width: 100%;
+    table-layout: fixed;
+}
+
+.blankvpn .bv-service-name-column { width: 19%; }
+.blankvpn .bv-service-server-column { width: 22%; }
+.blankvpn .bv-service-routing-column { width: 19%; }
+.blankvpn .bv-service-ping-column { width: 15%; }
+.blankvpn .bv-service-actions-column { width: 25%; }
+
 .blankvpn .bv-service-ping {
     display: block;
-    margin-top: .35rem;
     color: var(--bv-muted);
     font-size: .85em;
+    overflow-wrap: anywhere;
 }
 
 .blankvpn .bv-service-ping[data-result="fail"] {
@@ -953,8 +964,17 @@
 }
 
 .blankvpn .bv-services .bv-inline-form select {
+    flex: 1 1 7rem;
     min-width: 0;
     width: 100%;
+    max-width: 11rem;
+}
+
+.blankvpn .bv-service-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: .35rem;
 }
 
 @media (max-width: 767px) {
