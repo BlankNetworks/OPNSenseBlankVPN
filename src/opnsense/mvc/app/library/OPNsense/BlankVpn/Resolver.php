@@ -578,7 +578,7 @@ final class Resolver
             !filter_var($source, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
             return [];
         }
-        return array_map(static fn (string $ip): string => "server={$ip}@{$source}", $profile['dns'] ?? []);
+        return array_map(static fn (string $ip): string => "server={$ip}@{$source}", SmartRouting::profileDns($profile));
     }
 
     private static function defaultDnsProfiles(array $settings, array $assignments): array
