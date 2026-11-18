@@ -382,14 +382,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         requests.filter(x => x.action === 'saveGroup').at(-1).data.id === savedGroup.id &&
         bv('saved-groups').textContent.includes('Test failover') && bv('group-members').children.length === 2,
         'Saving again must update the same group and keep its members visible.');
-    [...bv('saved-groups').querySelectorAll('button')].find(button => button.textContent === 'Remove').click();
-    await wait();
-    assert(!reply.dashboard.groups.some(group => group.id === savedGroup.id) &&
-        reply.dashboard.profiles.some(profile => profile.id === 'vpn1' && profile.name === 'Canada') &&
-        reply.proxyCatalog.nodes.some(node => node.id === 'proxy-1') &&
-        bv('group-name').value === '' && bv('group-members').children.length === 0,
-        'Removing a group must remove only its group selection and preserve every member server.');
     document.querySelector('[data-bv-section="network"]').click();
+    assert([...bv('device-list').querySelector('[aria-label="Edit <b>Device rule</b>"]').closest('tr').querySelector('.bv-device-server').options]
+        .some(option => option.value === savedGroup.id),
+        'A saved group must be selectable for a local device routing rule.');
     const expectedDeviceColumns = 'Device,Address,Availability,Server,Routing,Ping,Actions';
     for (const table of [bv('device-list'), bv('tailnet-device-list')]) {
         assert([...table.closest('table').tHead.rows[0].cells].map(column => column.textContent.trim()).join(',') ===
@@ -758,6 +754,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('refresh').click();
     await wait();
     bv('service-list').querySelector('[aria-label="Edit Netflix"]').click();
+    assert([...bv('service-profile').options].some(option => option.value === savedGroup.id),
+        'A saved group must be selectable as a Multi-Path destination.');
+    bv('service-profile').value = savedGroup.id;
+    bv('service-form').requestSubmit(bv('save-service'));
+    await wait();
+    assert(requests.some(x => x.action === 'saveService' && x.data.id === 'list1' && x.data.profile === savedGroup.id),
+        'Multi-Path must persist a selected group as the domain list destination.');
+    let groupDestination = bv('service-list').querySelector('select');
+    assert(groupDestination.value === savedGroup.id,
+        'The saved Multi-Path destination must remain the selected group after refresh.');
+    groupDestination.value = 'vpn1';
+    groupDestination.dispatchEvent(new Event('change'));
+    groupDestination.form.querySelector('button').click();
+    await wait();
+    assert(requests.some(x => x.action === 'setServiceDestination' && x.data.profile === 'vpn1'),
+        'Multi-Path must allow changing a group destination back to a single server.');
+    document.querySelector('[data-bv-section="groups"]').click();
+    await wait();
+    const profilesBeforeGroupRemoval = reply.dashboard.profiles.map(profile => profile.id).join(',');
+    const proxiesBeforeGroupRemoval = reply.proxyCatalog.nodes.map(node => node.id).join(',');
+    [...bv('saved-groups').querySelectorAll('button')].find(button => button.textContent === 'Remove').click();
+    await wait();
+    assert(!reply.dashboard.groups.some(group => group.id === savedGroup.id) &&
+        reply.dashboard.profiles.map(profile => profile.id).join(',') === profilesBeforeGroupRemoval &&
+        reply.proxyCatalog.nodes.map(node => node.id).join(',') === proxiesBeforeGroupRemoval &&
+        bv('group-name').value === '' && bv('group-members').children.length === 0,
+        'Removing a group must remove only its group selection and preserve saved VPN and proxy servers.');
+    bv('service-list').querySelector('[aria-label="Edit Netflix"]').click();
     bv('service-profile').value = 'vpn1';
     bv('service-form').requestSubmit(bv('save-service'));
     await wait();
@@ -766,9 +790,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         x.data.domains.includes('203.0.113.5') && x.data.domains.includes('2001:db8::/32')),
         'The saved mixed list could not be edited or bound to an exit.');
     const destination = bv('service-list').querySelector('select');
+    const destinationSaveCount = requests.filter(x => x.action === 'setServiceDestination').length;
     destination.value = 'bypass';
     destination.dispatchEvent(new Event('change'));
-    assert(!requests.some(x => x.action === 'setServiceDestination') &&
+    assert(requests.filter(x => x.action === 'setServiceDestination').length === destinationSaveCount &&
         reply.dashboard.services[0].profile === 'vpn1', 'Changing a destination must wait for Save.');
     destination.form.querySelector('button').click();
     await wait();
