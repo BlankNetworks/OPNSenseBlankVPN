@@ -357,7 +357,7 @@ final class SmartRouting
             $source = explode('/', $profile['address'] ?? '')[0];
             // Resolver::verifiedDnsProfiles() removes provider DNS endpoints
             // unless their tunnel route and fail-closed PF guard are loaded.
-            $servers = $profile['dns'] ?? [];
+            $servers = $profile['dns'] ?? self::profileDns($profile);
             $bypass = $service['profile'] === self::BYPASS;
             if ($bypass && $forwardOnly) {
                 continue;
