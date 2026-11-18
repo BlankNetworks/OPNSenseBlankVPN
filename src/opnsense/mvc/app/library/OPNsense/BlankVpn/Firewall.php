@@ -654,6 +654,9 @@ final class Firewall
                         self::bypassSmartDns($firewall, $interface, $ipv6, 'inet6');
                     }
                 }
+                if ($ipv6 !== '') {
+                    self::registerGuard($firewall, $id, $interface, $ipv6, 'inet6', local: $local);
+                }
                 continue;
             } elseif ($killSwitch) {
                 self::registerProtectedPolicy($firewall, $id, $interface, $ip, $ipv6, true);
@@ -663,6 +666,9 @@ final class Firewall
             }
 
             if ($canFallback && $reserved) {
+                if ($ipv6 !== '') {
+                    self::registerGuard($firewall, $id, $interface, $ipv6, 'inet6', local: $local);
+                }
                 continue;
             }
             self::registerGuard($firewall, $id, $interface, $ip, 'inet', local: $local);
