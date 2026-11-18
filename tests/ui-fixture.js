@@ -369,16 +369,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     const savedGroup = reply.dashboard.groups.find(group => group.name === 'Test failover');
     assert(savedGroup && bv('saved-groups').textContent.includes('Test failover') &&
         bv('group-save-status').textContent.includes('available in routing') &&
-        [...bv('network-profile').options].some(option => option.value === savedGroup.id),
-        'A saved group must appear in Groups and routing selections immediately.');
+        [...bv('network-profile').options].some(option => option.value === savedGroup.id) &&
+        bv('group-editor-title').textContent === 'Edit Group' && bv('group-name').value === 'Test failover' &&
+        bv('group-members').children.length === 2,
+        'A saved group must remain in the editor, appear in Groups, and enter routing selections immediately.');
     assert(!bv('profile-list').textContent.includes('Test failover') &&
         !bv('proxy-list').textContent.includes('Test failover'),
         'Groups must stay out of VPN Login and Proxy Login server lists.');
+    bv('group-form').requestSubmit(bv('group-save'));
+    await wait();
+    assert(reply.dashboard.groups.filter(group => group.name === 'Test failover').length === 1 &&
+        requests.filter(x => x.action === 'saveGroup').at(-1).data.id === savedGroup.id &&
+        bv('saved-groups').textContent.includes('Test failover') && bv('group-members').children.length === 2,
+        'Saving again must update the same group and keep its members visible.');
     [...bv('saved-groups').querySelectorAll('button')].find(button => button.textContent === 'Remove').click();
     await wait();
     assert(!reply.dashboard.groups.some(group => group.id === savedGroup.id) &&
         reply.dashboard.profiles.some(profile => profile.id === 'vpn1' && profile.name === 'Canada') &&
-        reply.proxyCatalog.nodes.some(node => node.id === 'proxy-1'),
+        reply.proxyCatalog.nodes.some(node => node.id === 'proxy-1') &&
+        bv('group-name').value === '' && bv('group-members').children.length === 0,
         'Removing a group must remove only its group selection and preserve every member server.');
     document.querySelector('[data-bv-section="network"]').click();
     const expectedDeviceColumns = 'Device,Address,Availability,Server,Routing,Ping,Actions';

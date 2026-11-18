@@ -205,6 +205,12 @@
 - Cover the full four-core table, failed status response, retry, and update check in the browser fixture at desktop and mobile widths.
 - Keep the core archive picker inside the Core panel on narrow screens; opening the panel no longer adds page overflow.
 
+## 0.8.54
+
+- Keep the saved group name, members, and ID selected after **Save Group** so the just-saved list remains visible and another save updates it instead of creating a duplicate.
+- When removing the group currently open in the editor, clear only that group draft and confirm that its saved VPN and proxy servers remain.
+- Cover retained editor state, repeat-save idempotency, routing visibility, login-list separation, and server-preserving group removal in the browser fixture.
+
 ## 0.8.53
 
 - Show a live Save Group result and reflect a successful save immediately in the saved group list and every routing server picker, even if a later dashboard refresh fails.

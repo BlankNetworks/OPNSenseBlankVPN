@@ -1559,6 +1559,10 @@
                 row.append(button('Remove', () => void mutate(null, () => api('removeGroup', {id: group.id}),
                     'Group removed.', () => {
                         state.groups = state.groups.filter((saved) => saved.id !== group.id);
+                        if (state.groupDraft.id === group.id) {
+                            state.groupDraft = {id: '', name: '', members: []};
+                            byId('group-save-status').textContent = 'Group removed. Its VPN and proxy servers remain saved.';
+                        }
                         renderRoutingChoices();
                     })));
                 saved.append(row);
@@ -3473,12 +3477,15 @@
                 const index = state.groups.findIndex((item) => item.id === group.id);
                 if (index < 0) state.groups.push(group);
                 else state.groups[index] = group;
-                state.groupDraft = {id: '', name: '', members: []};
+                // Keep the saved identity and members in the editor. The next
+                // Save updates this group instead of creating a duplicate, and
+                // the user can see that the group did not disappear.
+                state.groupDraft = {id: group.id, name: group.name, members: [...group.members]};
                 saved = true;
                 renderRoutingChoices();
             }).then(() => {
                 status.textContent = saved
-                    ? 'Group saved. It is available in routing server selections; the VPN and proxy server lists are unchanged.'
+                    ? 'Group saved and kept selected below. It is available in routing server selections; the VPN and proxy server lists are unchanged.'
                     : 'Group was not saved. Read the error above, then correct it and try again.';
             });
         });
