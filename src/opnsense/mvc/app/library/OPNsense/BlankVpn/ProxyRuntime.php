@@ -12,7 +12,7 @@ final class ProxyRuntime
     public const SLOTS = 8;
     public const FIRST_DNS_PORT = 46660;
     private const TEST_SLOT = self::SLOTS;
-    private const CONFIG_VERSION = 3;
+    private const CONFIG_VERSION = 4;
     private const RETRY_LIMIT = 900;
     private const STATUS_FILE = 'proxy-status.json';
     private const PROBE_TARGETS = [
@@ -159,8 +159,22 @@ final class ProxyRuntime
         $target = $node['config'];
         if ($core === 'xray') {
             $target['tag'] = 'selected';
+            $target['streamSettings'] ??= [];
+            $target['streamSettings']['sockopt'] ??= [];
+            // Route the endpoint lookup through Xray's encrypted local DoH
+            // module rather than leaving domain resolution to the host.
+            $target['streamSettings']['sockopt']['domainStrategy'] = 'UseIP';
             $adapter = [
                 'log' => ['loglevel' => 'none'],
+                // Xray otherwise uses the host resolver when its DNS module is absent.
+                // Local DoH breaks the bootstrap loop while keeping queries encrypted.
+                'dns' => [
+                    'servers' => [
+                        'https+local://1.1.1.1/dns-query',
+                        'https+local://9.9.9.9/dns-query'
+                    ],
+                    'queryStrategy' => 'UseIP'
+                ],
                 'inbounds' => [[
                     'listen' => '127.0.0.1', 'port' => $route['adapterPort'], 'protocol' => 'socks',
                     'settings' => ['auth' => 'noauth', 'udp' => true, 'ip' => '127.0.0.1']
@@ -175,8 +189,24 @@ final class ProxyRuntime
                     'type' => 'socks', 'listen' => '127.0.0.1', 'listen_port' => $route['adapterPort']
                 ]],
                 'outbounds' => [$target],
-                'route' => ['final' => 'selected', 'default_domain_resolver' => 'native'],
-                'dns' => ['servers' => [['type' => 'local', 'tag' => 'native']], 'final' => 'native']
+                // Resolve the upstream proxy hostname with validated DoT to IP-literal
+                // servers; a local resolver would use the router's system DNS.
+                'route' => ['final' => 'selected', 'default_domain_resolver' => 'bootstrap'],
+                'dns' => [
+                    'servers' => [
+                        [
+                            'type' => 'tls', 'tag' => 'bootstrap',
+                            'server' => '1.1.1.1', 'server_port' => 853,
+                            'tls' => ['enabled' => true, 'server_name' => 'cloudflare-dns.com']
+                        ],
+                        [
+                            'type' => 'tls', 'tag' => 'bootstrap-fallback',
+                            'server' => '9.9.9.9', 'server_port' => 853,
+                            'tls' => ['enabled' => true, 'server_name' => 'dns.quad9.net']
+                        ]
+                    ],
+                    'final' => 'bootstrap'
+                ]
             ];
         }
         if ($adapter !== null) {
@@ -193,9 +223,9 @@ final class ProxyRuntime
                 'proxies' => [$target], 'rules' => ['MATCH,blankvpn-upstream'],
                 'dns' => [
                     'enable' => true, 'listen' => '127.0.0.1:' . $route['proxyDns'],
-                    'ipv6' => true, 'enhanced-mode' => 'redir-host',
-                    'default-nameserver' => ['system'],
-                    'proxy-server-nameserver' => ['system'],
+                    'ipv6' => false, 'enhanced-mode' => 'redir-host',
+                    'default-nameserver' => ['tls://1.1.1.1', 'tls://9.9.9.9'],
+                    'proxy-server-nameserver' => ['tls://1.1.1.1', 'tls://9.9.9.9'],
                     'nameserver' => ['https://1.1.1.1/dns-query#blankvpn-upstream']
                 ]
             ]

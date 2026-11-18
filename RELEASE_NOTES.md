@@ -205,6 +205,12 @@
 - Cover the full four-core table, failed status response, retry, and update check in the browser fixture at desktop and mobile widths.
 - Keep the core archive picker inside the Core panel on narrow screens; opening the panel no longer adds page overflow.
 
+## 0.8.56
+
+- Resolve proxy endpoint hostnames with encrypted bootstrap DNS in Mihomo, Xray, and sing-box instead of the router's ordinary system resolver. Keep proxy client DNS on the selected upstream and stop returning unsupported IPv6 answers from the proxy DNS listener.
+- Block a known routed device IPv6 address from using ISP egress even when its IPv4 failure action is set to WAN.
+- Add regression checks for encrypted proxy DNS configuration, single-device IPv6 fail-open, and document the tested privacy properties and limits for encrypted DNS, WebRTC, IPv6, and peer-to-peer traffic.
+
 ## 0.8.55
 
 - Fix group discovery after dashboard refresh. OPNsense model fields support property access but report `false` from `isset`; reading groups must iterate the model field directly.

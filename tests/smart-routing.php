@@ -949,6 +949,13 @@ namespace {
     checkRouting($device['from'] === '192.0.2.23' && $kill['from'] === $device['from'], 'A shared-LAN guard applies to only the assigned IPv4.');
     checkRouting($device['priority'] < $kill['priority'] && $kill['to_not'], 'Protect the assigned address without blocking approved local destinations.');
     checkRouting($device['tag'] === 'blankvpn_tunnel_only', 'Every protected tunnel state carries the WAN egress tag.');
+    $ipv6FailOpen = new Plugin();
+    $compileDevice->invoke(null, $ipv6FailOpen, $settings, $interfaces, ['device-a' => array_replace($assignment, [
+        'failure' => 'wan', 'killSwitch' => '0', 'ipv6' => '2001:db8::23'
+    ])], $profiles, [], $diag);
+    checkRouting(($ipv6FailOpen->rules[Policy::marker('kill_v6', 'device-a')]['from'] ?? '') === '2001:db8::23' &&
+        ($ipv6FailOpen->rules[Policy::marker('kill_v6', 'device-a')]['ipprotocol'] ?? '') === 'inet6',
+        'Per-device WAN fail-open must not leak IPv6 outside its IPv4-only VPN route.');
     $down = new Plugin();
     $compileDevice->invoke(null, $down, $settings, $interfaces, ['device-a' => $assignment], $profiles, ['jp' => ['reachable' => false]], $diag);
     checkRouting(isset($down->rules[Policy::marker('kill', 'device-a')]) &&

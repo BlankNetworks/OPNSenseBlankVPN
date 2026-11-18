@@ -240,11 +240,20 @@ assertProxy($chicagoRoute['address'] !== $tokyoRoute['address'] &&
 $ssConfig = ProxyRuntime::configuration($route, proxyNode($ss));
 assertProxy($ssConfig['mihomo']['rules'] === ['MATCH,blankvpn-upstream'], 'Single exit without direct fallback.');
 assertProxy($ssConfig['mihomo']['allow-lan'] === false && !$ssConfig['mihomo']['tun']['enable'], 'No core-managed routing or exposed SOCKS port.');
-assertProxy($ssConfig['mihomo']['dns']['proxy-server-nameserver'] === ['system'],
-    'Resolve upstream hostnames using router DNS without requiring localhost port 53.');
-assertProxy($ssConfig['mihomo']['dns']['nameserver'] === ['https://1.1.1.1/dns-query#blankvpn-upstream'], 'Use the same exit for service DNS.');
+assertProxy($ssConfig['mihomo']['dns']['default-nameserver'] === ['tls://1.1.1.1', 'tls://9.9.9.9'] &&
+    $ssConfig['mihomo']['dns']['proxy-server-nameserver'] === ['tls://1.1.1.1', 'tls://9.9.9.9'],
+    'Resolve proxy endpoints only with encrypted, IP-literal DNS bootstrap servers.');
+assertProxy($ssConfig['mihomo']['dns']['ipv6'] === false &&
+    $ssConfig['mihomo']['dns']['nameserver'] === ['https://1.1.1.1/dns-query#blankvpn-upstream'],
+    'Do not offer unsupported client IPv6 answers, and resolve client DNS through the selected proxy.');
 $xray = ProxyRuntime::configuration($route, proxyNode($vless));
-assertProxy($xray['adapter']['inbounds'][0]['listen'] === '127.0.0.1' && $xray['adapter']['outbounds'][0]['protocol'] === 'vless', 'Xray runs behind a private SOCKS listener.');
+assertProxy($xray['adapter']['inbounds'][0]['listen'] === '127.0.0.1' &&
+    $xray['adapter']['outbounds'][0]['protocol'] === 'vless' &&
+    $xray['adapter']['outbounds'][0]['streamSettings']['sockopt']['domainStrategy'] === 'UseIP' &&
+    $xray['adapter']['dns']['servers'] === [
+        'https+local://1.1.1.1/dns-query', 'https+local://9.9.9.9/dns-query'
+    ],
+    'Xray runs behind a private SOCKS listener and bootstraps endpoint DNS with local-mode DoH.');
 $reality = proxyNode('vless://' . $uuid .
     '@192.0.2.11:23576?type=tcp&encryption=none&flow=xtls-rprx-vision&sni=example.com&fp=chrome&security=reality&pbk=' .
     rtrim(strtr(base64_encode(str_repeat('k', 32)), '+/', '-_'), '=') . '&sid=01#Fixture');
@@ -258,7 +267,8 @@ $xrayReality = proxyNode('vless://' . $uuid . '@192.0.2.12:443?type=xhttp&securi
 $xrayRealityConfig = ProxyRuntime::configuration($route, $xrayReality)['adapter'];
 assertProxy($xrayReality['core'] === 'xray' &&
     $xrayRealityConfig['outbounds'][0]['streamSettings']['security'] === 'reality' &&
-    $xrayRealityConfig['outbounds'][0]['streamSettings']['realitySettings']['shortId'] === '01',
+    $xrayRealityConfig['outbounds'][0]['streamSettings']['realitySettings']['shortId'] === '01' &&
+    $xrayRealityConfig['outbounds'][0]['streamSettings']['sockopt']['domainStrategy'] === 'UseIP',
     'XHTTP with REALITY uses Xray and preserves its verified server identity.');
 
 $probeFailure = new ReflectionMethod(ProxyRuntime::class, 'probeFailure');
@@ -287,7 +297,13 @@ assertProxy($hasListeners->invoke(null, implode("\n", [$socks, $dns, $adapter]),
     'Proxy readiness needs all owned loopback listeners and rejects a missing or competing process.');
 $singNode = proxyNode('{"outbounds":[{"tag":"example","type":"anytls","server":"192.0.2.2","server_port":443,"password":"fixture-pass","tls":{"enabled":true,"server_name":"example.com"}}]}');
 $sing = ProxyRuntime::configuration($route, $singNode);
-assertProxy($sing['adapter']['route']['final'] === 'selected', 'sing-box has exactly one selected outbound.');
+assertProxy($sing['adapter']['route']['final'] === 'selected' &&
+    $sing['adapter']['route']['default_domain_resolver'] === 'bootstrap' &&
+    $sing['adapter']['dns']['servers'][0]['type'] === 'tls' &&
+    $sing['adapter']['dns']['servers'][0]['server'] === '1.1.1.1' &&
+    $sing['adapter']['dns']['servers'][0]['tls']['server_name'] === 'cloudflare-dns.com' &&
+    $sing['adapter']['dns']['servers'][1]['tls']['server_name'] === 'dns.quad9.net',
+    'sing-box has one selected outbound and uses validated DoT for proxy endpoint resolution.');
 assertProxy($ssConfig['mihomo']['profile'] === ['store-selected' => false, 'store-fake-ip' => false],
     'One selected upstream and redir-host DNS do not need a persistent Mihomo routing cache.');
 

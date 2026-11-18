@@ -666,7 +666,10 @@ final class Firewall
                 continue;
             }
             self::registerGuard($firewall, $id, $interface, $ip, 'inet', local: $local);
-            if ($ipv6 !== '' && !$canFallback) {
+            // The managed client tunnel is IPv4-only. A per-device WAN fallback
+            // is an IPv4 outage policy and must not turn a healthy IPv4 VPN rule
+            // into a parallel IPv6 path over the ISP.
+            if ($ipv6 !== '') {
                 self::registerGuard($firewall, $id, $interface, $ipv6, 'inet6', local: $local);
             }
         }

@@ -98,17 +98,17 @@ ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubuser
 
 To pin this release instead, use the following command. It also checks the installer digest before running it.
 
-Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.55** on a supported amd64 or aarch64 OPNsense router.
+Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.56** on a supported amd64 or aarch64 OPNsense router.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.55.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.55/scripts/install.sh && sha256 -c 062384137ffe2d2396981691c550ea3298167554b2c977faaee793f4a4154d06 /tmp/blankvpn-install-0.8.55.sh && sh /tmp/blankvpn-install-0.8.55.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.56.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.56/scripts/install.sh && sha256 -c fd473bfa4f27fbea1a5f91b8b612f04071bbb8dc26d857a239797724096d2614 /tmp/blankvpn-install-0.8.56.sh && sh /tmp/blankvpn-install-0.8.56.sh'
 ```
 
 The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.
 
 ### Download on your computer
 
-1. Open the [0.8.55 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.55), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+1. Open the [0.8.56 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.56), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
 2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 
@@ -258,7 +258,7 @@ Under **Network Settings → Routing coverage**, select **Local** or **Tailscale
 
 With the **Kill Switch** checked, the scope has no direct ISP fallback. If the base goes down, the Kill Switch blocks unmatched traffic. Healthy Multi-Path overrides keep working. If a Multi-Path exit goes down, its matched destinations are blocked. Unmatched traffic keeps using the base and other services keep using their selected exits. With the Whole-Network Kill Switch off, ordinary traffic may use the ISP during a base outage and service overrides may stay up. Domain classification requires DNS visible to Blank VPN & Proxy. Start a fresh connection after changing a service or clearing the client DNS cache.
 
-The VPN and proxy paths use IPv4 egress. A Kill Switch on a LAN device also blocks public IPv6 for that LAN or VLAN because temporary IPv6 addresses cannot reliably be pinned to one device. Approved local IPv6 access can still pass. With the Whole-Network Kill Switch off, eligible Bypass destinations can use direct IPv6 if the WAN has IPv6.
+The VPN and proxy paths use IPv4 egress. A Kill Switch on a LAN device also blocks public IPv6 for that LAN or VLAN because temporary IPv6 addresses cannot reliably be pinned to one device. Approved local IPv6 access can still pass. A known IPv6 address on a routed device is blocked even when its IPv4 failure policy allows WAN fallback. An unprotected device policy, Bypass, or WAN fallback may use ISP IPv6. With the Whole-Network Kill Switch off, eligible Bypass destinations can use direct IPv6 if the WAN has IPv6. See [Routing privacy and verification limits](docs/SECURITY_AND_PRIVACY.md) before making DNS, WebRTC, IPv6, or peer-to-peer safety claims.
 
 To verify both paths from a client, temporarily route `api.ipify.org` to a VPN server in **Multi-Path Settings**, then open `https://api.ipify.org` in a browser or run `curl -4 https://api.ipify.org`. Compare that IP with the result from a separate IP checker such as `https://ifconfig.co/ip`, keeping that second domain out of all destination lists for the test. The first should show the selected service exit and the second should show the base exit. Use new connections and ordinary DNS, then remove the temporary list.
 
