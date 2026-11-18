@@ -8,6 +8,7 @@ use OPNsense\BlankVpn\SmartRouting;
 
 $source = __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/';
 require $source . 'Policy.php';
+require $source . 'ChinaRules.php';
 require $source . 'SmartRouting.php';
 require $source . 'RouteGroups.php';
 require $source . 'RoutingBackup.php';
