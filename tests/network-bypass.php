@@ -64,7 +64,7 @@ namespace {
     use OPNsense\Core\Config;
     use OPNsense\Firewall\Plugin;
 
-    foreach (['Policy', 'DeviceIdentity', 'Firewall', 'Resolver', 'ProxyRuntime', 'SmartRouting'] as $class) {
+    foreach (['Policy', 'ChinaRules', 'DeviceIdentity', 'Firewall', 'Resolver', 'ProxyRuntime', 'SmartRouting'] as $class) {
         require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/' . $class . '.php';
     }
 

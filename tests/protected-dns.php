@@ -7,7 +7,7 @@ use OPNsense\BlankVpn\ProxyRuntime;
 use OPNsense\BlankVpn\Resolver;
 use OPNsense\BlankVpn\SmartRouting;
 
-foreach (['Policy', 'ProxyRuntime', 'Resolver', 'SmartRouting'] as $class) {
+foreach (['Policy', 'ChinaRules', 'ProxyRuntime', 'Resolver', 'SmartRouting'] as $class) {
     require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/' . $class . '.php';
 }
 

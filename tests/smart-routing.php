@@ -207,7 +207,7 @@ namespace {
     use OPNsense\BlankVpn\SmartRouting;
     use OPNsense\Firewall\Plugin;
 
-    foreach (['Policy', 'NativeVpn', 'Resolver', 'SmartRouting', 'RouteGroups', 'ProxyRuntime', 'WanEgress', 'Firewall', 'Operations'] as $file) {
+    foreach (['Policy', 'ChinaRules', 'NativeVpn', 'Resolver', 'SmartRouting', 'RouteGroups', 'ProxyRuntime', 'WanEgress', 'Firewall', 'Operations'] as $file) {
         require __DIR__ . '/../src/opnsense/mvc/app/library/OPNsense/BlankVpn/' . $file . '.php';
     }
 
