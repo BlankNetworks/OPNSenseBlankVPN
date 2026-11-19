@@ -10,8 +10,9 @@
 
         const modes = {
             full: 'Use one VPN or proxy', multi: 'Multi-Path', full_multi: 'Base VPN + Multi-Path',
-            disabled: 'Off', blocked: 'Blocked'
+            disabled: 'No VPN or Proxy · local ISP', blocked: 'Blocked'
         };
+        const noRouteServer = '__blankvpn_no_route__';
 
         function usesBaseServer(mode) {
             return mode === 'full' || mode === 'full_multi';
@@ -652,11 +653,12 @@
         }
 
         function deviceServerPayload(assignment, discovered, kind, server) {
-            const mode = assignment && usesBaseServer(assignment.mode) ? assignment.mode : 'full';
-            const killSwitch = mode === 'full_multi' || (assignment
-                ? (assignment.killSwitch ?? (assignment.failure === 'block')) === true : true);
-            const backup = assignment?.backup && assignment.backup !== server ? assignment.backup : '';
-            const failure = mode === 'full_multi' || killSwitch ? 'block'
+            const noRoute = server === noRouteServer;
+            const mode = noRoute ? 'disabled' : assignment && usesBaseServer(assignment.mode) ? assignment.mode : 'full';
+            const killSwitch = !noRoute && (mode === 'full_multi' || (assignment
+                ? (assignment.killSwitch ?? (assignment.failure === 'block')) === true : true));
+            const backup = !noRoute && assignment?.backup && assignment.backup !== server ? assignment.backup : '';
+            const failure = noRoute ? 'wan' : mode === 'full_multi' || killSwitch ? 'block'
                 : assignment?.failure === 'backup' && backup ? 'backup' : 'wan';
             const reserveIp = kind === 'lan' && discovered?.reserveIp && discovered.canUseInterface &&
                 (!assignment || assignment.bindMac === true);
@@ -668,7 +670,7 @@
                 mac: assignment?.mac || discovered?.mac || '',
                 ipv6: assignment?.ipv6 || discovered?.ipv6 || '',
                 kind, mode, label: assignment?.label || discovered?.label || '',
-                profile: server, backup: failure === 'backup' ? backup : '',
+                profile: noRoute ? '' : server, backup: failure === 'backup' ? backup : '',
                 killSwitch, failure,
                 onDemand: assignment?.onDemand !== false,
                 ...(kind === 'lan' ? {bindMac: assignment ? assignment.bindMac === true
@@ -855,8 +857,9 @@
                 server.className = 'form-control bv-device-server';
                 server.setAttribute('aria-label', 'Server for ' + name);
                 const currentServer = networkDraft ? (usesBaseServer(policy?.networkMode) ? policy.networkProfile : '')
-                    : assignment && usesBaseServer(assignment.mode) ? assignment.profile : '';
-                const choices = routingServers().map(exitChoice);
+                    : assignment && usesBaseServer(assignment.mode) ? assignment.profile
+                        : assignment && ['default', 'disabled'].includes(assignment.mode) ? noRouteServer : '';
+                const choices = [{value: noRouteServer, label: 'No VPN or Proxy · local ISP'}, ...routingServers().map(exitChoice)];
                 if (currentServer && !choices.some((choice) => choice.value === currentServer)) {
                     choices.push({value: currentServer, label: 'Unavailable · ' + profileName(currentServer)});
                 }
@@ -866,10 +869,9 @@
                     state.deviceServerDrafts.delete(row.dataset.deviceKey);
                 }
                 options(server, choices, networkDraft ? 'Whole-Network policy'
-                    : assignment?.mode === 'multi' ? 'No base server · Multi-Path'
-                        : 'No VPN or Proxy · local ISP', selectedServer);
+                    : assignment?.mode === 'multi' ? 'No base server · Multi-Path' : 'Choose a server or No VPN or Proxy', selectedServer);
                 const serverEditable = state.canManage && !networkDraft && !paused && canUseInterface &&
-                    (!assignment || ['full', 'full_multi', 'default'].includes(assignment.mode)) &&
+                    (!assignment || ['full', 'full_multi', 'default', 'disabled'].includes(assignment.mode)) &&
                     (assignment || (device && ip && !device.addressConflict &&
                         (tailnet ? reserved : device.mac && (reserved || (reserveIp && !offline)))));
                 server.disabled = !serverEditable;

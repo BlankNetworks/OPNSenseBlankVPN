@@ -1,3 +1,9 @@
+## 0.8.62
+
+- Keep provider DNS available for device and Whole-Network routes selected through a saved server group by verifying the active group member's installed tunnel rule.
+- Allow Local and Tailscale Whole-Network and per-device routing to save **No VPN or Proxy** so those clients use the regular ISP path.
+- Update the About version and pinned SSH installer instructions.
+
 ## 0.8.61
 
 - Display the Blank VPN & Proxy name correctly in System Settings update status, including status text containing an incorrectly escaped ampersand.

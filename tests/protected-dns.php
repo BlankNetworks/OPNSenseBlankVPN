@@ -146,6 +146,15 @@ $dnsRules = [
 $dnsProfiles = ['base' => $base + ['interface' => 'wg3']] + $profiles;
 checkDnsPlan($verifyProfiles->invoke(null, $dnsProfiles, $dnsRules)['base']['dns'] === ['10.64.0.1'],
     'A native DNS server requires the installed tunnel route and source-specific guard.');
+$groupDnsMarker = Policy::marker('dns_out', 'active-member10.64.0.1');
+$groupDnsRules = [
+    $groupDnsMarker => ['action' => 'pass', 'gateway' => 'wg3', 'source' => '10.64.0.9'],
+    $groupDnsMarker . '_block' => ['action' => 'block', 'source' => '10.64.0.9'],
+];
+$groupAlias = $base + ['id' => 'active-member'];
+checkDnsPlan($verifyProfiles->invoke(null, ['group-example' => $groupAlias], $groupDnsRules)
+    ['group-example']['dns'] === ['10.64.0.1'],
+    'A saved group resolves through the active member profile’s verified DNS route.');
 $wrongRoute = $dnsRules;
 $wrongRoute[$dnsMarker]['gateway'] = 'igc0';
 checkDnsPlan($verifyProfiles->invoke(null, $dnsProfiles, $wrongRoute)['base']['dns'] === [] &&

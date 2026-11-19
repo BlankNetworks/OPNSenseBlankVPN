@@ -98,17 +98,17 @@ ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubuser
 
 To pin this release instead, use the following command. It also checks the installer digest before running it.
 
-Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.61** on a supported amd64 or aarch64 OPNsense router.
+Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.62** on a supported amd64 or aarch64 OPNsense router.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.61.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.61/scripts/install.sh && sha256 -c 9c34cbb8e160b7635538014dca79b67b17fe3be517f98b31ed0a309db7d75e14 /tmp/blankvpn-install-0.8.61.sh && sh /tmp/blankvpn-install-0.8.61.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.62.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.62/scripts/install.sh && sha256 -c 70bda26ecce247412d02b2857dd74d776f965c06884f68002c2448d1cdd66b3e /tmp/blankvpn-install-0.8.62.sh && sh /tmp/blankvpn-install-0.8.62.sh'
 ```
 
 The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.
 
 ### Download on your computer
 
-1. Open the [0.8.61 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.61), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+1. Open the [0.8.62 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.62), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
 2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 

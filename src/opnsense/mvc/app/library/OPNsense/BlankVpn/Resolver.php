@@ -221,10 +221,13 @@ final class Resolver
             }
             $source = explode('/', $profile['address'] ?? '', 2)[0];
             $interface = $profile['interface'] ?? '';
+            // Group aliases use the group ID as the array key, but the
+            // installed PF DNS rules are owned by the active member profile.
+            $routeId = $profile['id'] ?? $id;
             $ports = isset($profile['peerKey']) ? self::dnsSourcePorts($profile) : null;
             $profile['dns'] = array_values(array_filter(SmartRouting::profileDns($profile),
-                static function (string $server) use ($id, $loaded, $source, $interface, $ports): bool {
-                    $marker = Policy::marker('dns_out', $id . $server);
+                static function (string $server) use ($routeId, $loaded, $source, $interface, $ports): bool {
+                    $marker = Policy::marker('dns_out', $routeId . $server);
                     $route = $loaded[$marker] ?? [];
                     $guard = $loaded[$marker . '_block'] ?? [];
                     return $source !== '' && $interface !== '' &&

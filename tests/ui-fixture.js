@@ -1126,6 +1126,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(reply.dashboard.settings.tailnetEnabled === false && bv('toggle-tailnet-routing').textContent === 'Enable VPN' &&
         getComputedStyle(bv('toggle-tailnet-routing')).backgroundColor === 'rgb(24, 116, 73)',
         'Tailscale Save must not enable routing.');
+    bv('tailnet-network-mode').value = 'disabled';
+    bv('tailnet-network-mode').dispatchEvent(new Event('input', {bubbles:true}));
+    bv('tailnet-coverage-form').requestSubmit(bv('save-tailnet-routing'));
+    await wait();
+    assert(requests.some(x => x.action === 'tailnetRouting' && x.data.coverage === 'network' &&
+        x.data.networkMode === 'disabled' && x.data.networkProfile === ''),
+        'Whole-Network Tailscale must save No VPN or Proxy without requiring a server.');
+    bv('tailnet-network-mode').value = 'full_multi';
+    bv('tailnet-network-profile').value = 'vpn1';
+    bv('tailnet-network-mode').dispatchEvent(new Event('input', {bubbles:true}));
+    bv('tailnet-coverage-form').requestSubmit(bv('save-tailnet-routing'));
+    await wait();
     bv('tailnet-coverage-form').requestSubmit(bv('toggle-tailnet-routing'));
     await wait();
     assert(requests.some(x => x.action === 'tailnetRouting' && x.data.networkProfile === 'vpn1' &&
@@ -1360,6 +1372,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         x.data.networkMode === 'full' && x.data.networkProfile === 'proxy1' && x.data.networkKillSwitch === true) &&
         bv('add-device').hidden && reply.dashboard.settings.networkProfile === 'proxy1',
         'Whole-Network proxy coverage settings did not apply.');
+    bv('network-mode').value = 'disabled';
+    bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
+    bv('settings-form').requestSubmit(bv('save-routing'));
+    await wait();
+    assert(requests.some(x => x.action === 'settings' && x.data.coverage === 'network' &&
+        x.data.networkMode === 'disabled' && x.data.networkProfile === ''),
+        'Whole-Network Local must save No VPN or Proxy without requiring a server.');
+    bv('network-mode').value = 'full';
+    bv('network-profile').value = 'proxy1';
+    bv('network-mode').dispatchEvent(new Event('input', {bubbles:true}));
+    bv('settings-form').requestSubmit(bv('save-routing'));
+    await wait();
     const networkAssign = reply.dashboard.assignments[0];
     assert(bv('device-list').textContent.includes('New console') &&
         bv('device-list').textContent.includes('Covered by network rule') &&
@@ -2070,6 +2094,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         request.data.profile === 'inline-vpn' && !request.data.id) &&
         reply.dashboard.assignments.some(row => row.ip === '100.101.102.105' && row.profile === 'inline-vpn'),
         'A discovered Tailscale peer must gain a Full rule from the inline server selector.');
+    const localNoRoute = rowFor(bv('device-list'), 'lan/02:00:00:00:00:20');
+    const localNoRouteSelect = localNoRoute.querySelector('.bv-device-server');
+    localNoRouteSelect.value = '__blankvpn_no_route__';
+    localNoRouteSelect.dispatchEvent(new Event('change'));
+    localNoRoute.cells[6].querySelector('[aria-label^="Save server"]').click();
+    await wait();
+    assert(localSaved.mode === 'disabled' && localSaved.profile === '' && localSaved.killSwitch === false &&
+        requests.some(request => request.action === 'assign' && request.data.id === 'device1' &&
+            request.data.mode === 'disabled' && request.data.profile === '' && request.data.killSwitch === false) &&
+        rowFor(bv('device-list'), 'lan/02:00:00:00:00:20').querySelector('.bv-device-server').value === '__blankvpn_no_route__',
+        'A Local device must save No VPN or Proxy and use the local ISP without a Kill Switch.');
+    const peerNoRoute = rowFor(bv('tailnet-device-list'), 'tailnet/100.101.102.104');
+    const peerNoRouteSelect = peerNoRoute.querySelector('.bv-device-server');
+    peerNoRouteSelect.value = '__blankvpn_no_route__';
+    peerNoRouteSelect.dispatchEvent(new Event('change'));
+    peerNoRoute.cells[6].querySelector('[aria-label^="Save server"]').click();
+    await wait();
+    assert(peerSaved.mode === 'disabled' && peerSaved.profile === '' && peerSaved.killSwitch === false &&
+        requests.some(request => request.action === 'assign' && request.data.id === 'tailnet1' &&
+            request.data.mode === 'disabled' && request.data.profile === '' && request.data.killSwitch === false) &&
+        rowFor(bv('tailnet-device-list'), 'tailnet/100.101.102.104').querySelector('.bv-device-server').value === '__blankvpn_no_route__',
+        'A Tailscale device must save No VPN or Proxy and use the local ISP without a Kill Switch.');
     system.click();
     reply.dashboard.canManageUpdates = false;
     bv('refresh').click();

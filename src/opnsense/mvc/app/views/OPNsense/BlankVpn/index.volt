@@ -424,7 +424,7 @@
                             <option value="multi">Use domain lists (Multi-Path)</option>
                             <option value="full_multi">Whole-Network + Multi-Path</option>
                             <option value="blocked">Block internet</option>
-                            <option value="disabled">Use regular internet</option>
+                            <option value="disabled">No VPN or Proxy · use regular internet</option>
                         </select>
                     </label>
                     <label id="bv-network-profile-field" hidden><span id="bv-network-profile-label">Saved server</span>
@@ -477,7 +477,7 @@
                             <option value="multi">Use domain lists (Multi-Path)</option>
                             <option value="full_multi">Whole-Network + Multi-Path</option>
                             <option value="blocked">Block internet</option>
-                            <option value="disabled">Use regular internet</option>
+                            <option value="disabled">No VPN or Proxy · use regular internet</option>
                         </select>
                     </label>
                     <label id="bv-tailnet-network-profile-field" hidden><span id="bv-tailnet-network-profile-label">Saved server</span>
