@@ -51,6 +51,7 @@ jobs:
 
   wireguard-forwarding:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -62,8 +63,19 @@ jobs:
           arch: x86_64
           copyback: false
           prepare: |
+            mkdir -p /usr/local/etc/pkg/repos
+            cat > /usr/local/etc/pkg/repos/FreeBSD-ports.conf <<'EOF'
+            FreeBSD-ports: {
+              url: "pkg+https://pkg.FreeBSD.org/${ABI}/latest",
+              mirror_type: "none",
+              signature_type: "fingerprints",
+              fingerprints: "/usr/share/keys/pkg",
+              enabled: yes
+            }
+            EOF
             env ASSUME_ALWAYS_YES=yes pkg bootstrap
-            env ASSUME_ALWAYS_YES=yes pkg install wireguard-tools dnsmasq bind-tools
+            timeout -k 10 240 env ASSUME_ALWAYS_YES=yes pkg update -f
+            timeout -k 10 240 env ASSUME_ALWAYS_YES=yes pkg install -y wireguard-tools dnsmasq bind-tools
           run: |
             sh tests/freebsd-wireguard-forwarding.sh --isolated-vm
             sh tests/freebsd-shared-mullvad-key.sh --isolated-vm
