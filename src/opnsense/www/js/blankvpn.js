@@ -1745,32 +1745,49 @@
                     const pingTargetId = group ? group.members?.[0] : saved;
                     const pingTargetName = pingTargetId ? profileName(pingTargetId) : profileName(saved);
                     const scope = {local: 'Local', tailscale: 'Tailscale', both: 'Local and Tailscale'}[service.scope || 'both'];
+                    const serviceName = service.managed ? 'China Rules' : service.name;
                     const managedDetail = service.managed
                         ? (state.chinaRules.error
-                            ? 'China rule update failed · previous set kept · ' + state.chinaRules.error
+                            ? 'China Rules update failed · previous set kept · ' + state.chinaRules.error
                             : state.chinaRules.available
-                                ? 'China rules · ' + Number(state.chinaRules.domains || 0).toLocaleString() + ' domains · '
+                                ? 'China Rules applied · ' + Number(state.chinaRules.domains || 0).toLocaleString() + ' domains · '
                                     + Number(state.chinaRules.ipv4 || 0).toLocaleString() + ' IPv4 · '
-                                    + Number(state.chinaRules.ipv6 || 0).toLocaleString() + ' IPv6 · GeoSite '
-                                    + Number(state.chinaRules.geoDomains || 0).toLocaleString() + ' · GeoIP '
-                                    + Number(state.chinaRules.geoNetworks || 0).toLocaleString()
-                                    + (Number(state.chinaRules.regexSuffixDomains || 0) > 0
-                                        ? ' · ' + Number(state.chinaRules.regexSuffixDomains).toLocaleString() + ' suffix-safe regex rules matched'
-                                        : '')
-                                    + (Number(state.chinaRules.unsupportedGeoRules || 0) > 0
-                                        ? ' · ' + Number(state.chinaRules.unsupportedGeoRules).toLocaleString() + ' advanced hostname rules'
-                                        : '')
-                                    + (Number(state.chinaRules.exactGeoDomains || 0) > 0
-                                        ? ' · ' + Number(state.chinaRules.exactGeoDomains).toLocaleString() + ' exact-name rules need exact matching'
-                                        : '')
-                                    + (Number(state.chinaRules.unsupportedGeoRules || 0) > 0
-                                        ? ' · Advanced matcher: ' + (state.chinaRules.matcherMode === 'route' ? 'active' : 'shadow')
-                                        : '')
-                                    + ' · updated '
+                                    + Number(state.chinaRules.ipv6 || 0).toLocaleString() + ' IPv6 · updated '
                                     + new Date(Number(state.chinaRules.updated) * 1000).toLocaleString()
-                                : 'China rules · Update required · unassigned by default')
+                                : 'China Rules · Update required · unassigned by default')
                         : scope + ' · ' + entryCount + (entryCount === 1 ? ' entry' : ' entries');
-                    cell(row, service.name, 'Service', managedDetail);
+                    cell(row, serviceName, 'Service', managedDetail);
+                    if (service.managed) {
+                        const serviceCell = row.cells[0];
+                        const detailsId = 'bv-china-rules-details';
+                        const details = document.createElement('div');
+                        details.id = detailsId;
+                        details.className = 'bv-china-details';
+                        details.hidden = true;
+                        const stats = state.chinaRules;
+                        const sources = (Array.isArray(stats.sources) ? stats.sources : []).map((source) => {
+                            try { return new URL(source.url).hostname + ' · ' + Number(source.entries || 0).toLocaleString() + ' entries'; }
+                            catch (_) { return Number(source.entries || 0).toLocaleString() + ' entries'; }
+                        });
+                        details.textContent = stats.available
+                            ? 'Includes domain and subdomain rules, IPv4 and IPv6 network ranges, GeoSite CN hostname data, and GeoIP CN ranges. '
+                                + Number(stats.regexSuffixDomains || 0).toLocaleString() + ' regex rules were safely converted to suffix rules. '
+                                + Number(stats.unsupportedGeoRules || 0).toLocaleString() + ' additional exact-name, keyword, or regex hostname patterns need host matching. '
+                                + 'Host matching is ' + (stats.matcherMode === 'route'
+                                    ? 'routing matching hosts through the selected destination.'
+                                    : 'in Shadow mode: it evaluates matches but does not change routing.')
+                                + ' Existing domain and IP rules work in either mode. '
+                                + (sources.length ? 'Sources: ' + sources.join('; ') + '.' : '')
+                            : 'Fetch the rule feeds with Get Rules before assigning this list. The list combines domain rules and IPv4/IPv6 network ranges. It starts unassigned.';
+                        const detailsButton = button('Details', () => {
+                            details.hidden = !details.hidden;
+                            detailsButton.textContent = details.hidden ? 'Details' : 'Hide details';
+                            detailsButton.setAttribute('aria-expanded', details.hidden ? 'false' : 'true');
+                        }, 'Show details about China Rules');
+                        detailsButton.setAttribute('aria-controls', detailsId);
+                        detailsButton.setAttribute('aria-expanded', 'false');
+                        serviceCell.append(detailsButton, details);
+                    }
                     const pingResult = document.createElement('small');
                     pingResult.className = 'bv-service-ping';
                     pingResult.setAttribute('role', 'status');
@@ -1785,14 +1802,14 @@
                         form.className = 'bv-inline-form bv-service-destination';
                         const select = document.createElement('select');
                         select.className = 'form-control';
-                        select.setAttribute('aria-label', 'Destination for ' + service.name);
+                        select.setAttribute('aria-label', 'Destination for ' + serviceName);
                         const current = state.serviceDestinations.get(service.id) ?? saved;
                         options(select, choicesFor(current), 'Leave unassigned', current);
                         const save = document.createElement('button');
                         save.type = 'submit';
                         save.className = 'btn btn-default btn-sm';
                         save.textContent = 'Save';
-                        save.setAttribute('aria-label', 'Save destination for ' + service.name);
+                        save.setAttribute('aria-label', 'Save destination for ' + serviceName);
                         save.disabled = select.value === saved;
                         select.addEventListener('change', () => {
                             save.disabled = select.value === saved;
@@ -1869,7 +1886,7 @@
                                 pingResult.dataset.result = result.kind;
                                 test.disabled = false;
                             }
-                        }, 'Ping ' + (group ? 'first server for ' : 'server for ') + service.name);
+                        }, 'Ping ' + (group ? 'first server for ' : 'server for ') + serviceName);
                         test.disabled = !saved || isBypass || !pingTargetId;
                         actions.append(test);
                         if (!service.managed) {
@@ -1879,16 +1896,16 @@
                     if (service.managed && state.canManage) {
                         actions.append(button(state.chinaRules.available ? 'Update Rules' : 'Get Rules', (event) => {
                             void mutate(event.currentTarget, () => api('updateChinaRules', {}),
-                                'China rules updated and validated.');
-                        }, 'Update the China rules'));
+                                'China Rules applied.');
+                        }, 'Update China Rules'));
                         if (saved && state.chinaRules.available && Number(state.chinaRules.unsupportedGeoRules || 0) > 0) {
                             const enableMatcher = state.chinaRules.matcherMode !== 'route';
-                            actions.append(button(enableMatcher ? 'Enable Advanced' : 'Disable Advanced', (event) => {
+                            actions.append(button(enableMatcher ? 'Route host patterns' : 'Stop routing host patterns', (event) => {
                                 void mutate(event.currentTarget, () => api('setChinaMatcher', {enabled: enableMatcher ? '1' : '0'}),
-                                    enableMatcher
-                                        ? 'Advanced China hostname matching enabled.'
-                                        : 'Advanced China hostname matching returned to shadow mode.');
-                            }, (enableMatcher ? 'Enable' : 'Disable') + ' exact, keyword, and regex route matching'));
+                                    enableMatcher ? 'China Rules host-pattern routing enabled.' : 'China Rules host-pattern routing stopped; matches are observed only.');
+                            }, enableMatcher
+                                ? 'Route exact-name, keyword, and regex host patterns through the selected destination'
+                                : 'Stop routing exact-name, keyword, and regex host patterns'));
                         }
                     } else {
                         actions.append(button('Download', () => downloadEntries(service.name, entries),

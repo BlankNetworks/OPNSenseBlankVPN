@@ -136,7 +136,7 @@ final class ChinaRules
     {
         $status = self::status();
         return [
-            'id' => self::ID, 'name' => 'China', 'profile' => $row['profile'] ?? '',
+            'id' => self::ID, 'name' => 'China Rules', 'profile' => $row['profile'] ?? '',
             'domains' => !empty($status['available']) && ($row['profile'] ?? '') !== '' ? self::destinations() : [],
             'scope' => in_array($row['scope'] ?? '', ['local', 'tailscale', 'both'], true) ? $row['scope'] : 'both',
             'managed' => true, 'entryCount' => (int)($status['domains'] ?? 0) + (int)($status['ipv4'] ?? 0) + (int)($status['ipv6'] ?? 0),
@@ -154,7 +154,7 @@ final class ChinaRules
             throw new DomainException('A saved Multi-Path list uses the reserved China rule identifier. Rename or remove it first.');
         }
         $node = $model->services->service->add(self::ID);
-        $node->name = 'China';
+        $node->name = 'China Rules';
         $node->domains = self::MARKER;
         $node->profile = '';
         $node->scope = 'both';

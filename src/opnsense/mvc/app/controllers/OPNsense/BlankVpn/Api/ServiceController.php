@@ -2399,7 +2399,7 @@ class ServiceController extends ApiControllerBase
             }
             $domains ??= !empty($previous['managed']) ? ChinaRules::destinations() : $previous['domains'];
             if (!empty($previous['managed']) && $profileId !== '' && $domains === []) {
-                throw new \DomainException('Update the China rules before assigning this list.');
+                throw new \DomainException('Get China Rules before assigning this list.');
             }
             $scope = $scope ?: ($previous['scope'] ?? 'local');
             if (!in_array($scope, ['local', 'tailscale', 'both'], true)) {
@@ -2426,7 +2426,7 @@ class ServiceController extends ApiControllerBase
             $node = $id === '' ? $model->services->service->add() : $model->services->service->getChild($id);
             if ($node === null && !empty($previous['managed']) && $id === ChinaRules::ID) {
                 $node = $model->services->service->add($id);
-                $node->name = 'China';
+                $node->name = 'China Rules';
                 $node->domains = ChinaRules::MARKER;
             }
             if ($name !== null) {

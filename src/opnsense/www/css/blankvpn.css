@@ -977,6 +977,14 @@
     gap: .35rem;
 }
 
+.blankvpn .bv-china-details {
+    margin-top: .5rem;
+    max-width: 56rem;
+    white-space: normal;
+    color: var(--bv-muted);
+    font-size: .92em;
+}
+
 @media (max-width: 767px) {
     .blankvpn .bv-services thead {
         display: none;

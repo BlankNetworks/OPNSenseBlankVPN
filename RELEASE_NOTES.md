@@ -1,3 +1,10 @@
+## 0.8.64
+
+- Rename the built-in Multi-Path item to **China Rules**.
+- Confirm successful downloads with **China Rules applied** and add a Details disclosure explaining sources, rule types, and Shadow matching.
+- Replace the unclear Advanced matcher labels with **Route host patterns** and **Stop routing host patterns**.
+- Update About and pinned SSH installer instructions.
+
 ## 0.8.63
 
 - Send the China rule download and refresh operation as POST so Get Rules can initialize or update the built-in China list.
