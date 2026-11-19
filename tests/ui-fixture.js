@@ -1550,7 +1550,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(requests.some(request => request.action === 'updateChinaRules' && request.method === 'POST' &&
         JSON.stringify(request.data) === '{}') && chinaRow.querySelector('[aria-label="Update China Rules"]').textContent === 'Update Rules' &&
         chinaRow.cells[0].textContent.includes('China Rules applied') && chinaRow.cells[0].textContent.includes('12,000 domains') &&
-        document.getElementById('message-detail').textContent === 'China Rules applied.',
+        bv('message-detail').textContent === 'China Rules applied.',
         'Get Rules must POST, show the applied confirmation, and make the list assignable.');
     chinaRow.querySelector('[aria-label="Show details about China Rules"]').click();
     assert(!chinaRow.querySelector('.bv-china-details').hidden &&
