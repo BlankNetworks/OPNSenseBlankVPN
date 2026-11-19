@@ -73,6 +73,8 @@ jobs:
               enabled: yes
             }
             EOF
+            printf 'FreeBSD-base: { enabled: no }\n' > /usr/local/etc/pkg/repos/FreeBSD-base.conf
+            printf 'FreeBSD-ports-kmods: { enabled: no }\n' > /usr/local/etc/pkg/repos/FreeBSD-ports-kmods.conf
             env ASSUME_ALWAYS_YES=yes pkg bootstrap
             timeout -k 10 240 env ASSUME_ALWAYS_YES=yes pkg update -f
             timeout -k 10 240 env ASSUME_ALWAYS_YES=yes pkg install -y wireguard-tools dnsmasq bind-tools
