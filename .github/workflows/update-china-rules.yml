@@ -1,0 +1,40 @@
+name: Update China Rules data
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: china-rules-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.5'
+          extensions: curl
+          coverage: none
+      - name: Pull, parse, and validate upstream rules
+        run: php build/update_china_rules_snapshot.php
+      - name: Verify snapshot metadata and attribution
+        run: php tests/china-rules-snapshot.php
+      - name: Publish the changed snapshot
+        run: |
+          set -eu
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/china-rules/current.json.gz data/china-rules/manifest.json
+          if git diff --cached --quiet; then
+            echo 'The validated China Rules snapshot has no changes.'
+            exit 0
+          fi
+          git commit -m 'Update China Rules data snapshot'
+          git push origin HEAD:main

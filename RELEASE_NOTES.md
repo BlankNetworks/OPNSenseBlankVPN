@@ -1,3 +1,9 @@
+## 0.8.65
+
+- Host normalized China Rules snapshots in the Blank repository. A weekly GitHub workflow pulls upstream data, validates and publishes the snapshot; routers update from Blank's repository and show the last update and next scheduled pull.
+- Record upstream sources, checksums, attribution and license texts with the hosted snapshot. Passwall remains a coverage inspiration; it is not an update source.
+- Update About and pinned SSH installer instructions.
+
 ## 0.8.64
 
 - Rename the built-in Multi-Path item to **China Rules**.

@@ -127,7 +127,8 @@ window.jQuery.ajax = async (request) => {
     if (action === 'updateChinaRules') {
         reply.dashboard.chinaRules = {available:true, domains:12000, ipv4:5000, ipv6:700, geoDomains:8000,
             geoNetworks:900, unsupportedGeoRules:12, exactGeoDomains:4, regexSuffixDomains:8, matcherMode:'shadow',
-            updated:1794792807, sources:[{url:'https://rules.example.test/domains.txt', entries:12000}]};
+            updated:1794792807, nextUpdateAt:1795200000,
+            sources:[{url:'https://rules.example.test/domains.txt', entries:12000}]};
         const china = reply.dashboard.services.find(service => service.id === 'china');
         if (china) Object.assign(china, {domains:['china.example'], entryCount:1});
         return {ok:true, chinaRules:structuredClone(reply.dashboard.chinaRules)};
@@ -1556,6 +1557,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(!chinaRow.querySelector('.bv-china-details').hidden &&
         chinaRow.querySelector('.bv-china-details').textContent.includes('Shadow mode: it evaluates matches but does not change routing') &&
         chinaRow.querySelector('.bv-china-details').textContent.includes('IPv4 and IPv6 network ranges') &&
+        chinaRow.querySelector('.bv-china-details').textContent.includes('Last repository update:') &&
+        chinaRow.querySelector('.bv-china-details').textContent.includes('Next scheduled pull:') &&
         ![...chinaRow.querySelectorAll('button')].some(button => /Enable Advanced|Disable Advanced/.test(button.textContent)),
         'Details must explain rule coverage and Shadow behavior without the unclear Advanced label.');
     const chinaDestination = chinaRow.cells[1].querySelector('select');

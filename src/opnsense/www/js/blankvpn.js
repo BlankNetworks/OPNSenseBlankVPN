@@ -1778,7 +1778,9 @@
                                     : 'in Shadow mode: it evaluates matches but does not change routing.')
                                 + ' Existing domain and IP rules work in either mode. '
                                 + (sources.length ? 'Sources: ' + sources.join('; ') + '.' : '')
-                            : 'Fetch the rule feeds with Get Rules before assigning this list. The list combines domain rules and IPv4/IPv6 network ranges. It starts unassigned.';
+                                + (stats.updated ? ' Last repository update: ' + new Date(Number(stats.updated) * 1000).toLocaleString() + '.' : '')
+                                + (stats.nextUpdateAt ? ' Next scheduled pull: ' + new Date(Number(stats.nextUpdateAt) * 1000).toLocaleString() + ' UTC (GitHub Actions may start a scheduled run later).' : '')
+                            : 'Download the validated China Rules snapshot from the Blank repository before assigning this list. The list starts unassigned.';
                         const detailsButton = button('Details', () => {
                             details.hidden = !details.hidden;
                             detailsButton.textContent = details.hidden ? 'Details' : 'Hide details';

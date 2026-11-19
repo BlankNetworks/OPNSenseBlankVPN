@@ -19,17 +19,16 @@ final class ChinaRules
     private const MAX_DOMAINS = 250_000;
     private const MAX_NETWORKS = 100_000;
     private const MAX_SPECIAL_RULES = 1024;
+    private const REPOSITORY_BASE = 'https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/main/data/china-rules/';
     private const FEEDS = [
         'domains' => [
             'https://cdn.jsdelivr.net/gh/felixonmars/dnsmasq-china-list/accelerated-domains.china.conf',
             'https://cdn.jsdelivr.net/gh/felixonmars/dnsmasq-china-list/apple.china.conf',
         ],
         'ipv4' => [
-            'https://ispip.clang.cn/all_cn.txt',
             'https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china.txt',
         ],
         'ipv6' => [
-            'https://ispip.clang.cn/all_cn_ipv6.txt',
             'https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china6.txt',
         ],
         'geosite' => ['https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat'],
@@ -50,11 +49,13 @@ final class ChinaRules
                 'geoDomains' => 0, 'geoNetworks' => 0, 'unsupportedGeoRules' => 0,
                 'exactGeoDomains' => 0, 'regexSuffixDomains' => 0,
                 'bytes' => 0, 'error' => $status['error'] ?? null, 'matcherMode' => self::matcherMode(),
+                'nextUpdateAt' => null,
             ];
         }
         return ['available' => true, 'matcherMode' => self::matcherMode()] + array_intersect_key($status, array_flip([
             'file', 'updated', 'domains', 'ipv4', 'ipv6', 'geoDomains', 'geoNetworks', 'unsupportedGeoRules',
-            'exactGeoDomains', 'regexSuffixDomains', 'bytes', 'sha256', 'sources', 'error'
+            'exactGeoDomains', 'regexSuffixDomains', 'bytes', 'sha256', 'artifactSha256', 'sources', 'error',
+            'nextUpdateAt'
         ]));
     }
 
@@ -166,7 +167,124 @@ final class ChinaRules
         return (string)(self::status()['sha256'] ?? 'unavailable');
     }
 
+    public static function sourceUrls(): array
+    {
+        return self::FEEDS;
+    }
+
+    public static function fetchSource(string $url): string
+    {
+        return self::fetch($url);
+    }
+
     public static function update(?callable $validate = null): array
+    {
+        $previousStatus = self::status();
+        $newPath = '';
+        try {
+            $manifestBody = self::fetch(self::REPOSITORY_BASE . 'manifest.json');
+            $manifest = json_decode($manifestBody, true, 8, JSON_THROW_ON_ERROR);
+            if (!is_array($manifest) || ($manifest['format'] ?? null) !== 1) {
+                throw new RuntimeException('Blank Networks returned an unsupported China Rules snapshot.');
+            }
+            foreach (['updated', 'nextUpdateAt', 'domains', 'ipv4', 'ipv6', 'geoDomains', 'geoNetworks',
+                'unsupportedGeoRules', 'exactGeoDomains', 'regexSuffixDomains', 'bytes'] as $field) {
+                if (!isset($manifest[$field]) || !is_int($manifest[$field]) || $manifest[$field] < 0) {
+                    throw new RuntimeException('The hosted China Rules snapshot has incomplete metadata.');
+                }
+            }
+            foreach (['sha256', 'artifactSha256'] as $field) {
+                if (!is_string($manifest[$field] ?? null) || preg_match('/^[a-f0-9]{64}$/D', $manifest[$field]) !== 1) {
+                    throw new RuntimeException('The hosted China Rules snapshot has an invalid checksum.');
+                }
+            }
+            if (!is_array($manifest['sources'] ?? null) || $manifest['domains'] < 10_000 ||
+                $manifest['ipv4'] < 1_000 || $manifest['ipv6'] < 500 || $manifest['geoDomains'] < 50_000 ||
+                $manifest['geoNetworks'] < 1_000 || $manifest['domains'] > self::MAX_DOMAINS ||
+                $manifest['ipv4'] + $manifest['ipv6'] > self::MAX_NETWORKS ||
+                $manifest['unsupportedGeoRules'] > self::MAX_SPECIAL_RULES || $manifest['bytes'] > self::MAX_RESPONSE_BYTES) {
+                throw new RuntimeException('The hosted China Rules snapshot failed its size and count checks.');
+            }
+
+            $compressed = self::fetch(self::REPOSITORY_BASE . 'current.json.gz');
+            if (strlen($compressed) !== $manifest['bytes'] ||
+                !hash_equals($manifest['artifactSha256'], hash('sha256', $compressed))) {
+                throw new RuntimeException('The hosted China Rules file does not match its published checksum.');
+            }
+            $json = gzdecode($compressed, 128_000_000);
+            if (!is_string($json) || !hash_equals($manifest['sha256'], hash('sha256', $json))) {
+                throw new RuntimeException('The hosted China Rules data failed its integrity check.');
+            }
+            $data = json_decode($json, true, 4, JSON_THROW_ON_ERROR);
+            self::validateSnapshotData($data, $manifest);
+            $destinations = [...$data['domains'], ...$data['networks']];
+            if ($validate !== null) {
+                $validate($destinations);
+            }
+
+            $file = self::DATA_PREFIX . substr($manifest['sha256'], 0, 24) . '.json.gz';
+            $newPath = Policy::writeState($file, $compressed);
+            $status = array_intersect_key($manifest, array_flip([
+                'updated', 'nextUpdateAt', 'domains', 'ipv4', 'ipv6', 'geoDomains', 'geoNetworks',
+                'unsupportedGeoRules', 'exactGeoDomains', 'regexSuffixDomains', 'bytes', 'sha256',
+                'artifactSha256', 'sources'
+            ])) + ['available' => true, 'matcherMode' => self::matcherMode(), 'file' => $file, 'error' => null];
+            Policy::writeState(self::STATUS_FILE, json_encode($status, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+            return $status;
+        } catch (\Throwable $error) {
+            if ($newPath !== '' && ($previousStatus['file'] ?? '') !== basename($newPath)) {
+                @unlink($newPath);
+            }
+            $previousStatus['error'] = $error->getMessage();
+            try {
+                Policy::writeState(self::STATUS_FILE,
+                    json_encode($previousStatus, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+            } catch (\Throwable) {
+                // Retain the original download error if the status file is unavailable.
+            }
+            throw $error;
+        }
+    }
+
+    private static function validateSnapshotData(mixed $data, array $manifest): void
+    {
+        if (!is_array($data) || !is_array($data['domains'] ?? null) || !is_array($data['networks'] ?? null) ||
+            !is_array($data['unsupportedGeoRules'] ?? null) || count($data['domains']) !== $manifest['domains'] ||
+            count($data['networks']) !== $manifest['ipv4'] + $manifest['ipv6'] ||
+            count($data['unsupportedGeoRules']) !== $manifest['unsupportedGeoRules'] ||
+            count($data['domains']) > self::MAX_DOMAINS || count($data['networks']) > self::MAX_NETWORKS) {
+            throw new RuntimeException('The hosted China Rules data does not match its published counts.');
+        }
+        foreach ($data['domains'] as $domain) {
+            if (!is_string($domain) || strlen($domain) > 253 ||
+                preg_match('/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/D', $domain) !== 1) {
+                throw new RuntimeException('The hosted China Rules data contains an invalid domain.');
+            }
+        }
+        $ipv4 = 0;
+        $ipv6 = 0;
+        foreach ($data['networks'] as $network) {
+            $canonical = is_string($network) ? Policy::cidr($network, false) : null;
+            if ($canonical === null || $canonical !== $network) {
+                throw new RuntimeException('The hosted China Rules data contains an invalid network range.');
+            }
+            str_contains($network, ':') ? $ipv6++ : $ipv4++;
+        }
+        if ($ipv4 !== $manifest['ipv4'] || $ipv6 !== $manifest['ipv6']) {
+            throw new RuntimeException('The hosted China Rules address-family counts do not match.');
+        }
+        foreach ($data['unsupportedGeoRules'] as $rule) {
+            if (!is_string($rule) || strlen($rule) > 1024 || !str_contains($rule, ':')) {
+                throw new RuntimeException('The hosted China Rules data contains an invalid hostname pattern.');
+            }
+        }
+    }
+
+    public static function buildSnapshot(
+        ?callable $validate = null,
+        ?callable $fetcher = null,
+        ?string $outputDirectory = null
+    ): array
     {
         $domains = [];
         $networks = [];
@@ -177,7 +295,8 @@ final class ChinaRules
         $geoNetworkCount = 0;
         $sources = [];
         $newPath = '';
-        $previousStatus = self::status();
+        $previousStatus = $outputDirectory === null ? self::status() : [];
+        $fetcher ??= static fn (string $url): string => self::fetch($url);
         try {
             foreach (self::FEEDS as $kind => $urls) {
                 if (in_array($kind, ['ipv4', 'ipv6'], true)) {
@@ -188,13 +307,14 @@ final class ChinaRules
                     foreach ($urls as $url) {
                         try {
                             $candidate = [];
-                            $count = self::parseNetworks(self::fetch($url), $candidate, $kind);
+                            $body = $fetcher($url);
+                            $count = self::parseNetworks($body, $candidate, $kind);
                             $minimum = $kind === 'ipv4' ? 1_000 : 500;
                             if ($count < $minimum) {
                                 throw new DomainException('The China ' . strtoupper($kind) . ' source was unexpectedly small.');
                             }
                             $networks += $candidate;
-                            $sources[] = ['url' => $url, 'entries' => $count];
+                            $sources[] = ['url' => $url, 'entries' => $count, 'sha256' => hash('sha256', $body)];
                             $succeeded = true;
                             break;
                         } catch (\Throwable $error) {
@@ -208,7 +328,7 @@ final class ChinaRules
                     continue;
                 }
                 foreach ($urls as $url) {
-                    $body = self::fetch($url);
+                    $body = $fetcher($url);
                     $count = $kind === 'domains'
                         ? self::parseDomains($body, $domains)
                         : ($kind === 'geosite'
@@ -220,6 +340,7 @@ final class ChinaRules
                         $geoNetworkCount = $count;
                     }
                     $sources[] = ['url' => $url, 'entries' => $count];
+                    $sources[array_key_last($sources)]['sha256'] = hash('sha256', $body);
                 }
             }
             $ipv4Count = count(array_filter(array_keys($networks), static fn (string $ip): bool => !str_contains($ip, ':')));
@@ -249,17 +370,21 @@ final class ChinaRules
             // Hash the canonical, sorted rules so identical refreshes reuse the same PF table IDs.
             $digest = hash('sha256', $json);
             $file = self::DATA_PREFIX . substr($digest, 0, 24) . '.json.gz';
-            $newPath = Policy::writeState($file, $compressed);
+            $newPath = self::writeSnapshotState($file, $compressed, $outputDirectory);
+            $nextUpdate = new \DateTimeImmutable('next monday 06:00:00', new \DateTimeZone('UTC'));
             $status = [
                 'updated' => time(), 'domains' => count($domains),
                 'ipv4' => $ipv4Count, 'ipv6' => $ipv6Count,
                 'geoDomains' => $geoDomainCount, 'geoNetworks' => $geoNetworkCount,
                 'unsupportedGeoRules' => count($unsupportedGeoRules), 'exactGeoDomains' => $exactGeoDomains,
                 'regexSuffixDomains' => $regexSuffixDomains,
-                'file' => $file, 'bytes' => strlen($compressed), 'sha256' => $digest, 'sources' => $sources,
+                'file' => $file, 'bytes' => strlen($compressed), 'sha256' => $digest,
+                'artifactSha256' => hash('sha256', $compressed), 'sources' => $sources,
+                'nextUpdateAt' => $nextUpdate->getTimestamp(),
                 'error' => null,
             ];
-            Policy::writeState(self::STATUS_FILE, json_encode($status, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+            self::writeSnapshotState(self::STATUS_FILE,
+                json_encode($status, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES), $outputDirectory);
             return ['available' => true, 'matcherMode' => self::matcherMode()] + $status;
         } catch (\Throwable $error) {
             $old = $previousStatus;
@@ -268,12 +393,41 @@ final class ChinaRules
             }
             $old['error'] = $error->getMessage();
             try {
-                Policy::writeState(self::STATUS_FILE, json_encode($old, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+                self::writeSnapshotState(self::STATUS_FILE,
+                    json_encode($old, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES), $outputDirectory);
             } catch (\Throwable) {
                 // Keep the original download failure if the optional status file is unwritable.
             }
             throw $error;
         }
+    }
+
+    private static function writeSnapshotState(string $name, string $contents, ?string $directory): string
+    {
+        if ($directory === null) {
+            return Policy::writeState($name, $contents);
+        }
+        if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
+            throw new RuntimeException('The China Rules snapshot directory could not be created.');
+        }
+        if (is_link($directory) || !is_dir($directory)) {
+            throw new RuntimeException('The China Rules snapshot directory is unsafe.');
+        }
+        $temporary = tempnam($directory, '.china-rules-');
+        if ($temporary === false) {
+            throw new RuntimeException('A temporary China Rules snapshot could not be created.');
+        }
+        try {
+            chmod($temporary, 0600);
+            if (file_put_contents($temporary, $contents) !== strlen($contents) || !rename($temporary, $directory . '/' . $name)) {
+                throw new RuntimeException('A China Rules snapshot could not be written.');
+            }
+        } finally {
+            if (is_file($temporary)) {
+                @unlink($temporary);
+            }
+        }
+        return $directory . '/' . $name;
     }
 
     public static function restore(array $status): void
@@ -523,7 +677,8 @@ final class ChinaRules
     {
         $parts = parse_url($url);
         $host = strtolower((string)($parts['host'] ?? ''));
-        if (($parts['scheme'] ?? '') !== 'https' || !in_array($host, ['ispip.clang.cn', 'cdn.jsdelivr.net'], true) ||
+        if (($parts['scheme'] ?? '') !== 'https' ||
+            !in_array($host, ['ispip.clang.cn', 'cdn.jsdelivr.net', 'raw.githubusercontent.com'], true) ||
             isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment']) ||
             (isset($parts['port']) && (int)$parts['port'] !== 443) || !function_exists('curl_init')) {
             throw new RuntimeException('A China rules source is invalid or HTTPS downloading is unavailable.');
