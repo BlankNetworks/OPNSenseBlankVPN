@@ -1,0 +1,51 @@
+{
+    "format": 1,
+    "available": true,
+    "matcherMode": "shadow",
+    "updated": 1795114315,
+    "domains": 110285,
+    "ipv4": 6221,
+    "ipv6": 3452,
+    "geoDomains": 110255,
+    "geoNetworks": 9665,
+    "unsupportedGeoRules": 569,
+    "exactGeoDomains": 562,
+    "regexSuffixDomains": 1,
+    "bytes": 509860,
+    "sha256": "404bc10dfae9c18734fe018c24351022c0f8f86dcf82948d44c2ac7dfa377334",
+    "artifactSha256": "d789c1d76584c026a6e8067ed17ed7ddca6c65b3e476a10178f81976504b3afa",
+    "sources": [
+        {
+            "url": "https://cdn.jsdelivr.net/gh/felixonmars/dnsmasq-china-list/accelerated-domains.china.conf",
+            "entries": 109500,
+            "sha256": "614aa9da0bc26c4d956778ffc0657ac21cfde87f869d5c2430d660d5dd1dbb59"
+        },
+        {
+            "url": "https://cdn.jsdelivr.net/gh/felixonmars/dnsmasq-china-list/apple.china.conf",
+            "entries": 165,
+            "sha256": "5b85e3febd8067233d86483299f257806428b5d520c65e3da3c0ce9465568f64"
+        },
+        {
+            "url": "https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china.txt",
+            "entries": 6221,
+            "sha256": "0892252c80c8f651a9250856b9bcbf87383cdf28c527656fbb62526f46878079"
+        },
+        {
+            "url": "https://cdn.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china6.txt",
+            "entries": 3446,
+            "sha256": "225a126c2b779d3962861558b6b1435d667da189b036bbdfb31f544974356c59"
+        },
+        {
+            "url": "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat",
+            "entries": 110255,
+            "sha256": "268f30619cfe5db5a925766bf966045f23b58b9a57bbc00c00396eb548011814"
+        },
+        {
+            "url": "https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/geoip.dat",
+            "entries": 9665,
+            "sha256": "d4ec4c5e5d5a38c1399964ea9fd8c94288426a3b31b483904b67819fc07f4466"
+        }
+    ],
+    "nextUpdateAt": 1795413600,
+    "error": null
+}
