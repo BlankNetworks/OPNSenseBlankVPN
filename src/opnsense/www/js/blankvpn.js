@@ -516,7 +516,8 @@
                 (data.running ? Date.now() + 600000 : 0)};
             const status = byId('update-status');
             const message = state.updateAction === 'check' ? 'Checking for an update…'
-                : state.updateAction === 'apply' ? 'Starting update…' : data.message;
+                : state.updateAction === 'apply' ? 'Starting update…' : String(data.message || '')
+                    .replace(/Blank VPN (?:amp;?|&amp;) Proxy/g, 'Blank VPN & Proxy');
             const summary = [data.installed ? 'Installed ' + data.installed : '',
                 data.available ? 'Available ' + data.available : '', message];
             status.textContent = summary.filter(Boolean).join(' · ');

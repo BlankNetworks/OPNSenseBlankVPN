@@ -8,7 +8,7 @@ let inlineAssignError = false;
 let tailnetTraffic = 'unseen';
 const ambiguousSignIns = new Set(['account', 'providerLogin', 'mystBeginAuth', 'mystPollAuth', 'ivpnLogin']);
 const updateStatus = {ok:true, supported:true, enabled:false, running:false, installed:'0.1.39',
-    available:'', message:'Check for a Blank VPN & Proxy update.'};
+    available:'', message:'Blank VPN amp Proxy is up to date.'};
 const installedCores = [
     {id:'mihomo',version:'1.19.34',installed:true,source:'Bundled',
         available:{version:'1.19.35',sha256:'a'.repeat(64)},update:true,rollback:false},
@@ -1716,8 +1716,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         bv('update-check').textContent === 'Check for update' && !bv('update-check').hidden &&
         !bv('update-check').disabled && bv('update-apply').textContent === 'Update' &&
         !bv('update-apply').hidden && bv('update-apply').disabled &&
-        bv('update-status').textContent.includes('Installed 0.1.39'),
-        'The update page must report its installed release and offer check and update without a separate enable step.');
+        bv('update-status').textContent.includes('Installed 0.1.39') &&
+        bv('update-status').textContent.includes('Blank VPN & Proxy is up to date.') &&
+        !bv('update-status').textContent.includes('amp Proxy'),
+        'The update page must report its installed release, display the product ampersand correctly, and offer update without a separate enable step.');
     const nativeTimeout = window.setTimeout;
     window.setTimeout = (callback, milliseconds, ...args) => nativeTimeout(callback,
         milliseconds === 4000 ? 50 : milliseconds, ...args);

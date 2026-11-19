@@ -1,3 +1,8 @@
+## 0.8.61
+
+- Display the Blank VPN & Proxy name correctly in System Settings update status, including status text containing an incorrectly escaped ampersand.
+- Update About and pinned SSH installation instructions for this release.
+
 ## 0.8.60
 
 - Add an optional advanced DNS matcher for exact-name, keyword and regular-expression China rules. It starts in shadow mode; enabling it routes matches through the selected VPN, proxy or explicit WAN bypass resolver and learns answers only into the matching PF destination table.
