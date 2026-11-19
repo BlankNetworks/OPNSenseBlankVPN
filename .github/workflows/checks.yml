@@ -66,7 +66,7 @@ jobs:
             mkdir -p /usr/local/etc/pkg/repos
             cat > /usr/local/etc/pkg/repos/FreeBSD-ports.conf <<'EOF'
             FreeBSD-ports: {
-              url: "pkg+https://pkg.FreeBSD.org/${ABI}/latest",
+              url: "https://pkg.FreeBSD.org/${ABI}/latest",
               mirror_type: "none",
               signature_type: "fingerprints",
               fingerprints: "/usr/share/keys/pkg",
