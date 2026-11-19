@@ -1,3 +1,9 @@
+## 0.8.63
+
+- Send the China rule download and refresh operation as POST so Get Rules can initialize or update the built-in China list.
+- Rename the Groups page to Group Lists.
+- Update the About version and pinned SSH installer instructions.
+
 ## 0.8.62
 
 - Keep provider DNS available for device and Whole-Network routes selected through a saved server group by verifying the active group member's installed tunnel rule.

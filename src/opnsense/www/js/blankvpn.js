@@ -1878,7 +1878,7 @@
                     }
                     if (service.managed && state.canManage) {
                         actions.append(button(state.chinaRules.available ? 'Update Rules' : 'Get Rules', (event) => {
-                            void mutate(event.currentTarget, () => api('updateChinaRules'),
+                            void mutate(event.currentTarget, () => api('updateChinaRules', {}),
                                 'China rules updated and validated.');
                         }, 'Update the China rules'));
                         if (saved && state.chinaRules.available && Number(state.chinaRules.unsupportedGeoRules || 0) > 0) {
@@ -1983,7 +1983,7 @@
                 }
             } catch (error) {
                 if (state.section === 'groups') {
-                    byId('group-catalog-status').textContent = 'The saved server list could not be loaded. Select Groups again to retry.';
+                    byId('group-catalog-status').textContent = 'The saved server list could not be loaded. Select Group Lists again to retry.';
                 }
                 notice(errorMessage(error, 'Proxy catalog unavailable.'), 'danger');
             }

@@ -124,6 +124,13 @@ window.jQuery.ajax = async (request) => {
         reply.dashboard.groups = reply.dashboard.groups.filter(group => group.id !== data.id);
         return {ok:true};
     }
+    if (action === 'updateChinaRules') {
+        reply.dashboard.chinaRules = {available:true, domains:12000, ipv4:5000, ipv6:700, geoDomains:8000,
+            geoNetworks:900, updated:1794792807};
+        const china = reply.dashboard.services.find(service => service.id === 'china');
+        if (china) Object.assign(china, {domains:['china.example'], entryCount:1});
+        return {ok:true, chinaRules:structuredClone(reply.dashboard.chinaRules)};
+    }
     if (action === 'testServiceRoute') {
         return data.id === 'unavailable-demo'
             ? {ok:true, host:'www.example.net', results:{lan:'Selected server unavailable. Matching traffic is blocked'}}
@@ -346,8 +353,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert(!requests.some(x => x.action === 'relays'), 'server list loaded before sign-in');
     assert(getComputedStyle(bv('appearance')).backgroundImage === 'none', 'host select decoration was not suppressed');
     document.querySelector('[data-bv-section="groups"]').click();
-    assert(!bv('groups-page').hidden && bv('group-vpn-list') && bv('group-proxy-list') && bv('saved-groups'),
-        'The Groups tab must open with VPN, proxy, and saved-list columns.');
+    assert(!bv('groups-page').hidden && document.querySelector('[data-bv-section="groups"]').textContent === 'Group Lists' &&
+        bv('groups-title').textContent === 'Group Lists' && bv('group-vpn-list') && bv('group-proxy-list') && bv('saved-groups'),
+        'The Group Lists tab must open with VPN, proxy, and saved-list columns.');
     const groupColumns = getComputedStyle(bv('group-vpn-list').parentElement.parentElement).gridTemplateColumns.split(' ').length;
     assert(groupColumns === (innerWidth > 900 ? 3 : 1), 'Groups must use three columns on wide screens and stack on narrow screens.');
     await wait();
@@ -1515,7 +1523,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     reply.dashboard.services.push({id:'youtube-demo', name:'YouTube', domains:['youtube.com','googlevideo.com'],
         profile:'vpn1', routing:{lan:{gateway:'wg1'}}},
     {id:'unavailable-demo', name:'Unavailable route', domains:['example.net'], profile:'vpn1',
-        routing:{lan:{guard:true, gateway:null}}});
+        routing:{lan:{guard:true, gateway:null}}},
+    {id:'china', name:'China', managed:true, domains:[], entryCount:0, profile:'', scope:'both'});
     bv('refresh').click();
     await wait();
     const effectiveRow = bv('device-list').querySelector('[aria-label="Edit Renamed LAN device"]').closest('tr');
@@ -1530,6 +1539,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelector('[data-bv-section="smart"]').click();
     assert(bv('service-scope').value === 'local',
         'Multi-Path offers independent list coverage.');
+    let chinaRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('China'));
+    const getChinaRules = chinaRow.querySelector('[aria-label="Update the China rules"]');
+    assert(chinaRow.cells[0].textContent.includes('Update required') && getChinaRules.textContent === 'Get Rules',
+        'An uninitialized China list must explain that its rule data must be fetched first.');
+    getChinaRules.click();
+    await wait();
+    chinaRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('China'));
+    assert(requests.some(request => request.action === 'updateChinaRules' && request.method === 'POST' &&
+        JSON.stringify(request.data) === '{}') && chinaRow.querySelector('[aria-label="Update the China rules"]').textContent === 'Update Rules' &&
+        chinaRow.cells[0].textContent.includes('12,000 domains'),
+        'Get Rules must POST and make the validated China list assignable.');
+    const chinaDestination = chinaRow.cells[1].querySelector('select');
+    chinaDestination.value = 'vpn1';
+    chinaDestination.dispatchEvent(new Event('change'));
+    chinaRow.cells[1].querySelector('form button').click();
+    await wait();
+    assert(requests.some(request => request.action === 'setServiceDestination' && request.data.id === 'china' &&
+        request.data.profile === 'vpn1') && reply.dashboard.services.find(service => service.id === 'china').profile === 'vpn1',
+        'A China list can be assigned after Get Rules completes.');
     const youtubeRow = [...bv('service-list').rows].find(row => row.cells[0].textContent.includes('YouTube'));
     youtubeRow.querySelector('[aria-label="Ping server for YouTube"]').click();
     await wait();

@@ -15,7 +15,7 @@
     <nav class="bv-navigation" aria-label="Blank VPN &amp; Proxy pages">
         <button type="button" data-bv-section="vpns" aria-controls="bv-tunnels" aria-pressed="true">VPN Login</button>
         <button type="button" data-bv-section="proxies" aria-controls="bv-proxies" aria-pressed="false" data-manage-only>Proxy Login</button>
-        <button type="button" data-bv-section="groups" aria-controls="bv-groups-page" aria-pressed="false" data-manage-only>Groups</button>
+        <button type="button" data-bv-section="groups" aria-controls="bv-groups-page" aria-pressed="false" data-manage-only>Group Lists</button>
         <button type="button" data-bv-section="network" aria-controls="bv-network-page" aria-pressed="false">Network Settings</button>
         <button type="button" data-bv-section="smart" aria-controls="bv-smart-page" aria-pressed="false">Multi-Path Settings</button>
         <button type="button" data-bv-section="tailscale" aria-controls="bv-tailscale-page" aria-pressed="false">Tailscale Settings</button>
@@ -366,7 +366,7 @@
     </section>
 
     <section id="bv-groups-page" class="bv-panel" data-bv-panel="groups" aria-labelledby="bv-groups-title" data-manage-only hidden>
-        <h2 id="bv-groups-title">Server Groups</h2>
+        <h2 id="bv-groups-title">Group Lists</h2>
         <p class="text-muted">Select servers and save them in failover order. The active server stays selected until its health check fails, then the next reachable server takes over. If every server fails, the Kill Switch follows your routing setting while checks continue; routing resumes when a server recovers.</p>
         <p id="bv-group-catalog-status" class="text-muted" role="status" aria-live="polite"></p>
         <form id="bv-group-form">
