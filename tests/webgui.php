@@ -142,6 +142,11 @@ namespace OPNsense\BlankVpn {
         {
             return $operation();
         }
+
+        public static function readOnly(callable $operation): mixed
+        {
+            return $operation();
+        }
     }
 
     final class WireGuard

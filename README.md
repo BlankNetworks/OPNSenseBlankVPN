@@ -337,3 +337,9 @@ The backup excludes provider credentials, subscription secrets, WireGuard keys, 
 - Per-IPv4 kill switches on shared LANs, independent of strict VPN segment mode.
 - HTTPS-only Mullvad onboarding, account binding, recoverable registration, and native key-pair verification.
 - Scoped DNS, routing, and rollback verification. Review [VALIDATION.md](VALIDATION.md) before using the package on the primary router.
+
+## Contributing to OPNsense
+
+The upstream plugin requirements, current integration gaps, and a draft issue
+for the required maintainer discussion are in
+[OPNsense plugin PR readiness](docs/OPNSENSE_PLUGIN_PR_READINESS.md).
