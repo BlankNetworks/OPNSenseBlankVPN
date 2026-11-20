@@ -1,3 +1,8 @@
+## 0.8.67
+
+- Normalize the product name in both the package update status and the completion notification so the ampersand displays correctly.
+- Update About and pinned SSH installer instructions.
+
 ## 0.8.66
 
 - Run safe VPN bulk pings with a bounded four-request pool and a read-only probe endpoint; unavailable probe paths are reported as unverified without changing firewall state.

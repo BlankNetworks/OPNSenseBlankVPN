@@ -513,13 +513,16 @@
             }
         }
 
+        function updateMessage(value) {
+            return String(value || '').replace(/Blank VPN (?:amp;?|&amp;) Proxy/g, 'Blank VPN & Proxy');
+        }
+
         function renderUpdate(data) {
             state.update = {...data, pollUntil: data.pollUntil || state.update?.pollUntil ||
                 (data.running ? Date.now() + 600000 : 0)};
             const status = byId('update-status');
             const message = state.updateAction === 'check' ? 'Checking for an update…'
-                : state.updateAction === 'apply' ? 'Starting update…' : String(data.message || '')
-                    .replace(/Blank VPN (?:amp;?|&amp;) Proxy/g, 'Blank VPN & Proxy');
+                : state.updateAction === 'apply' ? 'Starting update…' : updateMessage(data.message);
             const summary = [data.installed ? 'Installed ' + data.installed : '',
                 data.available ? 'Available ' + data.available : '', message];
             status.textContent = summary.filter(Boolean).join(' · ');
@@ -544,7 +547,7 @@
                 renderUpdate(result);
                 if (previous?.running && !result.running) {
                     const installed = previous.installed && previous.installed !== result.installed;
-                    notice(result.message || (installed ? 'Update installed.' : 'Update ended. Check package status.'),
+                    notice(updateMessage(result.message || (installed ? 'Update installed.' : 'Update ended. Check package status.')),
                         result.phase === 'failed' ? 'danger' : 'success');
                 }
             } catch (error) {

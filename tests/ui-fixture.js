@@ -98,7 +98,7 @@ window.jQuery.ajax = async (request) => {
         }
         if (action === 'status' && updateStatus.running && ++updatePolls === 2) {
             Object.assign(updateStatus, {running:false, phase:'done', installed:'0.1.40',
-                available:'', message:'Update installed.'});
+                available:'', message:'Blank VPN &amp; Proxy 0.1.40 installed. Reload the WebGUI to use the updated dashboard.'});
         }
         return structuredClone(updateStatus);
     }
@@ -1811,7 +1811,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             bv('update-status').textContent.includes('Installing package'), 'Apply must request only the displayed version.');
         await new Promise(resolve => nativeTimeout(resolve, 150));
         assert(updatePolls === 2 && bv('update-status').textContent.includes('Installed 0.1.40') &&
-            bv('message-detail').textContent === 'Update installed.' && !bv('update-check').disabled &&
+            bv('update-status').textContent.includes('Blank VPN & Proxy 0.1.40 installed.') &&
+            bv('message-detail').textContent === 'Blank VPN & Proxy 0.1.40 installed. Reload the WebGUI to use the updated dashboard.' &&
+            !bv('message-detail').textContent.includes('&amp;') && !bv('update-check').disabled &&
             bv('update-apply').disabled,
             'Update completion must refresh the installed version and restore check availability.');
     } finally {
