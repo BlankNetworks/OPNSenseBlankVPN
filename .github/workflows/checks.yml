@@ -190,6 +190,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      actions: read
       pages: write
       id-token: write
     env:
@@ -256,6 +257,21 @@ jobs:
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
           path: _site
+      - name: Wait for the Pages artifact to become visible
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          for attempt in $(seq 1 30); do
+            count=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+              --jq '[.artifacts[] | select(.name == "github-pages" and (.expired | not))] | length')
+            if [ "$count" -ge 1 ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "GitHub Actions did not expose the uploaded Pages artifact within 60 seconds." >&2
+          exit 1
       - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
         id: deploy
       - name: Verify that FreeBSD pkg can authenticate and fetch the published packages
