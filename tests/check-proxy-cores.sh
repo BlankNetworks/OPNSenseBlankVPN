@@ -26,3 +26,4 @@ done
 ./xray run -test -config xray.json
 ./xray run -test -config xray-reality.json
 ./sing-box check -c sing-box.json
+./sing-box check -c anytls-reality.json

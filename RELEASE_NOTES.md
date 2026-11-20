@@ -1,3 +1,9 @@
+## 0.8.70
+
+- Route AnyTLS+REALITY share links to sing-box, which supports the combination through its shared TLS/REALITY client; keep ordinary AnyTLS on Mihomo.
+- Validate AnyTLS+REALITY inputs for required SNI, public key, and direct TCP transport.
+- Update About and pinned SSH install instructions.
+
 ## 0.8.69
 
 - Serve approved Mihomo, tun2socks, Xray, and sing-box core archives from Blank Networks versioned GitHub releases on amd64 and aarch64.

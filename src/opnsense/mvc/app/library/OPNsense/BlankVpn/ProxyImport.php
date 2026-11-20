@@ -245,6 +245,38 @@ final class ProxyImport
             $options['alterId'] = (int)($query['aid'] ?? 0);
             $options['cipher'] = $query['scy'] ?? 'auto';
         }
+        if ($type === 'anytls' && ($query['security'] ?? '') === 'reality') {
+            self::tlsPolicy($query);
+            $network = $query['type'] ?? $query['net'] ?? 'tcp';
+            if (!in_array($network, ['', 'tcp', 'raw'], true) ||
+                !empty($query['headerType']) && $query['headerType'] !== 'none') {
+                throw new DomainException('AnyTLS with REALITY requires a direct TCP connection.');
+            }
+            if (empty($query['pbk'])) {
+                throw new DomainException('REALITY requires a server public key.');
+            }
+            $serverName = $query['sni'] ?? $query['peer'] ?? '';
+            if ($serverName === '') {
+                throw new DomainException('AnyTLS with REALITY requires an SNI server name.');
+            }
+            $tls = [
+                'enabled' => true,
+                'server_name' => self::host($serverName),
+                'reality' => [
+                    'enabled' => true,
+                    'public_key' => $query['pbk'],
+                    'short_id' => $query['sid'] ?? ''
+                ],
+                'utls' => [
+                    'enabled' => true,
+                    'fingerprint' => $query['fp'] ?? 'chrome'
+                ]
+            ];
+            return self::node('sing-box', [
+                'type' => 'anytls', 'server' => $server, 'server_port' => $port,
+                'password' => $options['password'], 'tls' => $tls
+            ], $label);
+        }
         $options += self::tlsAndTransport($query, in_array($type, ['trojan', 'tuic', 'anytls', 'hysteria', 'hysteria2'], true));
         foreach ([
             'flow' => 'flow', 'upmbps' => 'up', 'downmbps' => 'down', 'auth' => 'auth-str',

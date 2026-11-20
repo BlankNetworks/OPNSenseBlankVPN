@@ -313,6 +313,18 @@ assertProxy($sing['adapter']['route']['final'] === 'selected' &&
     $sing['adapter']['dns']['servers'][0]['tls']['server_name'] === 'cloudflare-dns.com' &&
     $sing['adapter']['dns']['servers'][1]['tls']['server_name'] === 'dns.quad9.net',
     'sing-box has one selected outbound and uses validated DoT for proxy endpoint resolution.');
+$anytlsReality = proxyNode('anytls://fixture-pass@192.0.2.2:443?security=reality&sni=example.com&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0&sid=0123456789abcdef#AnyTLS%20REALITY');
+$anytlsRealityConfig = ProxyRuntime::configuration($route, $anytlsReality);
+assertProxy($anytlsReality['core'] === 'sing-box' &&
+    $anytlsReality['config']['tls']['enabled'] === true &&
+    $anytlsReality['config']['tls']['reality']['enabled'] === true &&
+    $anytlsReality['config']['tls']['reality']['public_key'] === 'jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0' &&
+    $anytlsReality['config']['tls']['utls']['fingerprint'] === 'chrome' &&
+    $anytlsRealityConfig['adapter']['outbounds'][0]['type'] === 'anytls',
+    'AnyTLS REALITY share links use the sing-box native outbound and Reality TLS settings.');
+rejectProxy('anytls://fixture-pass@192.0.2.2:443?security=reality&sni=example.com');
+rejectProxy('anytls://fixture-pass@192.0.2.2:443?security=reality&sni=example.com&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0&type=ws');
+rejectProxy('anytls://fixture-pass@192.0.2.2:443?security=reality&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0');
 assertProxy($ssConfig['mihomo']['profile'] === ['store-selected' => false, 'store-fake-ip' => false],
     'One selected upstream and redir-host DNS do not need a persistent Mihomo routing cache.');
 
@@ -343,7 +355,7 @@ if (isset($argv[1])) {
         'ss2022' => ProxyRuntime::configuration($route, proxyNode($ss2022))['mihomo'], 'reality' => $realityConfig,
         'adapter-bridge' => $xray['mihomo'], 'nord-chicago' => $chicagoConfig, 'nord-tokyo' => $tokyoConfig,
         'xray' => $xray['adapter'], 'xray-reality' => $xrayRealityConfig,
-        'sing-box' => $sing['adapter']] as $name => $config) {
+        'sing-box' => $sing['adapter'], 'anytls-reality' => $anytlsRealityConfig['adapter']] as $name => $config) {
         file_put_contents($dir . '/' . $name . '.json', json_encode($config, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     }
 }
