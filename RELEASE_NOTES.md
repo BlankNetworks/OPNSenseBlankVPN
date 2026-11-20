@@ -1,7 +1,7 @@
 ## 0.8.66
 
 - Run safe VPN bulk pings with a bounded four-request pool and a read-only probe endpoint; unavailable probe paths are reported as unverified without changing firewall state.
-- Reuse an already-running proxy SOCKS listener for a Ping instead of starting a duplicate test core. Race independent HTTPS checks through one listener and bound manual test timeouts while keeping inactive proxy tests serialized.
+- Race independent HTTPS checks through one proxy test listener and bound manual test timeouts while keeping proxy core tests serialized.
 - Update About and pinned SSH installer instructions.
 
 ## 0.8.65

@@ -610,17 +610,9 @@ class ServiceController extends ApiControllerBase
 
     public function testProxyNodeAction()
     {
-        return $this->respond(fn () => Operations::exclusive(function () {
-            $id = $this->input('id', 64);
-            $activeRoute = null;
-            foreach (ProxyRuntime::routes(new BlankVpn()) as $route) {
-                if (($route['node'] ?? '') === $id && ProxyRuntime::ready($route)) {
-                    $activeRoute = $route;
-                    break;
-                }
-            }
-            return ProxyRuntime::testNode($id, $activeRoute);
-        }), true, true);
+        return $this->respond(fn () => Operations::exclusive(fn () =>
+            ProxyRuntime::testNode($this->input('id', 64))
+        ), true, true);
     }
 
     public function accountAction()
