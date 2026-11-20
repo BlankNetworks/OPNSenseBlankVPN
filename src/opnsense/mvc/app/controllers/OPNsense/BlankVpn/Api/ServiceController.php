@@ -460,6 +460,32 @@ class ServiceController extends ApiControllerBase
         }), true, true);
     }
 
+    /** Fast, read-only probe used by bounded concurrent VPN bulk pings. */
+    public function pingExitAction()
+    {
+        return $this->respond(function () {
+            $model = new BlankVpn();
+            $route = Policy::routes($model, false)[$this->input('id', 64)] ?? null;
+            if ($route === null || ($route['kind'] ?? '') === 'proxy') {
+                throw new \DomainException('Select a saved VPN tunnel to ping.');
+            }
+            if (!self::routeConfigured($route)) {
+                throw new \DomainException('The saved VPN tunnel is unavailable.');
+            }
+            $loaded = Firewall::loadedRules();
+            if ($loaded === null) {
+                throw new \RuntimeException('OPNsense could not read the active firewall rules.');
+            }
+            $targets = Firewall::probePathsInstalled($route, $loaded, Firewall::loadedNat());
+            if (count($targets) !== count(Policy::PROBE_TARGETS)) {
+                return ['reachable' => null, 'detail' => 'The protected VPN ping route is unavailable. Use Test to repair and verify it.'];
+            }
+            return ($route['kind'] ?? '') === 'native'
+                ? WireGuard::probeSource($route, $targets)
+                : WireGuard::probe($route, $targets);
+        }, true, true);
+    }
+
     public function testDeviceRouteAction()
     {
         return $this->respond(fn () => Operations::exclusive(function () {
@@ -584,9 +610,17 @@ class ServiceController extends ApiControllerBase
 
     public function testProxyNodeAction()
     {
-        return $this->respond(fn () => Operations::exclusive(fn () =>
-            ProxyRuntime::testNode($this->input('id', 64))
-        ), true, true);
+        return $this->respond(fn () => Operations::exclusive(function () {
+            $id = $this->input('id', 64);
+            $activeRoute = null;
+            foreach (ProxyRuntime::routes(new BlankVpn()) as $route) {
+                if (($route['node'] ?? '') === $id && ProxyRuntime::ready($route)) {
+                    $activeRoute = $route;
+                    break;
+                }
+            }
+            return ProxyRuntime::testNode($id, $activeRoute);
+        }), true, true);
     }
 
     public function accountAction()

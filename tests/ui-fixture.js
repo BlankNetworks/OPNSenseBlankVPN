@@ -6,6 +6,8 @@ let registerError = null;
 let coreStatusError = false;
 let inlineAssignError = false;
 let tailnetTraffic = 'unseen';
+let activeBulkPingRequests = 0;
+let peakBulkPingRequests = 0;
 const ambiguousSignIns = new Set(['account', 'providerLogin', 'mystBeginAuth', 'mystPollAuth', 'ivpnLogin']);
 const updateStatus = {ok:true, supported:true, enabled:false, running:false, installed:'0.1.39',
     available:'', message:'Blank VPN amp Proxy is up to date.'};
@@ -271,6 +273,14 @@ window.jQuery.ajax = async (request) => {
     }
     if (action === 'testExit' && exitTestError) {
         return {ok:true, reachable:false, detail:exitTestError};
+    }
+    if (action === 'pingExit') {
+        activeBulkPingRequests++;
+        peakBulkPingRequests = Math.max(peakBulkPingRequests, activeBulkPingRequests);
+        await new Promise(resolve => setTimeout(resolve, 15));
+        activeBulkPingRequests--;
+        return data.id === 'vpn2' ? {ok:true, reachable:true, milliseconds:9.6}
+            : {ok:true, reachable:true, milliseconds:45.2};
     }
     if (action === 'testExit' && data.id === 'vpn2') {
         return {ok:true, reachable:true, milliseconds:9.6};
@@ -707,8 +717,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(bv('vpn-ping-status').textContent.includes('Tested 2 of 2') &&
         bv('profile-list').rows[0].cells[1].textContent.includes('Canada home') &&
-        requests.some(x => x.action === 'testExit' && x.data.id === 'vpn2'),
-        'VPN Ping All must test saved servers without sorting them.');
+        requests.some(x => x.action === 'pingExit' && x.data.id === 'vpn2') && peakBulkPingRequests === 2,
+        'VPN Ping All must test saved servers concurrently without sorting them.');
     bv('vpn-ping-sort').click();
     await wait();
     assert(bv('vpn-ping-status').textContent.includes('Sorted 2 of 2') &&

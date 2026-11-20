@@ -472,36 +472,81 @@ final class ProxyRuntime
         if (!function_exists('curl_init')) {
             throw new RuntimeException('The OPNsense PHP cURL extension is unavailable.');
         }
-        // Try two numeric-IP TLS endpoints before testing hostname resolution through SOCKS.
-        // Keep the background budget at eight seconds even when every destination stalls.
+        // Race independent HTTPS destinations through the same SOCKS listener so a
+        // slow provider does not delay a healthy proxy. The test slot remains singular.
         $detail = 'The proxy did not complete the HTTPS test.';
-        foreach (self::PROBE_TARGETS as $url => [$expectedStatus, $backgroundTimeout]) {
-            $timeout = $manual ? 5000 : $backgroundTimeout;
-            $curl = curl_init($url);
-            if ($curl === false || !curl_setopt_array($curl, [
-                CURLOPT_PROXY => 'socks5h://127.0.0.1:' . $port,
-                CURLOPT_NOPROXY => '', CURLOPT_PROTOCOLS_STR => 'https', CURLOPT_FOLLOWLOCATION => false,
-                CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
-                CURLOPT_HTTPHEADER => ['Accept: application/dns-json'],
-                CURLOPT_CONNECTTIMEOUT_MS => $manual ? 4000 : $timeout, CURLOPT_TIMEOUT_MS => $timeout,
-                CURLOPT_WRITEFUNCTION => static fn ($handle, string $body) => strlen($body)
-            ])) {
-                throw new RuntimeException('OPNsense could not configure the proxy connection test.');
+        $multi = curl_multi_init();
+        if ($multi === false) {
+            throw new RuntimeException('OPNsense could not initialize the parallel proxy test.');
+        }
+        $handles = [];
+        $expectedStatuses = [];
+        try {
+            foreach (self::PROBE_TARGETS as $url => [$expectedStatus, $backgroundTimeout]) {
+                $timeout = $manual ? 3500 : $backgroundTimeout;
+                $curl = curl_init($url);
+                if ($curl === false) {
+                    throw new RuntimeException('OPNsense could not configure the proxy connection test.');
+                }
+                if (!curl_setopt_array($curl, [
+                    CURLOPT_PROXY => 'socks5h://127.0.0.1:' . $port,
+                    CURLOPT_NOPROXY => '', CURLOPT_PROTOCOLS_STR => 'https', CURLOPT_FOLLOWLOCATION => false,
+                    CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
+                    CURLOPT_HTTPHEADER => ['Accept: application/dns-json'],
+                    CURLOPT_CONNECTTIMEOUT_MS => $manual ? 2500 : $timeout, CURLOPT_TIMEOUT_MS => $timeout,
+                    CURLOPT_WRITEFUNCTION => static fn ($handle, string $body) => strlen($body)
+                ])) {
+                    curl_close($curl);
+                    throw new RuntimeException('OPNsense could not configure the proxy connection test.');
+                }
+                $key = spl_object_id($curl);
+                $handles[$key] = $curl;
+                $expectedStatuses[$key] = $expectedStatus;
+                if (curl_multi_add_handle($multi, $curl) !== CURLM_OK) {
+                    throw new RuntimeException('OPNsense could not schedule a proxy connection test.');
+                }
             }
-            $transport = curl_exec($curl) !== false;
-            $status = (int)curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
-            if ($transport && $status === $expectedStatus) {
-                return ['reachable' => true, 'detail' => null,
-                    'milliseconds' => round(curl_getinfo($curl, CURLINFO_TOTAL_TIME) * 1000, 1)];
+
+            $running = 0;
+            do {
+                do {
+                    $multiStatus = curl_multi_exec($multi, $running);
+                } while (defined('CURLM_CALL_MULTI_PERFORM') && $multiStatus === CURLM_CALL_MULTI_PERFORM);
+                if ($multiStatus !== CURLM_OK) {
+                    throw new RuntimeException('OPNsense could not run the parallel proxy test.');
+                }
+                while (($done = curl_multi_info_read($multi)) !== false) {
+                    $curl = $done['handle'];
+                    $key = spl_object_id($curl);
+                    $expectedStatus = $expectedStatuses[$key] ?? 0;
+                    $transport = $done['result'] === CURLE_OK;
+                    $status = (int)curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+                    if ($transport && $status === $expectedStatus) {
+                        $milliseconds = round(curl_getinfo($curl, CURLINFO_TOTAL_TIME) * 1000, 1);
+                        curl_multi_remove_handle($multi, $curl);
+                        curl_close($curl);
+                        unset($handles[$key], $expectedStatuses[$key]);
+                        return ['reachable' => true, 'detail' => null, 'milliseconds' => $milliseconds];
+                    }
+                    $error = (int)$done['result'];
+                    $detail = self::probeFailure($error, $status,
+                        (float)curl_getinfo($curl, CURLINFO_CONNECT_TIME),
+                        (float)curl_getinfo($curl, CURLINFO_APPCONNECT_TIME),
+                        $error === CURLE_PROXY ? (int)curl_getinfo($curl, CURLINFO_PROXY_ERROR) : 0);
+                    curl_multi_remove_handle($multi, $curl);
+                    curl_close($curl);
+                    unset($handles[$key], $expectedStatuses[$key]);
+                }
+                if ($running > 0 && curl_multi_select($multi, 0.1) === -1) {
+                    usleep(10000);
+                }
+            } while ($running > 0);
+        } finally {
+            foreach ($handles as $curl) {
+                curl_multi_remove_handle($multi, $curl);
+                curl_close($curl);
             }
-            $error = curl_errno($curl);
-            $detail = self::probeFailure($error, $status,
-                (float)curl_getinfo($curl, CURLINFO_CONNECT_TIME),
-                (float)curl_getinfo($curl, CURLINFO_APPCONNECT_TIME),
-                $error === CURLE_PROXY ? (int)curl_getinfo($curl, CURLINFO_PROXY_ERROR) : 0);
-            if ($error === CURLE_COULDNT_CONNECT) {
-                break;
-            }
+            curl_multi_close($multi);
         }
         return ['reachable' => false, 'detail' => $detail, 'milliseconds' => null];
     }

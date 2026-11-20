@@ -31,6 +31,7 @@
         const bypassDestination = 'bypass';
         let serviceOrder = new Intl.Collator(undefined, {sensitivity: 'base', numeric: true});
         const maxDomainBytes = 131072;
+        const bulkVpnPingConcurrency = 4;
         const testDisplays = new WeakMap();
         const state = {
             profiles: [],
@@ -2850,6 +2851,8 @@
                     : result.reachable === true
                     ? {kind: 'pass', text: 'HTTPS passed · ' + result.milliseconds + ' ms',
                         latency: result.milliseconds + ' ms', milliseconds: Number(result.milliseconds)}
+                    : result.reachable === null
+                    ? {kind: 'unverified', text: result.detail || 'The test route could not be verified.'}
                     : {kind: 'fail', text: result.detail || 'The HTTPS test did not complete.',
                         checkedAt: result.checkedAt || Math.floor(Date.now() / 1000)});
             } catch (error) {
@@ -2864,7 +2867,7 @@
                 } else {
                     refreshConnectionTests(key, proxy);
                 }
-                if (action === 'testExit' || action === 'testProxyNode') {
+                if (action === 'testExit' || action === 'pingExit' || action === 'testProxyNode') {
                     const profile = state.profiles.find((item) =>
                         item.id === id || (item.node && 'proxy:' + item.node === key));
                     const status = [...byId('profile-list').querySelectorAll('[data-vpn-status]')]
@@ -3657,7 +3660,7 @@
             if (state.bulkPing.kind) {
                 if (state.bulkPing.kind === kind && state.bulkPing.sort === sort) {
                     state.bulkPing.stop = true;
-                    status.textContent = 'Stopping after the current server…';
+                    status.textContent = 'Finishing active tests…';
                 }
                 return;
             }
@@ -3678,19 +3681,32 @@
             kind === 'vpns' ? renderProfiles() : renderProxyCatalog();
             let checked = 0;
             try {
-                for (const item of items) {
-                    if (state.bulkPing.stop) {
-                        break;
-                    }
-                    status.textContent = 'Testing ' + (checked + 1) + ' of ' + items.length + ' servers…';
+                const isFastVpnRoute = (item) => {
                     const exit = kind === 'vpns' ? item : state.profiles.find((profile) => profile.node === item.id);
-                    const dormant = kind === 'vpns' && item.node && item.id.startsWith('proxy-');
-                    const action = !exit || dormant ? 'testProxyNode' : 'testExit';
-                    const id = action === 'testProxyNode' ? item.node || item.id : exit.id;
+                    return kind === 'vpns' && !item.node && Boolean(exit) &&
+                        (exit.kind === 'native' || /^wg[0-9]+$/.test(exit.interface || ''));
+                };
+                const parallel = kind === 'vpns' && items.every(isFastVpnRoute) ? bulkVpnPingConcurrency : 1;
+                let nextIndex = 0;
+                const runWorker = async () => {
+                    while (!state.bulkPing.stop) {
+                        const index = nextIndex++;
+                        if (index >= items.length) {
+                            return;
+                        }
+                        const item = items[index];
+                        status.textContent = 'Testing ' + (index + 1) + ' of ' + items.length + ' servers…';
+                        const exit = kind === 'vpns' ? item : state.profiles.find((profile) => profile.node === item.id);
+                        const dormant = kind === 'vpns' && item.node && item.id.startsWith('proxy-');
+                        const fast = parallel > 1;
+                        const action = fast ? 'pingExit' : (!exit || dormant ? 'testProxyNode' : 'testExit');
+                        const id = action === 'testProxyNode' ? item.node || item.id : exit.id;
                     const key = kind === 'proxies' || item.node ? 'proxy:' + (item.node || item.id) : 'exit:' + item.id;
-                    await testConnection(action, id, key, kind === 'proxies' || Boolean(item.node));
-                    checked++;
-                }
+                        await testConnection(action, id, key, kind === 'proxies' || Boolean(item.node));
+                        checked++;
+                    }
+                };
+                await Promise.all(Array.from({length: Math.min(parallel, items.length)}, runWorker));
             } finally {
                 const stopped = state.bulkPing.stop;
                 state.bulkPing = {kind: '', sort: false, stop: false};
