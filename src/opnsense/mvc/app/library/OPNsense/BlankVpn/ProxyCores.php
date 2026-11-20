@@ -13,9 +13,6 @@ final class ProxyCores
         'mihomo' => '1.19.34', 'tun2socks' => '2.7.0', 'xray' => '26.11.9', 'sing-box' => '1.14.4'
     ];
     private const REPO = 'BlankNetworks/OPNSenseBlankVPN';
-    private const UPSTREAM = [
-        'mihomo' => 'MetaCubeX/mihomo', 'tun2socks' => 'xjasonlyu/tun2socks', 'xray' => 'XTLS/Xray-core'
-    ];
     private const RESERVE = 64 * 1024 * 1024;
     private const MAX_CATALOG = 32768;
 
@@ -74,17 +71,10 @@ final class ProxyCores
         if (($row['source'] ?? '') === 'blanknetworks') {
             $repository = self::REPO;
             $tag = "cores-{$core}-v{$version}" . ($arm ? "-aarch64" : "");
-            $asset = "{$core}-{$version}-freebsd-{$arch}.gz";
-        } elseif (($row['source'] ?? '') === 'upstream' && isset(self::UPSTREAM[$core])) {
-            $repository = self::UPSTREAM[$core];
-            $tag = 'v' . $version;
-            $asset = match ($core) {
-                'mihomo' => $arm ? "mihomo-freebsd-arm64-{$tag}.gz" : "mihomo-freebsd-amd64-compatible-{$tag}.gz",
-                'tun2socks' => $arm ? 'tun2socks-freebsd-arm64.zip' : 'tun2socks-freebsd-amd64.zip',
-                'xray' => $arm ? 'Xray-freebsd-arm64-v8a.zip' : 'Xray-freebsd-64.zip'
-            };
+            $extension = in_array($core, ['tun2socks', 'xray'], true) ? 'zip' : 'gz';
+            $asset = "{$core}-{$version}-freebsd-{$arch}.{$extension}";
         } else {
-            throw new DomainException('The core catalog contains an unknown release source.');
+            throw new DomainException('Core downloads must use a Blank Networks release.');
         }
         if (($row['tag'] ?? null) !== $tag || ($row['asset'] ?? null) !== $asset) {
             throw new DomainException('The core catalog specifies an unexpected asset.');
@@ -113,8 +103,25 @@ final class ProxyCores
     {
         $filename = self::catalogFile();
         $cache = Policy::STATE_DIR . '/' . $filename;
-        $path = is_file($cache) ? $cache : '/usr/local/share/blankvpn/' . $filename;
-        return self::parseCatalog((string)file_get_contents($path, false, null, 0, self::MAX_CATALOG + 1));
+        $bundled = (string)file_get_contents('/usr/local/share/blankvpn/' . $filename, false, null, 0, self::MAX_CATALOG + 1);
+        $bundledCatalog = self::parseCatalog($bundled);
+        if (!is_file($cache)) {
+            return $bundledCatalog;
+        }
+        try {
+            $cached = (string)file_get_contents($cache, false, null, 0, self::MAX_CATALOG + 1);
+            $cachedCatalog = self::parseCatalog($cached);
+            foreach ($cachedCatalog as $row) {
+                if (($row['source'] ?? '') !== 'blanknetworks') {
+                    Policy::writeState($filename, $bundled);
+                    return $bundledCatalog;
+                }
+            }
+            return $cachedCatalog;
+        } catch (DomainException) {
+            Policy::writeState($filename, $bundled);
+            return $bundledCatalog;
+        }
     }
 
     public static function refresh(): void

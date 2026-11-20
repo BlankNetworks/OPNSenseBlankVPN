@@ -4,18 +4,20 @@ Blank VPN & Proxy includes a baseline build of Mihomo, tun2socks, Xray, and sing
 
 ## Approve a release
 
-Edit the [amd64 catalog](src/share/blankvpn/core-catalog.json) or the [aarch64 catalog](src/share/blankvpn/core-catalog-aarch64.json) on the repository’s main branch. Each entry specifies the core, numeric version, source, GitHub release tag, asset filename, and lowercase SHA-256. Blank VPN & Proxy derives the HTTPS URL from these fields and accepts only its catalog repositories and release filename patterns.
+Core archives are downloaded from versioned releases in the Blank Networks repository for both supported architectures. Router downloads do not contact the core vendors. The [amd64 catalog](src/share/blankvpn/core-catalog.json) and [aarch64 catalog](src/share/blankvpn/core-catalog-aarch64.json) pin each asset's version, Blank release tag, filename, and SHA-256. The updater accepts only those repository releases and the expected core-specific archive names.
 
-| Core | Source | amd64 archive | aarch64 archive |
+| Core | Verified upstream source | amd64 archive in Blank | aarch64 archive in Blank |
 | --- | --- | --- | --- |
-| Mihomo | `upstream` | `mihomo-freebsd-amd64-compatible-vVERSION.gz` | `mihomo-freebsd-arm64-vVERSION.gz` |
-| tun2socks | `upstream` | `tun2socks-freebsd-amd64.zip` | `tun2socks-freebsd-arm64.zip` |
-| Xray | `upstream` | `Xray-freebsd-64.zip` | `Xray-freebsd-arm64-v8a.zip` |
-| Any bundled core, including sing-box | `blanknetworks` | `CORE-VERSION-freebsd-amd64.gz` | `CORE-VERSION-freebsd-aarch64.gz` |
+| Mihomo | MetaCubeX/mihomo | `mihomo-VERSION-freebsd-amd64.gz` | `mihomo-VERSION-freebsd-aarch64.gz` |
+| tun2socks | xjasonlyu/tun2socks | `tun2socks-VERSION-freebsd-amd64.zip` | `tun2socks-VERSION-freebsd-aarch64.zip` |
+| Xray | XTLS/Xray-core | `xray-VERSION-freebsd-amd64.zip` | `xray-VERSION-freebsd-aarch64.zip` |
+| sing-box | SagerNet/sing-box, built by Blank from a pinned commit | `sing-box-VERSION-freebsd-amd64.gz` | `sing-box-VERSION-freebsd-aarch64.gz` |
 
-Use `vVERSION` for upstream tags. Use `cores-CORE-vVERSION` for Blank Networks amd64 releases and `cores-CORE-vVERSION-aarch64` for ARM64 releases.
+The [Mirror approved proxy cores workflow](.github/workflows/mirror-cores.yml) copies the exact pinned upstream archives into Blank releases after checking their SHA-256 and verifying each contains a FreeBSD executable for the target architecture. It also verifies the already Blank-built sing-box assets. It runs when a core catalog or pinned source archive changes, and can be run manually. To approve a newer upstream version, review and update the version, source URL, and digest in `install_proxy_cores.py` and both catalogs; the workflow then publishes the matching Blank-hosted assets. A sing-box update is built from its pinned source through the [sing-box workflow](.github/workflows/cores.yml), after which its catalog entry can be approved and mirrored.
 
-Use the vendor release digest or a digest independently verified against the reviewed archive. The sing-box release workflow takes the upstream version and matching commit and publishes the archive and checksum. Review changes to the catalog as you would executable package changes.
+Blank release tags use `cores-CORE-vVERSION` for amd64 and `cores-CORE-vVERSION-aarch64` for ARM64. Each release includes a checksum file and retains source attribution in its release notes.
+
+The catalog digest is checked against the reviewed upstream archive before publication, and the router checks that digest again before installing a core. Review version and digest changes as executable updates.
 
 ## Offline or local updates
 

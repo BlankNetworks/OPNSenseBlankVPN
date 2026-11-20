@@ -1,3 +1,10 @@
+## 0.8.69
+
+- Serve approved Mihomo, tun2socks, Xray, and sing-box core archives from Blank Networks versioned GitHub releases on amd64 and aarch64.
+- Add an automated mirror workflow that verifies pinned upstream checksums and FreeBSD architecture before hosting core archives.
+- Migrate cached upstream core catalogs to the Blank-hosted catalog on upgrade.
+- Keep core downloads pinned to the Blank-hosted catalogs and update About and SSH install instructions.
+
 ## 0.8.68
 
 - Add explicit BSD 2-Clause licensing for Blank-maintained source and include the license in the package.

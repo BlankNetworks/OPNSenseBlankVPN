@@ -98,17 +98,17 @@ ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubuser
 
 To pin this release instead, use the following command. It also checks the installer digest before running it.
 
-Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.68** on a supported amd64 or aarch64 OPNsense router.
+Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.69** on a supported amd64 or aarch64 OPNsense router.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.68.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.68/scripts/install.sh && sha256 -c c14c98f361c9bb6dfc42489826328d6ad09ba93a2655573b1ee1646e60ec2c2c /tmp/blankvpn-install-0.8.68.sh && sh /tmp/blankvpn-install-0.8.68.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.69.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.69/scripts/install.sh && sha256 -c dbd6ff5353f37288ece9d24d4a4581de752419a2f50cc7db50cde5bceebab17a /tmp/blankvpn-install-0.8.69.sh && sh /tmp/blankvpn-install-0.8.69.sh'
 ```
 
 The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.
 
 ### Download on your computer
 
-1. Open the [0.8.68 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.68), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+1. Open the [0.8.69 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.69), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
 2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 
@@ -218,7 +218,7 @@ Use the far-left checkboxes in either saved server list, then **Remove selected*
 
 Open **Proxy Login → Core updates and storage** as an OPNsense administrator. The **Installed** column shows each core's running version and source; **Reload status** retries a failed status read. Select **Check for updates**, then install an approved version or upload its matching archive. Approved archives are checked against their SHA-256, the router’s FreeBSD CPU architecture, reported version, and saved proxy configurations. Core updates retain one rollback version and preserve the bundled baseline. A failed restart restores the prior selection. Proxy exits that depend on the changed core briefly reconnect.
 
-The approved [amd64](src/share/blankvpn/core-catalog.json) and [aarch64](src/share/blankvpn/core-catalog-aarch64.json) catalogs pin specific upstream or Blank Networks release assets. Change the catalog on GitHub to approve a new version independently of the plug-in. The [sing-box workflow](.github/workflows/cores.yml) can publish FreeBSD builds from a pinned upstream tag and commit. After verifying the build, add its version and asset SHA-256 to the catalog. The router fetches the catalog on demand. See [CORE_UPDATES.md](CORE_UPDATES.md) for the exact release format, offline installation and rollback.
+The approved [amd64](src/share/blankvpn/core-catalog.json) and [aarch64](src/share/blankvpn/core-catalog-aarch64.json) catalogs point only to Blank Networks hosted core releases. A mirror workflow checks pinned upstream archive digests and FreeBSD architecture before publishing assets to Blank. The [sing-box workflow](.github/workflows/cores.yml) builds FreeBSD releases from a pinned upstream tag and commit. See [CORE_UPDATES.md](CORE_UPDATES.md) for the update process, offline installation, and rollback.
 
 Core updates, saved Mullvad logins, the private subscription catalog, and recovery state use `/var/db/blank-vpn`. The storage panel shows available space, downloaded core size, and catalog size. Staging keeps at least 64 MiB free for settings and runtime state. The bundled cores are part of the package. OPNsense stores saved assignments and WireGuard settings in its normal configuration. The Mullvad registration key is private and persists across package upgrades.
 

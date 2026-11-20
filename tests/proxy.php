@@ -207,8 +207,16 @@ assertProxy((new ReflectionMethod(ProxyCores::class, 'reportedSingBoxVersion'))-
     "sing-box version 1.14.4\nEnvironment: go1.25") === '1.14.4' &&
     (new ReflectionMethod(ProxyCores::class, 'reportedSingBoxVersion'))->invoke(null, 'unknown executable') === null,
     'A system sing-box install must report its actual version and never show an invented version.');
-assertProxy(str_starts_with(ProxyCores::releaseUrl('mihomo', $catalog['mihomo'], 'amd64'), 'https://github.com/MetaCubeX/mihomo/'),
-    'Derive downloads from the approved source.');
+assertProxy(ProxyCores::releaseUrl('mihomo', $catalog['mihomo'], 'amd64') ===
+    'https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/download/cores-mihomo-v1.19.34/mihomo-1.19.34-freebsd-amd64.gz' &&
+    str_contains(ProxyCores::releaseUrl('tun2socks', $catalog['tun2socks'], 'amd64'), '/tun2socks-2.7.0-freebsd-amd64.zip') &&
+    str_contains(ProxyCores::releaseUrl('xray', $catalog['xray'], 'amd64'), '/xray-26.11.9-freebsd-amd64.zip'),
+    'Approved core downloads must come from Blank hosted release assets.');
+try {
+    ProxyCores::releaseUrl('mihomo', array_replace($catalog['mihomo'], ['source' => 'upstream']), 'amd64');
+    throw new RuntimeException('A direct upstream core download was accepted.');
+} catch (DomainException) {
+}
 try {
     ProxyCores::releaseUrl('mihomo', array_replace($catalog['mihomo'], ['asset' => '../../unexpected']), 'amd64');
     throw new RuntimeException('An unexpected asset path was accepted.');
@@ -217,8 +225,9 @@ try {
 $armCatalog = ProxyCores::parseCatalog((string)file_get_contents(
     __DIR__ . '/../src/share/blankvpn/core-catalog-aarch64.json'
 ), 'aarch64');
-assertProxy(str_ends_with(ProxyCores::releaseUrl('xray', $armCatalog['xray'], 'aarch64'), 'Xray-freebsd-arm64-v8a.zip'),
-    'ARM uses the FreeBSD arm64 asset.');
+assertProxy(str_ends_with(ProxyCores::releaseUrl('xray', $armCatalog['xray'], 'aarch64'), 'xray-26.11.9-freebsd-aarch64.zip') &&
+    str_contains(ProxyCores::releaseUrl('mihomo', $armCatalog['mihomo'], 'aarch64'), 'cores-mihomo-v1.19.34-aarch64'),
+    'ARM downloads must use their architecture-specific Blank hosted assets.');
 try {
     ProxyCores::releaseUrl('mihomo', $catalog['mihomo'], 'aarch64');
     throw new RuntimeException('An amd64 asset was accepted on aarch64.');

@@ -33,6 +33,7 @@ jobs:
           python3 tests/core-archive.py
           python3 tests/ssh-install.py
           python3 tests/latest-install.py
+          python3 -m py_compile build/mirror_core_assets.py
       - name: Validate generated configurations with the upstream proxy cores
         run: sh tests/check-proxy-cores.sh
       - name: Build and verify package archive

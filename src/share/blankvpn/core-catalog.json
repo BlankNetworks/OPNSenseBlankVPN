@@ -3,23 +3,23 @@
   "cores": {
     "mihomo": {
       "version": "1.19.34",
-      "source": "upstream",
-      "tag": "v1.19.34",
-      "asset": "mihomo-freebsd-amd64-compatible-v1.19.34.gz",
+      "source": "blanknetworks",
+      "tag": "cores-mihomo-v1.19.34",
+      "asset": "mihomo-1.19.34-freebsd-amd64.gz",
       "sha256": "28564d6771d2723a800d0c46dc5797d99435650e68fc73499c6ac17aa16942a2"
     },
     "tun2socks": {
       "version": "2.7.0",
-      "source": "upstream",
-      "tag": "v2.7.0",
-      "asset": "tun2socks-freebsd-amd64.zip",
+      "source": "blanknetworks",
+      "tag": "cores-tun2socks-v2.7.0",
+      "asset": "tun2socks-2.7.0-freebsd-amd64.zip",
       "sha256": "3ebb747aa83ee3157330beb324bbeaf9a742db6a8d24b9bbc96a4125aaeeeaea"
     },
     "xray": {
       "version": "26.11.9",
-      "source": "upstream",
-      "tag": "v26.11.9",
-      "asset": "Xray-freebsd-64.zip",
+      "source": "blanknetworks",
+      "tag": "cores-xray-v26.11.9",
+      "asset": "xray-26.11.9-freebsd-amd64.zip",
       "sha256": "d86d4b2c7498244b0aea8c936b59154b743401c6c0326c222ce367c229777ba6"
     },
     "sing-box": {

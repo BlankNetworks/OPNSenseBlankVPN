@@ -1,0 +1,32 @@
+name: Mirror approved proxy cores
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mirror-cores.yml"
+      - "build/mirror_core_assets.py"
+      - "src/opnsense/scripts/OPNsense/BlankVpn/install_proxy_cores.py"
+      - "src/share/blankvpn/core-catalog*.json"
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, aarch64]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Verify and mirror approved core archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CORE_ARCH: ${{ matrix.arch }}
+        run: python3 build/mirror_core_assets.py --arch "$CORE_ARCH"
