@@ -237,6 +237,14 @@ assertProxy(ProxyCores::uses(['core' => 'xray'], 'mihomo') && !ProxyCores::uses(
     'A core update must only affect the exits that use it.');
 
 $route = ProxyRuntime::route('proxy-exit', 0, proxyNode($ss)['id'], 'test', 'mihomo', 'ss');
+$testSlots = (new ReflectionClassConstant(ProxyRuntime::class, 'TEST_SLOTS'))->getValue();
+$testRoutes = array_map(static fn (int $slot): array => ProxyRuntime::route(
+    'proxy-test', $slot, str_repeat('a', 64), 'test', 'mihomo', 'ss'
+), $testSlots);
+assertProxy($testSlots === [ProxyRuntime::SLOTS, ProxyRuntime::SLOTS + 1] &&
+    count(array_unique(array_column($testRoutes, 'socksPort'))) === 2 &&
+    count(array_unique(array_column($testRoutes, 'adapterPort'))) === 2,
+    'Bounded parallel proxy pings use separate temporary listener slots beyond the eight saved exits.');
 $chicagoRoute = ProxyRuntime::route('nord-chicago', 1, $chicagoId, 'Nord Chicago', 'mihomo', 'wireguard');
 $tokyoRoute = ProxyRuntime::route('nord-tokyo', 2, $tokyoId, 'Nord Tokyo', 'mihomo', 'wireguard');
 $chicagoConfig = ProxyRuntime::configuration($chicagoRoute, $chicago)['mihomo'];

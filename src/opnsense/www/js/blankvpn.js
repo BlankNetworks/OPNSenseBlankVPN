@@ -32,6 +32,7 @@
         let serviceOrder = new Intl.Collator(undefined, {sensitivity: 'base', numeric: true});
         const maxDomainBytes = 131072;
         const bulkVpnPingConcurrency = 4;
+        const bulkProxyPingConcurrency = 2;
         const testDisplays = new WeakMap();
         const state = {
             profiles: [],
@@ -86,6 +87,7 @@
             relays: [],
             tests: new Map(),
             proxyTestRunning: false,
+            proxyTestsInFlight: 0,
             nameEditor: null,
             settings: null,
             availableInterfaces: [],
@@ -2806,10 +2808,12 @@
         }
 
         async function testConnection(action, id, key, proxy) {
-            if (state.tests.get(key)?.kind === 'pending' || (proxy && state.proxyTestRunning)) {
+            if (state.tests.get(key)?.kind === 'pending' ||
+                (proxy && state.proxyTestsInFlight >= bulkProxyPingConcurrency)) {
                 return;
             }
             if (proxy) {
+                state.proxyTestsInFlight++;
                 state.proxyTestRunning = true;
             }
             const relay = action === 'testRelay';
@@ -2863,7 +2867,8 @@
                     checkedAt: Math.floor(Date.now() / 1000)});
             } finally {
                 if (proxy) {
-                    state.proxyTestRunning = false;
+                    state.proxyTestsInFlight = Math.max(0, state.proxyTestsInFlight - 1);
+                    state.proxyTestRunning = state.proxyTestsInFlight > 0;
                 }
                 if (relay) {
                     renderRelayChoice();
@@ -3689,7 +3694,10 @@
                     return kind === 'vpns' && !item.node && Boolean(exit) &&
                         (exit.kind === 'native' || /^wg[0-9]+$/.test(exit.interface || ''));
                 };
-                const parallel = kind === 'vpns' && items.every(isFastVpnRoute) ? bulkVpnPingConcurrency : 1;
+                const proxyTestsOnly = kind === 'proxies' && items.every((item) =>
+                    !state.profiles.some((profile) => profile.node === item.id));
+                const parallel = kind === 'vpns' && items.every(isFastVpnRoute) ? bulkVpnPingConcurrency
+                    : proxyTestsOnly ? bulkProxyPingConcurrency : 1;
                 let nextIndex = 0;
                 const runWorker = async () => {
                     while (!state.bulkPing.stop) {
@@ -3701,7 +3709,7 @@
                         status.textContent = 'Testing ' + (index + 1) + ' of ' + items.length + ' servers…';
                         const exit = kind === 'vpns' ? item : state.profiles.find((profile) => profile.node === item.id);
                         const dormant = kind === 'vpns' && item.node && item.id.startsWith('proxy-');
-                        const fast = parallel > 1;
+                        const fast = kind === 'vpns' && parallel > 1;
                         const action = fast ? 'pingExit' : (!exit || dormant ? 'testProxyNode' : 'testExit');
                         const id = action === 'testProxyNode' ? item.node || item.id : exit.id;
                     const key = kind === 'proxies' || item.node ? 'proxy:' + (item.node || item.id) : 'exit:' + item.id;

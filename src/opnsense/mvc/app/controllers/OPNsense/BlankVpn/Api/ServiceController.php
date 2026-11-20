@@ -610,8 +610,8 @@ class ServiceController extends ApiControllerBase
 
     public function testProxyNodeAction()
     {
-        return $this->respond(fn () => Operations::exclusive(fn () =>
-            ProxyRuntime::testNode($this->input('id', 64))
+        return $this->respond(fn () => Operations::readOnly(
+            fn () => ProxyRuntime::testNode($this->input('id', 64))
         ), true, true);
     }
 

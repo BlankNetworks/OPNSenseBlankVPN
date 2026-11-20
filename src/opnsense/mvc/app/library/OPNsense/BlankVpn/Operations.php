@@ -33,6 +33,25 @@ final class Operations
         }
     }
 
+    /** Allow concurrent read-only work while holding off configuration mutations. */
+    public static function readOnly(callable $work): mixed
+    {
+        $path = Policy::stateDirectory() . '/operations.lock';
+        $lock = fopen($path, 'c');
+        if ($lock === false) {
+            throw new \RuntimeException('Blank VPN & Proxy could not open its configuration lock.');
+        }
+        chmod($path, 0600);
+        try {
+            if (!flock($lock, LOCK_SH | LOCK_NB)) {
+                throw new \DomainException('A Blank VPN & Proxy change is running. Try the ping again shortly.');
+            }
+            return $work();
+        } finally {
+            fclose($lock);
+        }
+    }
+
     public static function change(callable $edit): array
     {
         $config = Config::getInstance();

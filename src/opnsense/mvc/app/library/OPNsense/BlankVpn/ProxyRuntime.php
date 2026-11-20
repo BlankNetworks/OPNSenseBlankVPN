@@ -11,7 +11,7 @@ final class ProxyRuntime
 {
     public const SLOTS = 8;
     public const FIRST_DNS_PORT = 46660;
-    private const TEST_SLOT = self::SLOTS;
+    private const TEST_SLOTS = [self::SLOTS, self::SLOTS + 1];
     private const CONFIG_VERSION = 4;
     private const RETRY_LIMIT = 900;
     private const STATUS_FILE = 'proxy-status.json';
@@ -269,11 +269,13 @@ final class ProxyRuntime
 
     public static function reconcile(BlankVpn $model, bool $background = false): array
     {
-        // Maintenance holds the operation lock, so this only cleans an interrupted test.
-        try {
-            self::stop(self::TEST_SLOT);
-        } catch (RuntimeException $error) {
-            syslog(LOG_WARNING, 'Blank VPN proxy test cleanup: ' . $error->getMessage());
+        // Do not interrupt a live ping running in one of the bounded test slots.
+        foreach (self::TEST_SLOTS as $slot) {
+            try {
+                self::stopUnusedTestSlot($slot);
+            } catch (RuntimeException $error) {
+                syslog(LOG_WARNING, 'Blank VPN proxy test cleanup: ' . $error->getMessage());
+            }
         }
         $desired = Policy::anyEnabled(Policy::settings($model)) ? array_column(self::assignedRoutes($model), null, 'slot') : [];
         $previous = self::statusRecord();
@@ -378,12 +380,12 @@ final class ProxyRuntime
             return $result;
         }
 
-        // Use loopback listeners only, on ports reserved for this serialized test.
+        // Use loopback listeners only, on a locked port set reserved for tests.
         // No tunnel interface, gateway, or client firewall rule is created.
-        $slot = self::TEST_SLOT;
+        [$slot, $slotLock] = self::acquireTestSlot();
         $test = self::route('proxy-test', $slot, $id, $node['name'], $node['core'], $node['protocol']);
-        self::stop($slot);
         try {
+            self::stop($slot);
             self::start($test, $node, true);
             $result = self::testSocks($test['socksPort'], $node);
             if (!$result['reachable']) {
@@ -394,7 +396,48 @@ final class ProxyRuntime
             syslog(LOG_WARNING, 'Blank VPN proxy test (' . $node['core'] . '): ' . $error->getMessage());
             throw $error;
         } finally {
-            self::stop($slot);
+            try {
+                self::stop($slot);
+            } finally {
+                flock($slotLock, LOCK_UN);
+                fclose($slotLock);
+            }
+        }
+    }
+
+    /** @return array{0:int,1:resource} */
+    private static function acquireTestSlot(): array
+    {
+        foreach (self::TEST_SLOTS as $slot) {
+            $path = Policy::stateDirectory() . '/proxy-test-' . $slot . '.lock';
+            $lock = @fopen($path, 'c');
+            if ($lock === false) {
+                continue;
+            }
+            @chmod($path, 0600);
+            if (flock($lock, LOCK_EX | LOCK_NB)) {
+                return [$slot, $lock];
+            }
+            fclose($lock);
+        }
+        throw new RuntimeException('Both proxy test slots are busy. Wait for a test to finish and retry.');
+    }
+
+    private static function stopUnusedTestSlot(int $slot): void
+    {
+        $path = Policy::stateDirectory() . '/proxy-test-' . $slot . '.lock';
+        $lock = @fopen($path, 'c');
+        if ($lock === false) {
+            throw new RuntimeException('Could not open a proxy test slot lock.');
+        }
+        @chmod($path, 0600);
+        try {
+            if (flock($lock, LOCK_EX | LOCK_NB)) {
+                self::stop($slot);
+                flock($lock, LOCK_UN);
+            }
+        } finally {
+            fclose($lock);
         }
     }
 

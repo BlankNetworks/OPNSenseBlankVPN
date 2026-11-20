@@ -1,3 +1,10 @@
+## 0.8.71
+
+- Run Proxy Ping All and Ping & Sort with two bounded concurrent checks while retaining full proxy-core HTTPS validation.
+- Give each temporary proxy test its own locked listener slot and allow concurrent read-only tests while configuration changes remain exclusive.
+- Keep active proxy exits serialized and preserve Ping All ordering and Ping & Sort latency ordering.
+- Update About and pinned SSH install instructions.
+
 ## 0.8.70
 
 - Route AnyTLS+REALITY share links to sing-box, which supports the combination through its shared TLS/REALITY client; keep ordinary AnyTLS on Mihomo.

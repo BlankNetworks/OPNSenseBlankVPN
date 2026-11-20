@@ -8,6 +8,8 @@ let inlineAssignError = false;
 let tailnetTraffic = 'unseen';
 let activeBulkPingRequests = 0;
 let peakBulkPingRequests = 0;
+let activeProxyPingRequests = 0;
+let peakProxyPingRequests = 0;
 const ambiguousSignIns = new Set(['account', 'providerLogin', 'mystBeginAuth', 'mystPollAuth', 'ivpnLogin']);
 const updateStatus = {ok:true, supported:true, enabled:false, running:false, installed:'0.1.39',
     available:'', message:'Blank VPN amp Proxy is up to date.'};
@@ -285,8 +287,13 @@ window.jQuery.ajax = async (request) => {
     if (action === 'testExit' && data.id === 'vpn2') {
         return {ok:true, reachable:true, milliseconds:9.6};
     }
-    if (action === 'testProxyNode' && data.id === 'sort-fast') {
-        return {ok:true, reachable:true, milliseconds:8.4};
+    if (action === 'testProxyNode') {
+        activeProxyPingRequests++;
+        peakProxyPingRequests = Math.max(peakProxyPingRequests, activeProxyPingRequests);
+        await new Promise(resolve => setTimeout(resolve, 15));
+        activeProxyPingRequests--;
+        return data.id === 'sort-fast' ? {ok:true, reachable:true, milliseconds:8.4}
+            : {ok:true, reachable:false, detail:'The proxy connection timed out.'};
     }
     if (action === 'renameProxyNode') {
         reply.proxyCatalog.nodes.find(x => x.id === data.id).name = data.name;
@@ -952,25 +959,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     bv('proxy-ping-all').click();
     await wait();
     assert(bv('proxy-ping-status').textContent.includes('Tested 2 of 2') &&
+        peakProxyPingRequests === 2 &&
         JSON.stringify([...bv('proxy-list').rows].map(row => row.cells[1].textContent)) === JSON.stringify(proxyOrder),
-        'Proxy Ping All must preserve the current server order.');
+        'Proxy Ping All must use bounded concurrent tests and preserve the current server order.');
     bv('proxy-ping-sort').click();
     await wait();
     assert(requests.some(x => x.action === 'testProxyNode' && x.data.id === 'sort-fast') &&
         bv('proxy-list').rows[0].cells[1].textContent.includes('Fast proxy') &&
         bv('proxy-list').rows[0].querySelector('[data-test-result]').textContent.includes('8.4 ms') &&
         bv('proxy-ping-status').textContent.includes('Sorted 2 of 2'),
-        'Ping & Sort must test every proxy serially and put the lowest successful latency first.');
+        'Ping & Sort must test every proxy and put the lowest successful latency first.');
     bv('proxy-ping-all').click();
     await wait();
     assert(bv('proxy-list').rows[0].cells[1].textContent.includes('Fast proxy'),
         'Proxy Ping All must retain the current order even after a prior sort.');
+    reply.proxyCatalog.nodes.push({id:'sort-third', name:'Third proxy', host:'192.0.2.8', port:1080,
+        protocol:'socks5', core:'mihomo'});
+    buttonByText('subscription-list', 'Refresh').click();
+    await wait();
     bv('proxy-ping-sort').click();
     assert(bv('proxy-ping-sort').textContent === 'Stop Ping & Sort', 'A running sort needs a stop control.');
     bv('proxy-ping-sort').click();
     await wait();
-    assert(bv('proxy-ping-status').textContent.includes('Stopped after 1 of 2'),
-        'Stopping must prevent additional server tests.');
+    assert(bv('proxy-ping-status').textContent.includes('Stopped after 2 of 3') &&
+        !requests.some(x => x.action === 'testProxyNode' && x.data.id === 'sort-third'),
+        'Stopping proxy Ping & Sort must finish at most two active tests and start no additional tests.');
+    reply.proxyCatalog.nodes.pop();
     reply.proxyCatalog.nodes.pop();
     buttonByText('subscription-list', 'Refresh').click();
     await wait();
