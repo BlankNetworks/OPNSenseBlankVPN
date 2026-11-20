@@ -2,3 +2,10 @@ Blank VPN & Proxy assigns reserved IPv4 devices and domain-based services to VPN
 proxy exits on OPNsense. It supports Mullvad account onboarding, compatible
 native WireGuard and OpenVPN tunnels, and individually selected proxy servers
 from manual entries, links, and subscriptions.
+
+WWW: https://github.com/BlankNetworks/OPNSenseBlankVPN
+
+Blank VPN & Proxy source is distributed under the BSD 2-Clause License.
+Bundled core components retain their respective licenses, included in the
+installed package under /usr/local/share/blankvpn/licenses. See THIRD_PARTY.md
+for source versions and attributions.

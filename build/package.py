@@ -18,9 +18,10 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "os-blank-vpn"
-VERSION = "0.8.67"
+VERSION = "0.8.68"
 SERIES = "26.7"
 LEGACY_ARCHES = {"amd64": "x86:64", "aarch64": "aarch64:64"}
+LICENSES = ["BSD2CLAUSE", "GPLv3", "GPLv3+", "MIT", "MPL20"]
 CORE_INSTALLER = ROOT / "src/opnsense/scripts/OPNsense/BlankVpn/install_proxy_cores.py"
 PREFIX = "/usr/local"
 DEPENDENCIES = {
@@ -59,6 +60,7 @@ def payload(arch, runtime_dir=None):
     if not files:
         raise ValueError("No plugin files found under src/")
     files[f"{PREFIX}/share/blankvpn/repo.pub"] = ((ROOT / "build/repo.pub").read_bytes(), 0o644)
+    files[f"{PREFIX}/share/blankvpn/licenses/blankvpn.txt"] = ((ROOT / "LICENSE").read_bytes(), 0o644)
     if runtime_dir is not None:
         check_binary = runpy.run_path(str(CORE_INSTALLER))["is_freebsd_binary"]
         for core in ("mihomo", "tun2socks", "xray", "sing-box"):
@@ -119,6 +121,8 @@ def build_metadata(files, dependencies, arch):
         "arch": f"freebsd:15:{LEGACY_ARCHES[arch]}",
         "prefix": PREFIX,
         "categories": ["net-vpn"],
+        "licenselogic": "and",
+        "licenses": LICENSES,
         "deps": dependencies,
         "annotations": version,
         "flatsize": sum(len(data) for data, _ in files.values()),
@@ -227,7 +231,12 @@ def verify(path, metadata, scripts, files):
         if [m.name for m in members[:2]] != ["+COMPACT_MANIFEST", "+MANIFEST"]:
             raise ValueError("Package has an invalid manifest layout")
         compact, full = (json.load(archive.extractfile(member)) for member in members[:2])
-        for field in ("name", "version", "origin", "abi", "arch", "prefix", "deps", "flatsize"):
+        if compact.get("licenselogic") != "and" or compact.get("licenses") != LICENSES:
+            raise ValueError("Package license metadata does not cover Blank and bundled components")
+        for field in (
+            "name", "version", "origin", "abi", "arch", "prefix", "deps", "flatsize",
+            "licenselogic", "licenses",
+        ):
             if compact.get(field) != metadata[field] or full.get(field) != metadata[field]:
                 raise ValueError(f"Package metadata mismatch for {field}")
         if compact.get("scripts") or compact.get("files"):

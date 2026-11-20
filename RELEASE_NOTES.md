@@ -1,3 +1,10 @@
+## 0.8.68
+
+- Add explicit BSD 2-Clause licensing for Blank-maintained source and include the license in the package.
+- Declare Blank VPN and bundled core licenses in both package manifests, following FreeBSD pkg metadata conventions.
+- Include the project URL and license attribution in the package description.
+- Update About and pinned SSH installer instructions.
+
 ## 0.8.67
 
 - Normalize the product name in both the package update status and the completion notification so the ampersand displays correctly.
