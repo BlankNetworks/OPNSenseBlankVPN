@@ -1,0 +1,13 @@
+PLUGIN_NAME=blank-vpn
+PLUGIN_VERSION=__PLUGIN_VERSION__
+PLUGIN_COMMENT=VPN and proxy policy routing
+PLUGIN_MAINTAINER=__PLUGIN_MAINTAINER__
+PLUGIN_WWW=https://github.com/BlankNetworks/OPNSenseBlankVPN
+PLUGIN_LICENSE=BSD2CLAUSE
+PLUGIN_TIER=3
+PLUGIN_DEPENDS= dnsmasq php85-curl python313
+
+# These are required by the routing and DNS implementation. Proxy cores remain
+# optional; the WebGUI lists available packages and directs their updates to
+# OPNsense Firmware.
+.include "../../Mk/plugins.mk"

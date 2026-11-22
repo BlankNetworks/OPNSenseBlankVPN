@@ -362,9 +362,9 @@ class ServiceController extends ApiControllerBase
                 'proxyCores' => ProxyRuntime::capabilities(),
                 'canManageCores' => self::nativeWritesAvailable() && is_string($username) &&
                     $acl->isPageAccessible($username, '/api/blankvpn/core/status'),
-                'canManageUpdates' => $systemUser !== null &&
+                'canManageUpdates' => !ProxyCores::usesSystemPackages() && $systemUser !== null &&
                     $acl->isPageAccessible($username, '/api/blankvpn/update/status'),
-                'canWriteUpdates' => $systemUser !== null && $acl->hasPrivilege($username, 'page-all') &&
+                'canWriteUpdates' => !ProxyCores::usesSystemPackages() && $systemUser !== null && $acl->hasPrivilege($username, 'page-all') &&
                     !$acl->hasPrivilege($username, 'user-config-readonly'),
                 'canManageBackups' => $systemUser !== null &&
                     $acl->isPageAccessible($username, '/api/blankvpn/backup/export') &&

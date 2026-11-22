@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+share=/usr/local/share/blankvpn
+install -d -o root -g wheel -m 0755 "$share"
+temporary="$share/core-mode.$$"
+trap 'rm -f "$temporary"' EXIT HUP INT TERM
+printf '%s\n' opnsense-packages > "$temporary"
+chmod 0644 "$temporary"
+mv -f "$temporary" "$share/core-mode"

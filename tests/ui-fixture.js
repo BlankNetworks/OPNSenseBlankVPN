@@ -4,6 +4,7 @@ let exitTestError = null;
 let bulkRemoveError = null;
 let registerError = null;
 let coreStatusError = false;
+let packageCoreMode = false;
 let inlineAssignError = false;
 let tailnetTraffic = 'unseen';
 let activeBulkPingRequests = 0;
@@ -89,6 +90,13 @@ window.jQuery.ajax = async (request) => {
     if (controller === 'core' && action === 'status' && coreStatusError) {
         coreStatusError = false;
         return {ok:false, error:'Core status temporarily unavailable.'};
+    }
+    if (controller === 'core' && action === 'status' && packageCoreMode) {
+        return {ok:true, mode:'opnsense-packages', cores:installedCores.map(core => ({...core,
+            package:{mihomo:'mihomo',tun2socks:'tun2socks',xray:'xray-core','sing-box':'sing-box'}[core.id],
+            packageVersion:core.version, packageLatestVersion:core.id === 'mihomo' ? '1.19.35' : core.version,
+            catalogAvailable:true, packageUpdate:core.id === 'mihomo', update:false, rollback:false})),
+            storage:{freeBytes:1073741824,coreBytes:0,catalogBytes:1024,reserveBytes:67108864}};
     }
     if (controller === 'update') {
         if (action === 'check') {
@@ -842,6 +850,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.controller === 'core' && x.action === 'status') &&
         bv('core-list').rows.length === 4, 'entering Proxies must load installed core versions before expansion');
+    assert(bv('core-list').querySelector('[data-core="mihomo"] [data-core-usage]')?.textContent === '1 saved server',
+        'the core table must show how many saved proxy servers use each core');
     const proxyWidthBeforeCore = document.documentElement.scrollWidth;
     bv('core-manager').open = true;
     await wait();
@@ -868,6 +878,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'check' && x.method === 'POST') &&
         bv('core-list').rows.length === 4, 'approved catalog check must keep installed versions visible');
+    packageCoreMode = true;
+    bv('core-reload').click();
+    await wait();
+    const mihomoCoreRow = bv('core-list').querySelector('[data-core="mihomo"]');
+    assert(mihomoCoreRow?.textContent.includes('1.19.34') &&
+        mihomoCoreRow.textContent.includes('1.19.35 · update in Firmware') &&
+        mihomoCoreRow.textContent.includes('1 saved server') &&
+        bv('core-check').hidden && bv('core-upload').hidden &&
+        !mihomoCoreRow.querySelector('button'),
+    'OPNsense package mode must show installed/latest versions and core use while routing updates through Firmware');
+    packageCoreMode = false;
+    bv('core-reload').click();
+    await wait();
     assert(bv('proxy-list').textContent.includes('Example proxy'), 'proxy catalog not displayed');
     const proxyRow = bv('proxy-list').rows[0];
     assert([...proxyRow.closest('table').tHead.rows[0].cells].slice(1).map(cell => cell.textContent.trim()).join(',') ===

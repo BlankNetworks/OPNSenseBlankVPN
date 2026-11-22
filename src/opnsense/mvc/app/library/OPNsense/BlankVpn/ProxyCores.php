@@ -15,6 +15,32 @@ final class ProxyCores
     private const REPO = 'BlankNetworks/OPNSenseBlankVPN';
     private const RESERVE = 64 * 1024 * 1024;
     private const MAX_CATALOG = 32768;
+    private const MODE_FILE = '/usr/local/share/blankvpn/core-mode';
+    private const SYSTEM_PACKAGES = [
+        'mihomo' => 'mihomo', 'tun2socks' => 'tun2socks', 'xray' => 'xray-core', 'sing-box' => 'sing-box'
+    ];
+
+    public static function distributionMode(?string $path = null): string
+    {
+        $path ??= self::MODE_FILE;
+        if (!is_file($path) || is_link($path)) {
+            return 'blank-release';
+        }
+        $mode = @file_get_contents($path, false, null, 0, 64);
+        return is_string($mode) && trim($mode) === 'opnsense-packages' ? 'opnsense-packages' : 'blank-release';
+    }
+
+    public static function usesSystemPackages(): bool
+    {
+        return self::distributionMode() === 'opnsense-packages';
+    }
+
+    private static function requireBlankReleaseMode(): void
+    {
+        if (self::usesSystemPackages()) {
+            throw new DomainException('Install and update proxy cores from the OPNsense Firmware package catalog.');
+        }
+    }
 
     private static function version(string $version): bool
     {
@@ -126,6 +152,7 @@ final class ProxyCores
 
     public static function refresh(): void
     {
+        self::requireBlankReleaseMode();
         $url = 'https://raw.githubusercontent.com/' . self::REPO . '/main/src/share/blankvpn/' . self::catalogFile();
         $curl = curl_init($url);
         $body = '';
@@ -176,6 +203,9 @@ final class ProxyCores
 
     public static function override(string $core): ?string
     {
+        if (self::usesSystemPackages()) {
+            return null;
+        }
         $digest = self::state()['cores'][$core]['active']['sha256'] ?? '';
         if (!isset(self::BASE[$core]) || !is_string($digest) || !self::digest($digest)) {
             return null;
@@ -215,30 +245,56 @@ final class ProxyCores
             ? $matches[1] : null;
     }
 
+    private static function packageVersion(string $package, bool $installed): ?string
+    {
+        $pkg = '/usr/local/sbin/pkg';
+        if (!is_executable($pkg)) {
+            return null;
+        }
+        try {
+            $command = $installed ? 'query' : 'rquery';
+            $output = Resolver::command(['/usr/bin/timeout', '5', $pkg, $command, '%v', $package], false);
+            $version = trim($output);
+            return preg_match('/^[A-Za-z0-9][A-Za-z0-9._+,-]{0,63}$/D', $version) === 1 ? $version : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     public static function status(): array
     {
         $state = self::state();
-        $catalog = self::catalog();
+        $packageMode = self::usesSystemPackages();
+        $catalog = $packageMode ? [] : self::catalog();
         $capabilities = ProxyRuntime::capabilities();
         $cores = [];
         foreach (self::BASE as $core => $base) {
             $selection = $state['cores'][$core] ?? [];
             $active = $selection['active'] ?? null;
-            $system = $core === 'sing-box' && ProxyRuntime::usesSystemSingBox();
-            $version = $active['version'] ?? ($system ? self::systemSingBoxVersion() :
-                (!$capabilities[$core] ? null : $base));
-            $previous = $selection['previous']['version'] ??
-                ($active !== null && !$system && ProxyRuntime::hasBase($core) ? $base : null);
-            $available = $catalog[$core] ?? null;
+            $system = $packageMode || ($core === 'sing-box' && ProxyRuntime::usesSystemSingBox());
+            $packageVersion = $packageMode ? self::packageVersion(self::SYSTEM_PACKAGES[$core], true) : null;
+            $packageLatestVersion = $packageMode ? self::packageVersion(self::SYSTEM_PACKAGES[$core], false) : null;
+            $version = $packageMode ? $packageVersion : ($active['version'] ?? ($system ? self::systemSingBoxVersion() :
+                (!$capabilities[$core] ? null : $base)));
+            $previous = $packageMode ? null : ($selection['previous']['version'] ??
+                ($active !== null && !$system && ProxyRuntime::hasBase($core) ? $base : null));
+            $available = $packageMode ? null : ($catalog[$core] ?? null);
             $cores[] = [
-                'id' => $core, 'version' => $version, 'installed' => $capabilities[$core],
-                'source' => $active === null ?
+                'id' => $core, 'package' => self::SYSTEM_PACKAGES[$core], 'version' => $version,
+                'installed' => $capabilities[$core],
+                'packageVersion' => $packageVersion, 'packageLatestVersion' => $packageLatestVersion,
+                'catalogAvailable' => $packageMode ? $packageLatestVersion !== null : null,
+                'packageUpdate' => $packageMode && $packageVersion !== null && $packageLatestVersion !== null &&
+                    version_compare($packageLatestVersion, $packageVersion, '>'),
+                'source' => $packageMode ? 'OPNsense package' : ($active === null ?
                     ($system ? 'System package' : 'Bundled') :
-                    ($active['source'] === 'local' ? 'Local upload' : 'Approved update'),
+                    ($active['source'] === 'local' ? 'Local upload' : 'Approved update')),
                 'previous' => $previous,
-                'rollback' => isset($selection['previous']) || ($active !== null && ProxyRuntime::hasBase($core)),
+                'rollback' => !$packageMode && (isset($selection['previous']) ||
+                    ($active !== null && ProxyRuntime::hasBase($core))),
                 'available' => $available,
-                'update' => $available !== null && ($version === null || version_compare($available['version'], $version, '>')),
+                'update' => !$packageMode && $available !== null &&
+                    ($version === null || version_compare($available['version'], $version, '>')),
             ];
         }
         $used = 0;
@@ -249,6 +305,7 @@ final class ProxyCores
         }
         return [
             'cores' => $cores, 'architecture' => self::architecture(), 'pending' => isset($state['pending']),
+            'mode' => $packageMode ? 'opnsense-packages' : 'blank-release',
             'storage' => [
                 'freeBytes' => disk_free_space(Policy::STATE_DIR) ?: 0, 'coreBytes' => $used,
                 'catalogBytes' => @filesize(Policy::STATE_DIR . '/proxy-catalog.json') ?: 0,
@@ -259,6 +316,7 @@ final class ProxyCores
 
     public static function install(string $core, ?string $upload = null, ?string $expected = null): void
     {
+        self::requireBlankReleaseMode();
         $release = self::catalog()[$core] ?? null;
         if ($release === null || ($expected !== null && !hash_equals($release['sha256'], $expected))) {
             throw new DomainException('Refresh the approved catalog and select the core again.');
@@ -268,6 +326,7 @@ final class ProxyCores
 
     public static function installLocal(string $core, string $version, string $archive, string $sha256): void
     {
+        self::requireBlankReleaseMode();
         if (!isset(self::BASE[$core]) || !self::version($version) || !self::digest($sha256) || !is_file($archive)) {
             throw new DomainException('Provide a supported core, numeric version, local file and its SHA-256.');
         }
@@ -368,6 +427,7 @@ final class ProxyCores
 
     public static function rollback(string $core): void
     {
+        self::requireBlankReleaseMode();
         $state = self::state();
         $selection = $state['cores'][$core] ?? [];
         if (isset($state['pending']) || (!isset($selection['active']) && !isset($selection['previous']))) {

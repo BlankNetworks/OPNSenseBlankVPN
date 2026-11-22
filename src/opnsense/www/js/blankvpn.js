@@ -60,6 +60,8 @@
             proxyNodes: [],
             proxyFeeds: [],
             proxyCores: {},
+            proxyCoreMode: 'blank-release',
+            proxyCorePackages: {},
             canManageCores: false,
             coreStatusAttempted: false,
             coreStatusRequest: null,
@@ -2023,24 +2025,50 @@
             const body = byId('core-list');
             body.replaceChildren();
             const storage = data.storage || {};
-            byId('core-storage').textContent = data.pending ? 'A core change is in progress.'
+            state.proxyCoreMode = data.mode === 'opnsense-packages' ? 'opnsense-packages' : 'blank-release';
+            const packageMode = state.proxyCoreMode === 'opnsense-packages';
+            state.proxyCorePackages = Object.fromEntries(cores.map((core) => [core.id, core.catalogAvailable]));
+            byId('core-check').hidden = packageMode;
+            byId('core-upload').hidden = packageMode;
+            byId('core-available-heading').textContent = packageMode ? 'OPNsense package' : 'Approved release';
+            byId('core-storage').textContent = packageMode
+                ? 'Install optional cores from System → Firmware → Plugins or the OPNsense package catalog. Package updates are managed there.'
+                : data.pending ? 'A core change is in progress.'
                 : [data.architecture ? 'FreeBSD ' + data.architecture : '',
                     formatBytes(Math.floor(storage.freeBytes || 0)) + ' free on the state filesystem',
                     formatBytes(storage.coreBytes) + ' core updates',
                     formatBytes(storage.catalogBytes) + ' proxy catalog',
                     formatBytes(storage.reserveBytes) + ' reserved as free space'].filter(Boolean).join(' · ');
             if (!cores.length) {
-                empty(body, 'The router returned no core versions. Reload status to try again.', 4);
+                empty(body, 'The router returned no core versions. Reload status to try again.', 5);
             }
             for (const core of cores) {
                 const row = body.insertRow();
+                row.dataset.core = core.id;
                 cell(row, core.id === 'mihomo' ? 'Mihomo (Clash)' : core.id);
-                const installed = cell(row, core.installed ? shown(core.version, 'Version unavailable') : 'Unavailable', '',
+                const installed = cell(row, core.installed ? shown(core.version, 'Version unavailable') : 'Not installed', '',
                     core.installed ? core.source : '');
                 if (core.installed && core.version) {
                     installed.classList.add('bv-core-version');
                 }
-                cell(row, core.available?.version || '—');
+                const latest = packageMode ? core.packageLatestVersion : core.available?.version;
+                let availableText = latest || '—';
+                if (packageMode) {
+                    if (latest && !core.installed) {
+                        availableText += ' · available in Firmware';
+                    } else if (latest && core.packageUpdate) {
+                        availableText += ' · update in Firmware';
+                    } else if (latest && core.installed) {
+                        availableText += ' · up to date';
+                    } else if (!latest && core.catalogAvailable === false) {
+                        availableText = core.package + ' · not in catalog';
+                    } else if (!latest) {
+                        availableText = core.package + ' · check System → Firmware';
+                    }
+                }
+                cell(row, availableText);
+                const usage = cell(row, '0 saved');
+                usage.dataset.coreUsage = core.id;
                 const actions = row.insertCell();
                 if (core.update) {
                     actions.append(button('Install', (event) => {
@@ -2067,6 +2095,17 @@
                 byId('core-upload-id').dataset.digest = selected?.available?.sha256 || '';
             };
             byId('core-upload-id').onchange();
+            if (state.settings) {
+                renderProxyCatalog();
+            }
+            renderCoreUsage();
+        }
+
+        function renderCoreUsage() {
+            for (const usage of document.querySelectorAll('[data-core-usage]')) {
+                const count = state.proxyNodes.filter((node) => node.core === usage.dataset.coreUsage).length;
+                usage.textContent = count + (count === 1 ? ' saved server' : ' saved servers');
+            }
         }
 
         async function refreshCores() {
@@ -2074,7 +2113,7 @@
                 return state.coreStatusRequest;
             }
             state.coreStatusAttempted = true;
-            empty(byId('core-list'), 'Loading installed core versions…', 4);
+            empty(byId('core-list'), 'Loading installed core versions…', 5);
             byId('core-storage').textContent = 'Reading installed cores and storage…';
             const request = coreApi('status');
             state.coreStatusRequest = request;
@@ -2083,17 +2122,36 @@
             } catch (error) {
                 const message = errorMessage(error, 'Core status is unavailable.');
                 byId('core-storage').textContent = message;
-                empty(byId('core-list'), message + ' Use Reload status to retry.', 4);
+                empty(byId('core-list'), message + ' Use Reload status to retry.', 5);
             } finally {
                 state.coreStatusRequest = null;
             }
         }
 
         function renderProxyCatalog() {
+            renderCoreUsage();
             const missing = ['mihomo', 'tun2socks'].filter((core) => state.proxyCores[core] !== true);
-            byId('proxy-cores').textContent = missing.length
-                ? 'Install ' + missing.join(' and ') + ' to enable proxy tunnels. You can import and inspect servers now.'
-                : 'Proxy transport ready. Xray and sing-box servers require their corresponding core.';
+            if (state.proxyCoreMode === 'opnsense-packages') {
+                const packageName = {mihomo: 'mihomo', tun2socks: 'tun2socks', xray: 'xray-core', 'sing-box': 'sing-box'};
+                const required = missing.map((core) => packageName[core] || core);
+                const unavailable = missing.filter((core) => state.proxyCorePackages[core] === false)
+                    .map((core) => packageName[core] || core);
+                const optional = ['xray', 'sing-box'].filter((core) => state.proxyCores[core] !== true)
+                    .map((core) => packageName[core]);
+                const guidance = 'Install listed packages in System → Firmware → Plugins or the package catalog; updates are managed there.';
+                byId('proxy-cores').textContent = unavailable.length
+                    ? unavailable.join(' and ') + ' ' + (unavailable.length === 1 ? 'is' : 'are') +
+                        ' not in this OPNsense package catalog. ' + guidance +
+                        ' A missing package must be published for this OPNsense branch before it can be selected.'
+                    : required.length
+                        ? 'Install ' + required.join(' and ') + ' to enable proxy tunnels. ' + guidance
+                        : 'Proxy transport ready.' + (optional.length
+                            ? ' Optional protocol cores: ' + optional.join(' and ') + '. ' + guidance : '');
+            } else {
+                byId('proxy-cores').textContent = missing.length
+                    ? 'Install ' + missing.join(' and ') + ' to enable proxy tunnels. You can import and inspect servers now.'
+                    : 'Proxy transport ready. Xray and sing-box servers require their corresponding core.';
+            }
             const subscriptions = byId('subscription-list');
             subscriptions.replaceChildren();
             if (!state.proxyFeeds.length) {

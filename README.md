@@ -98,17 +98,17 @@ ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubuser
 
 To pin this release instead, use the following command. It also checks the installer digest before running it.
 
-Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.71** on a supported amd64 or aarch64 OPNsense router.
+Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.72** on a supported amd64 or aarch64 OPNsense router.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.71.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.71/scripts/install.sh && sha256 -c 79a6f3a75451124d8ffcf5ca7ae3cb251dfc13c775e1048bd64f1714193ec421 /tmp/blankvpn-install-0.8.71.sh && sh /tmp/blankvpn-install-0.8.71.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.72.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.72/scripts/install.sh && sha256 -c f02be9bba7147617fa24df14b05fafc032f4847d9210d1aea43624200e12dae7 /tmp/blankvpn-install-0.8.72.sh && sh /tmp/blankvpn-install-0.8.72.sh'
 ```
 
 The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.
 
 ### Download on your computer
 
-1. Open the [0.8.71 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.71), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+1. Open the [0.8.72 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.72), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
 2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 
@@ -117,7 +117,24 @@ The latest-release command remains the same for future releases. Each release pa
 1. Open the same release and find **Download and install on the router** for your architecture.
 2. Run its commands **one line at a time** in the router's root shell. They fetch the package from the pinned release URL, verify its SHA-256, and install it. The commands work in the OPNsense default shell.
 
-For an upgrade, follow either path over the existing installation. Verify with `pkg info os-blank-vpn` and open **VPN → Blank VPN & Proxy → Dashboard** in your existing HTTPS WebGUI. New installations start with routing disabled and do not need Tailscale. The package does not start a proxy tunnel or load its TUN driver until a selected routing policy needs one. Tailscale integration is available only when Tailscale is separately installed, configured as an exit node, and enabled in Blank VPN's Tailscale routing scope. The release package includes the proxy runtimes and Clash YAML parser. It declares its OPNsense, Dnsmasq, PHP cURL, and Python dependencies.
+For an upgrade, follow either path over the existing installation. Verify with `pkg info os-blank-vpn` and open **VPN → Blank VPN & Proxy → Dashboard** in your existing HTTPS WebGUI. New installations start with routing disabled and do not need Tailscale. The package does not start a proxy tunnel or load its TUN driver until a selected routing policy needs one. Tailscale integration is available only when Tailscale is separately installed, configured as an exit node, and enabled in Blank VPN's Tailscale routing scope. This standalone release package includes the proxy runtimes and Clash YAML parser. It declares its OPNsense, Dnsmasq, PHP cURL, and Python dependencies.
+
+### Proxy cores in OPNsense plugin builds
+
+The standalone release above downloads its pinned, verified core builds from
+Blank Networks. A separately staged upstream OPNsense plugin build can instead
+use optional core packages installed and updated through **System → Firmware →
+Plugins**. In that mode, Blank VPN shows which core packages are installed and
+which are present in the router's package catalog; it does not download core
+binaries itself. Install only the packages required by the proxy protocols you
+use. Availability depends on the OPNsense release and architecture. In the CE
+26.7 amd64 catalog checked on 2026-11-22, Xray is published but Mihomo and
+tun2socks are not, and those two are required for the proxy tunnel path. The CE
+26.7 aarch64 catalog is not available. These catalog limitations must be
+resolved before the upstream package-managed build can offer its full proxy
+functionality on those targets.
+The upstream plugin build is not yet available from Firmware; see the
+[contribution readiness plan](docs/OPNSENSE_PLUGIN_PR_READINESS.md).
 
 For delegated access, assign **VPN: Blank VPN & Proxy: View devices and connections** or **VPN: Blank VPN & Proxy: Manage tunnels and policy routing** in the OPNsense user manager.
 

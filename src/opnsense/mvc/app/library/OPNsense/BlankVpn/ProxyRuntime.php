@@ -26,8 +26,10 @@ final class ProxyRuntime
         'xray' => '/usr/local/libexec/blankvpn/xray',
         'sing-box' => '/usr/local/libexec/blankvpn/sing-box'
     ];
-
-    private const SYSTEM_SING_BOX = '/usr/local/bin/sing-box';
+    private const SYSTEM_BIN = [
+        'mihomo' => '/usr/local/bin/mihomo', 'tun2socks' => '/usr/local/bin/tun2socks',
+        'xray' => '/usr/local/bin/xray', 'sing-box' => '/usr/local/bin/sing-box'
+    ];
 
     public static function routes(BlankVpn $model): array
     {
@@ -98,6 +100,12 @@ final class ProxyRuntime
         }
         foreach (array_unique(['mihomo', 'tun2socks', $core]) as $tool) {
             if (!self::available($tool)) {
+                if (ProxyCores::usesSystemPackages()) {
+                    $package = ['mihomo' => 'mihomo', 'tun2socks' => 'tun2socks',
+                        'xray' => 'xray-core', 'sing-box' => 'sing-box'][$tool] ?? $tool;
+                    throw new DomainException('Install the ' . $package .
+                        ' package from the OPNsense Firmware package catalog before enabling this proxy exit.');
+                }
                 throw new DomainException('Install the verified ' . $tool . ' executable before enabling this proxy exit.');
             }
         }
@@ -124,12 +132,15 @@ final class ProxyRuntime
 
     private static function base(string $tool): string
     {
-        return $tool === 'sing-box' && self::usesSystemSingBox() ? self::SYSTEM_SING_BOX : self::BIN[$tool];
+        if (ProxyCores::usesSystemPackages()) {
+            return self::SYSTEM_BIN[$tool] ?? self::BIN[$tool];
+        }
+        return $tool === 'sing-box' && self::usesSystemSingBox() ? self::SYSTEM_BIN['sing-box'] : self::BIN[$tool];
     }
 
     public static function usesSystemSingBox(): bool
     {
-        return !self::safeBinary(self::BIN['sing-box']) && self::safeBinary(self::SYSTEM_SING_BOX);
+        return !self::safeBinary(self::BIN['sing-box']) && self::safeBinary(self::SYSTEM_BIN['sing-box']);
     }
 
     public static function hasBase(string $tool): bool
@@ -238,7 +249,7 @@ final class ProxyRuntime
         $state = self::marker($slot);
         $paths = self::binaries($route['core']);
         $recorded = $state['binaries'] ?? array_filter([
-            'bridge' => self::BIN['tun2socks'], 'mihomo' => self::BIN['mihomo'],
+            'bridge' => self::binary('tun2socks'), 'mihomo' => self::binary('mihomo'),
             'adapter' => $route['core'] === 'mihomo' ? null : self::base($route['core'])
         ]);
         if (($state['configVersion'] ?? 0) !== self::CONFIG_VERSION || $recorded !== $paths ||
@@ -790,12 +801,12 @@ final class ProxyRuntime
         };
         $recorded = $marker['binaries'][$name] ?? null;
         if (is_string($recorded) && isset(self::BIN[$tool])) {
-            $known = $recorded === self::BIN[$tool] || ($tool === 'sing-box' && $recorded === self::SYSTEM_SING_BOX) ||
+            $known = $recorded === self::BIN[$tool] || $recorded === self::SYSTEM_BIN[$tool] ||
                 ProxyCores::isManagedPath($tool, $recorded);
             $matches = $known && str_starts_with($args, $recorded . ' ');
         } else {
             $matches = isset(self::BIN[$tool]) && (str_starts_with($args, self::BIN[$tool] . ' ') ||
-                ($tool === 'sing-box' && str_starts_with($args, self::SYSTEM_SING_BOX . ' ')));
+                str_starts_with($args, self::SYSTEM_BIN[$tool] . ' '));
         }
         if (!$matches) {
             return null;

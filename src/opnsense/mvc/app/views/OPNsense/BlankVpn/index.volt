@@ -251,8 +251,8 @@
             </div>
             <div class="bv-scroll">
                 <table class="table bv-table">
-                    <thead><tr><th scope="col">Core</th><th scope="col">Installed</th><th scope="col">Approved release</th><th scope="col">Actions</th></tr></thead>
-                    <tbody id="bv-core-list"><tr><td colspan="4" class="bv-empty text-muted">Core versions load when this section opens.</td></tr></tbody>
+                    <thead><tr><th scope="col">Core</th><th scope="col">Current version</th><th id="bv-core-available-heading" scope="col">Available version</th><th scope="col">Saved servers using core</th><th scope="col">Actions</th></tr></thead>
+                    <tbody id="bv-core-list"><tr><td colspan="5" class="bv-empty text-muted">Core versions load when this section opens.</td></tr></tbody>
                 </table>
             </div>
             <form id="bv-core-upload">
@@ -262,7 +262,7 @@
                 </div>
                 <button type="submit" class="btn btn-default">Verify and install archive</button>
             </form>
-            <p class="text-muted">Installing or rolling back a core briefly interrupts tunnels that use it.</p>
+            <p class="text-muted">Blank release builds can update one core at a time. In OPNsense package builds, install or update each core through System → Firmware. Changing a core briefly interrupts tunnels that use it.</p>
         </details>
         <div class="bv-grid">
             <form id="bv-proxy-import">

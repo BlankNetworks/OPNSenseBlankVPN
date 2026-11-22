@@ -34,6 +34,23 @@ function rejectProxy(string $body): void
     throw new RuntimeException('An unsafe or invalid proxy configuration was accepted.');
 }
 
+$coreModeFile = tempnam(sys_get_temp_dir(), 'blankvpn-core-mode-');
+if ($coreModeFile === false) {
+    throw new RuntimeException('Could not create the core mode fixture.');
+}
+try {
+    assertProxy(ProxyCores::distributionMode($coreModeFile) === 'blank-release',
+        'Core management must default to the standalone Blank release mode.');
+    file_put_contents($coreModeFile, "opnsense-packages\n");
+    assertProxy(ProxyCores::distributionMode($coreModeFile) === 'opnsense-packages',
+        'An upstream plugin marker must select OPNsense package-managed cores.');
+    file_put_contents($coreModeFile, "unexpected\n");
+    assertProxy(ProxyCores::distributionMode($coreModeFile) === 'blank-release',
+        'An invalid package mode marker must not change the standalone core updater.');
+} finally {
+    unlink($coreModeFile);
+}
+
 $plainSocks = proxyNode('socks5://192.0.2.8:1080');
 assertProxy($plainSocks['id'] === proxyNode('socks5h://192.0.2.8:1080')['id'],
     'Remote DNS SOCKS links must keep the existing node identity.');

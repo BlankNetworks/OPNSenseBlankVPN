@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "os-blank-vpn"
-VERSION = "0.8.71"
+VERSION = "0.8.72"
 SERIES = "26.7"
 LEGACY_ARCHES = {"amd64": "x86:64", "aarch64": "aarch64:64"}
 LICENSES = ["BSD2CLAUSE", "GPLv3", "GPLv3+", "MIT", "MPL20"]

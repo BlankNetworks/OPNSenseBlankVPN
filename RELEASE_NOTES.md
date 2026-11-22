@@ -1,3 +1,11 @@
+## 0.8.72
+
+- Show each installed core version, the approved or OPNsense package version, and the number of saved proxy servers using that core.
+- Keep single-core check, install, and rollback available in standalone Blank releases; show package versions and direct package-managed builds to OPNsense Firmware.
+- Disable the Blank Networks package updater in OPNsense package-managed mode so plugin updates remain under Firmware.
+- Stage OPNsense plugin hooks without replacing generated hooks and exclude Python bytecode from the staged source.
+- Update About and pinned SSH install instructions.
+
 ## 0.8.71
 
 - Run Proxy Ping All and Ping & Sort with two bounded concurrent checks while retaining full proxy-core HTTPS validation.

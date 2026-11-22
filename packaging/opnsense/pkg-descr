@@ -1,0 +1,3 @@
+Blank VPN & Proxy adds policy-based VPN and proxy routing to OPNsense. It
+supports whole-network, per-device, and domain-based routing with optional
+VPN and proxy cores installed and updated through the OPNsense package system.

@@ -41,6 +41,13 @@ final class PackageUpdate
 
     public static function status(): array
     {
+        if (ProxyCores::usesSystemPackages()) {
+            return [
+                'installed' => null, 'available' => null, 'enabled' => false, 'supported' => false,
+                'running' => false, 'phase' => 'idle',
+                'message' => 'Manage Blank VPN & Proxy updates through OPNsense System → Firmware.',
+            ];
+        }
         $abi = self::supportedAbi();
         $supported = $abi !== null;
         $state = self::readState();
@@ -80,6 +87,7 @@ final class PackageUpdate
 
     public static function enable(): array
     {
+        self::requireStandaloneRelease();
         return self::withQueueLock(static fn (): array => self::enableLocked());
     }
 
@@ -121,6 +129,7 @@ final class PackageUpdate
 
     public static function check(): array
     {
+        self::requireStandaloneRelease();
         return self::withQueueLock(static fn (): array => self::checkLocked());
     }
 
@@ -150,6 +159,7 @@ final class PackageUpdate
 
     public static function enqueue(mixed $version): array
     {
+        self::requireStandaloneRelease();
         if (!self::validVersion($version)) {
             throw new DomainException('Choose an available Blank VPN & Proxy version.');
         }
@@ -179,6 +189,9 @@ final class PackageUpdate
 
     public static function dispatch(string $job): void
     {
+        if (ProxyCores::usesSystemPackages()) {
+            return;
+        }
         if (!self::job($job) || !self::isQueued($job)) {
             return;
         }
@@ -197,6 +210,7 @@ final class PackageUpdate
 
     public static function install(string $job): void
     {
+        self::requireStandaloneRelease();
         if (!self::job($job)) {
             return;
         }
@@ -248,6 +262,13 @@ final class PackageUpdate
             if ($work !== null) {
                 self::removeWork($work);
             }
+        }
+    }
+
+    private static function requireStandaloneRelease(): void
+    {
+        if (ProxyCores::usesSystemPackages()) {
+            throw new DomainException('Manage Blank VPN & Proxy updates through OPNsense System → Firmware.');
         }
     }
 
