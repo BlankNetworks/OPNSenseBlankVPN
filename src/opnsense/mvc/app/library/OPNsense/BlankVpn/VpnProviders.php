@@ -419,10 +419,11 @@ class VpnProviders
         return $servers;
     }
 
-    public static function protonRelay(array $server, callable $resolve = 'gethostbynamel'): array
+    public static function protonRelay(array $server, ?callable $resolve = null): array
     {
         // Both sources must agree. The community directory cannot redirect a peer
         // to an address outside the A records of the selected Proton hostname.
+        $resolve ??= gethostbynamel(...);
         $resolved = $resolve($server['host'] . '.');
         foreach (is_array($resolved) ? $resolved : [] as $ip) {
             if (self::publicIpv4($ip) && in_array($ip, $server['ips'], true)) {
