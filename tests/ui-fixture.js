@@ -198,8 +198,18 @@ window.jQuery.ajax = async (request) => {
         return {ok:true, servers:[{id:'ivpn-loc', name:'Canada · Toronto'}]};
     }
     if (action === 'importProfile' && data.provider === 'proton') {
-        reply.dashboard.profiles.push({id:'proton-wg', name:data.name, provider:'proton', interface:'wg8'});
-        return {ok:true, profile:'proton-wg'};
+        const id = reply.dashboard.profiles.some(profile => profile.id === 'proton-wg') ? 'proton-wg2' : 'proton-wg';
+        reply.dashboard.profiles.push({id, name:data.name, provider:'proton', dns:['10.2.0.1'],
+            interface: id === 'proton-wg' ? 'wg8' : 'wg9'});
+        return {ok:true, profile:id};
+    }
+    if (action === 'replaceProtonProfile') {
+        if (data.config === 'invalid') return {ok:false, error:'Enter a valid Proton configuration.'};
+        const profile = reply.dashboard.profiles.find(row => row.id === data.profile);
+        delete profile.providerLocation;
+        delete profile.providerServer;
+        profile.protonCanRestore = false;
+        return {ok:true, profile:profile.id};
     }
     if (action === 'protonServers') {
         if (protonDirectoryUnavailable) return {ok:false, error:'Directory unavailable.'};
@@ -1819,6 +1829,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         bv('proton-profile').options.length === 2 && bv('proton-tier').value === 'free' &&
         bv('proton-country').options.length === 3 && bv('proton-switch').disabled,
         'The imported Proton profile must open the Free picker and exclude native exits.');
+    assert(!bv('proton-downloads').hidden && bv('proton-downloads').querySelector('a').textContent === 'Sign in to Proton' &&
+        bv('proton-downloads').querySelector('a').href === 'https://account.protonvpn.com/downloads',
+        'The official Proton sign-in must remain available after import without implying a router account session.');
     bv('proton-tier').value = 'plus';
     bv('proton-tier').dispatchEvent(new Event('change'));
     bv('proton-tier').value = 'free';
@@ -1859,6 +1872,44 @@ document.addEventListener('DOMContentLoaded', async () => {
     assert([...bv('proton-country').options].some(option => option.value === 'Canada') &&
         ![...bv('proton-country').options].some(option => option.value === 'Japan'),
         'Selecting Plus must recover from a failed directory request and show its own list.');
+    bv('proton-country').value = 'Canada';
+    bv('proton-country').dispatchEvent(new Event('change'));
+    bv('proton-server').value = 'ca-plus';
+    bv('proton-server').dispatchEvent(new Event('change'));
+    bv('provider-manual').open = true;
+    bv('import-name').value = 'Second Proton tunnel';
+    bv('import-config').value = 'second issued config';
+    bv('proton-import-ipv4').checked = true;
+    bv('proton-import-gateway').value = 'ca-plus';
+    bv('provider-import').requestSubmit();
+    await wait();
+    assert(bv('proton-profile').options.length === 3 && bv('proton-profile').value === 'proton-wg2' &&
+        requests.some(x => x.action === 'importProfile' && x.data.name === 'Second Proton tunnel' &&
+            x.data.ipv4Only === '1' && x.data.server === 'ca-plus' && x.data.tier === 'plus') &&
+        [...bv('network-profile').options].filter(option => ['proton-wg','proton-wg2'].includes(option.value)).length === 2,
+        'An independent Proton tunnel must retain its own name and route choice beside the first.');
+    bv('proton-credentials').open = true;
+    bv('proton-replace-config').value = 'wrong-target draft';
+    bv('proton-profile').value = 'proton-wg';
+    bv('proton-profile').dispatchEvent(new Event('change'));
+    assert(!bv('proton-credentials').open && bv('proton-replace-config').value === '' &&
+        bv('proton-replace-target').textContent.includes('Proton router'), 'Changing the selected tunnel must clear credential drafts.');
+    bv('proton-credentials').open = true;
+    bv('proton-replace-config').value = 'invalid';
+    bv('proton-replace').requestSubmit();
+    await wait();
+    assert(bv('proton-replace-error').textContent.includes('valid Proton configuration') && bv('proton-credentials').open,
+        'Replacing credentials must surface field failures for the selected tunnel.');
+    bv('proton-replace-config').value = 'replacement issued config';
+    bv('proton-replace-gateway').value = 'ca-plus';
+    bv('proton-replace-ipv4').checked = true;
+    bv('proton-replace').requestSubmit();
+    await wait();
+    assert(requests.some(x => x.action === 'replaceProtonProfile' && x.data.profile === 'proton-wg' &&
+        x.data.config === 'replacement issued config' && x.data.ipv4Only === '1' && x.data.server === 'ca-plus') &&
+        bv('proton-replace-config').value === '' && bv('proton-profile').value === 'proton-wg' &&
+        bv('proton-profile').options.length === 3 && !bv('proton-credentials').open,
+        'Replacing credentials must keep both named tunnels, target only the selected one and clear the form.');
     reply.dashboard.profiles = reply.dashboard.profiles.filter(profile => profile.provider !== 'proton');
     const nordNode = 'b'.repeat(64);
     reply.dashboard.profiles.push({id:'proxy-' + nordNode, node:nordNode, kind:'proxy', provider:'nord',

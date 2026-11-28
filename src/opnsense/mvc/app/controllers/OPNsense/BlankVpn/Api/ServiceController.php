@@ -19,6 +19,7 @@ use OPNsense\BlankVpn\MystVpn;
 use OPNsense\BlankVpn\NativeVpn;
 use OPNsense\BlankVpn\Operations;
 use OPNsense\BlankVpn\Policy;
+use OPNsense\BlankVpn\ProtonTunnels;
 use OPNsense\BlankVpn\RouteGroups;
 use OPNsense\BlankVpn\ProxyCatalog;
 use OPNsense\BlankVpn\ProxyImport;
@@ -904,53 +905,84 @@ class ServiceController extends ApiControllerBase
 
     public function switchProtonServerAction()
     {
+        return $this->respond(fn () => $this->updateProtonProfile(null), true, true, true);
+    }
+
+    public function replaceProtonProfileAction()
+    {
         return $this->respond(function () {
-            $id = $this->input('profile', 64);
-            $location = $this->input('server', 128);
-            $relay = null;
-            if ($location !== 'original') {
-                $servers = (new VpnProviders())->protonServers($this->input('tier', 8, 'free'));
-                if (!isset($servers[$location])) {
-                    throw new \DomainException('Refresh the Proton VPN server list and choose a listed server.');
+            $config = (new Mullvad())->parseConfig($this->input('config', 16384), trim($this->input('dns', 128)));
+            return $this->updateProtonProfile($config);
+        }, true, true, true);
+    }
+
+    private function selectedProtonRelay(string $location): ?array
+    {
+        if ($location === 'original') {
+            return null;
+        }
+        $servers = (new VpnProviders())->protonServers($this->input('tier', 8, 'free'));
+        if (!isset($servers[$location])) {
+            throw new \DomainException('Refresh the Proton VPN server list and choose a listed server.');
+        }
+        return VpnProviders::protonRelay($servers[$location]);
+    }
+
+    private function allocateProton(BlankVpn $model, array $config, array $previous = []): array
+    {
+        if (!empty($config['presharedKey'])) {
+            throw new \DomainException('Choose a Proton-issued configuration without a preshared key.');
+        }
+        return ProtonTunnels::allocate($config, WireGuard::tunnelNetworks($previous['instance'] ?? ''),
+            Policy::localNetworks(Policy::settings($model)), trim($this->input('dns', 128)) !== '',
+            $this->flag('ipv4Only'), $previous['address'] ?? '');
+    }
+
+    private function updateProtonProfile(?array $config): array
+    {
+        $id = $this->input('profile', 64);
+        $location = $this->input('server', 128, $config === null ? '' : 'original');
+        $relay = $this->selectedProtonRelay($location);
+        return Operations::exclusive(function () use ($id, $location, $relay, $config) {
+            $result = Operations::change(function (BlankVpn $model) use ($id, $location, $relay, $config) {
+                $profile = Policy::profiles($model)[$id] ?? null;
+                if (($profile['provider'] ?? '') !== 'proton' || $profile['relay'] !== '') {
+                    throw new \DomainException('Choose a Proton VPN WireGuard profile imported in Blank VPN & Proxy.');
                 }
-                $relay = VpnProviders::protonRelay($servers[$location]);
-            }
-            return Operations::exclusive(function () use ($id, $location, $relay) {
-                $result = Operations::change(function (BlankVpn $model) use ($id, $location, $relay) {
-                    $profile = Policy::profiles($model)[$id] ?? null;
-                    if (($profile['provider'] ?? '') !== 'proton' || $profile['relay'] !== '') {
-                        throw new \DomainException('Choose a Proton VPN WireGuard profile imported in Blank VPN & Proxy.');
-                    }
+                if ($config === null) {
                     if (!empty($profile['pskFingerprint'])) {
                         throw new \DomainException('Switching servers requires a Proton-issued WireGuard profile without a preshared key.');
                     }
-                    // Only the remote peer changes. The imported client identity stays with the native instance.
-                    $current = ['ipv4' => $profile['endpoint'], 'port' => $profile['port'], 'publicKey' => $profile['peerKey']];
-                    $target = $relay ?? $profile['protonOriginalPeer'] ?? $current;
-                    $updated = WireGuard::retarget($profile, $target);
-                    $peerChanged = $profile !== $updated;
-                    if ($relay === null) {
-                        unset($updated['protonOriginalPeer'], $updated['providerLocation'], $updated['providerServer']);
-                    } else {
-                        if ($peerChanged) {
-                            $updated['protonOriginalPeer'] ??= $current;
-                        }
-                        $updated['providerLocation'] = $location;
-                        $updated['providerServer'] = $relay['name'];
-                    }
-                    $ownership = array_diff_key($updated, array_flip(['id', 'name', 'relay']));
-                    $model->profiles->profile->getChild($id)->ownership = json_encode($ownership, JSON_THROW_ON_ERROR);
-                    return $peerChanged && empty($profile['disabled'])
-                        ? ['added' => $ownership, 'reload' => true, 'peerChanged' => true]
-                        : ['peerChanged' => $peerChanged];
-                });
-                if ($result['peerChanged']) {
-                    $this->clearPeerProbe($id);
+                    $original = $profile['protonOriginalPeer'] ??
+                        ['ipv4' => $profile['endpoint'], 'port' => $profile['port'], 'publicKey' => $profile['peerKey']];
+                    $updated = WireGuard::retarget($profile, $relay ?? $original);
+                } else {
+                    $config = $this->allocateProton($model, $config, $profile);
+                    $original = array_intersect_key($config, array_flip(['host', 'port', 'publicKey']));
+                    $updated = WireGuard::replaceProton($profile, $config, $relay ?? $original);
                 }
-                return ['profile' => $id, 'message' => $relay === null
-                    ? 'Original Proton VPN server restored.' : 'Proton VPN server selection saved.'];
+                $changed = $profile !== $updated;
+                if ($relay === null) {
+                    unset($updated['protonOriginalPeer'], $updated['providerLocation'], $updated['providerServer']);
+                } else {
+                    if ($changed || $config !== null) {
+                        $updated['protonOriginalPeer'] = $original;
+                    }
+                    $updated['providerLocation'] = $location;
+                    $updated['providerServer'] = $relay['name'];
+                }
+                $ownership = array_diff_key($updated, array_flip(['id', 'name', 'relay']));
+                $model->profiles->profile->getChild($id)->ownership = json_encode($ownership, JSON_THROW_ON_ERROR);
+                return $changed && empty($profile['disabled'])
+                    ? ['added' => $ownership, 'reload' => true, 'peerChanged' => true]
+                    : ['peerChanged' => $changed];
             });
-        }, true, true, true);
+            if ($result['peerChanged']) {
+                $this->clearPeerProbe($id);
+            }
+            return ['profile' => $id, 'message' => $config !== null ? 'Proton VPN credentials updated.'
+                : ($relay === null ? 'Original Proton VPN server restored.' : 'Proton VPN server selection saved.')];
+        });
     }
 
     public function ivpnLoginAction()
@@ -1132,7 +1164,17 @@ class ServiceController extends ApiControllerBase
             $identity['publicKey'] = $mullvad->derivePublicKey($config['privateKey']);
             $dnsPort = Resolver::freePort(Policy::routes(new BlankVpn()));
             $provider = VpnProviders::validate($this->input('provider', 32, 'other'));
-            return $this->addProfile($this->name(), '', $identity, $config, $dnsPort, $provider);
+            $location = '';
+            if ($provider === 'proton') {
+                $selected = $this->input('server', 128, 'original');
+                $relay = $this->selectedProtonRelay($selected);
+                if ($relay !== null) {
+                    $identity['protonOriginalPeer'] = array_intersect_key($config, array_flip(['host', 'port', 'publicKey']));
+                    $config = array_replace($config, $relay);
+                    $location = $selected;
+                }
+            }
+            return $this->addProfile($this->name(), '', $identity, $config, $dnsPort, $provider, $location);
         }), true, true, true);
     }
 
@@ -1146,6 +1188,9 @@ class ServiceController extends ApiControllerBase
         string $location = ''
     ): array {
         $result = Operations::change(function (BlankVpn $model) use ($name, $relayId, $identity, $relay, $dnsPort, $provider, $location) {
+            if ($provider === 'proton') {
+                $identity = $this->allocateProton($model, $identity);
+            }
             $node = $model->profiles->profile->add();
             $id = (string)$node->getAttribute('uuid');
             $source = explode('/', $identity['address'] ?? '')[0];
@@ -1162,6 +1207,9 @@ class ServiceController extends ApiControllerBase
             if ($location !== '') {
                 $ownership['providerLocation'] = $location;
                 $ownership['providerServer'] = $relay['name'];
+            }
+            if (isset($identity['protonOriginalPeer'])) {
+                $ownership['protonOriginalPeer'] = $identity['protonOriginalPeer'];
             }
             if (isset($identity['accountBinding'])) {
                 $ownership['accountBinding'] = $identity['accountBinding'];
