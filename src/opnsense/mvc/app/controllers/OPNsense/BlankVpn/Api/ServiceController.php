@@ -121,6 +121,9 @@ class ServiceController extends ApiControllerBase
                         : (($checked['probeSucceeded'] ?? false) ? 'router probe succeeded' : 'router probe failed'),
                     'checkedAt' => $checked['checkedAt'] ?? null
                 ];
+                if (($profile['provider'] ?? '') === 'proton' && !empty($profile['protonOriginalPeer'])) {
+                    $profiles[$id]['protonCanRestore'] = true;
+                }
             }
             foreach (NativeVpn::routes($model) as $id => $route) {
                 $checked = $health[$id] ?? [];
@@ -887,6 +890,69 @@ class ServiceController extends ApiControllerBase
         }), true, true, true);
     }
 
+    public function protonServersAction()
+    {
+        return $this->respond(function () {
+            $servers = (new VpnProviders())->protonServers($this->input('tier', 8, 'free'));
+            $choices = [];
+            foreach ($servers as $id => $server) {
+                $choices[] = ['id' => $id, 'name' => $server['name'], 'country' => $server['country'], 'city' => $server['city']];
+            }
+            return ['servers' => $choices];
+        }, true, true, true);
+    }
+
+    public function switchProtonServerAction()
+    {
+        return $this->respond(function () {
+            $id = $this->input('profile', 64);
+            $location = $this->input('server', 128);
+            $relay = null;
+            if ($location !== 'original') {
+                $servers = (new VpnProviders())->protonServers($this->input('tier', 8, 'free'));
+                if (!isset($servers[$location])) {
+                    throw new \DomainException('Refresh the Proton VPN server list and choose a listed server.');
+                }
+                $relay = VpnProviders::protonRelay($servers[$location]);
+            }
+            return Operations::exclusive(function () use ($id, $location, $relay) {
+                $result = Operations::change(function (BlankVpn $model) use ($id, $location, $relay) {
+                    $profile = Policy::profiles($model)[$id] ?? null;
+                    if (($profile['provider'] ?? '') !== 'proton' || $profile['relay'] !== '') {
+                        throw new \DomainException('Choose a Proton VPN WireGuard profile imported in Blank VPN & Proxy.');
+                    }
+                    if (!empty($profile['pskFingerprint'])) {
+                        throw new \DomainException('Switching servers requires a Proton-issued WireGuard profile without a preshared key.');
+                    }
+                    // Only the remote peer changes. The imported client identity stays with the native instance.
+                    $current = ['ipv4' => $profile['endpoint'], 'port' => $profile['port'], 'publicKey' => $profile['peerKey']];
+                    $target = $relay ?? $profile['protonOriginalPeer'] ?? $current;
+                    $updated = WireGuard::retarget($profile, $target);
+                    $peerChanged = $profile !== $updated;
+                    if ($relay === null) {
+                        unset($updated['protonOriginalPeer'], $updated['providerLocation'], $updated['providerServer']);
+                    } else {
+                        if ($peerChanged) {
+                            $updated['protonOriginalPeer'] ??= $current;
+                        }
+                        $updated['providerLocation'] = $location;
+                        $updated['providerServer'] = $relay['name'];
+                    }
+                    $ownership = array_diff_key($updated, array_flip(['id', 'name', 'relay']));
+                    $model->profiles->profile->getChild($id)->ownership = json_encode($ownership, JSON_THROW_ON_ERROR);
+                    return $peerChanged && empty($profile['disabled'])
+                        ? ['added' => $ownership, 'reload' => true, 'peerChanged' => true]
+                        : ['peerChanged' => $peerChanged];
+                });
+                if ($result['peerChanged']) {
+                    $this->clearPeerProbe($id);
+                }
+                return ['profile' => $id, 'message' => $relay === null
+                    ? 'Original Proton VPN server restored.' : 'Proton VPN server selection saved.'];
+            });
+        }, true, true, true);
+    }
+
     public function ivpnLoginAction()
     {
         return $this->respond(fn () => Operations::exclusive(
@@ -1196,19 +1262,24 @@ class ServiceController extends ApiControllerBase
                     : ['changed' => true];
             });
             if (!empty($result['changed'])) {
-                $health = Firewall::health();
-                if (isset($health[$id])) {
-                    // An existing outage remains blocked until a fresh probe succeeds.
-                    if (($health[$id]['reachable'] ?? null) === false) {
-                        $health[$id] = ['reachable' => false, 'failures' => 2];
-                    } else {
-                        unset($health[$id]);
-                    }
-                    Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
-                }
+                $this->clearPeerProbe($id);
             }
             return ['port' => $port];
         }), true, true);
+    }
+
+    private function clearPeerProbe(string $id): void
+    {
+        $health = Firewall::health();
+        if (isset($health[$id])) {
+            // An existing outage remains blocked until a fresh probe succeeds.
+            if (($health[$id]['reachable'] ?? null) === false) {
+                $health[$id] = ['reachable' => false, 'failures' => 2];
+            } else {
+                unset($health[$id]);
+            }
+            Policy::writeState('health.json', json_encode($health, JSON_THROW_ON_ERROR));
+        }
     }
 
     public function restoreMullvadDeviceAction()

@@ -1,3 +1,8 @@
+## 0.8.73
+
+- Choose a Proton VPN Free or Plus gateway by country, city, and server using a WireGuard profile already imported under Proton VPN. Switching reuses the profile’s key and existing device and routing assignments.
+- Check the selected gateway against its Proton hostname. Restore the originally imported gateway even when the server directory is unavailable.
+
 ## 0.8.72
 
 - Show each installed core version, the approved or OPNsense package version, and the number of saved proxy servers using that core.

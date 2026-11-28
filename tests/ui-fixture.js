@@ -11,6 +11,8 @@ let activeBulkPingRequests = 0;
 let peakBulkPingRequests = 0;
 let activeProxyPingRequests = 0;
 let peakProxyPingRequests = 0;
+let finishProtonPlus;
+let protonDirectoryUnavailable = false;
 const ambiguousSignIns = new Set(['account', 'providerLogin', 'mystBeginAuth', 'mystPollAuth', 'ivpnLogin']);
 const updateStatus = {ok:true, supported:true, enabled:false, running:false, installed:'0.1.39',
     available:'', message:'Blank VPN amp Proxy is up to date.'};
@@ -42,7 +44,8 @@ const reply = {
         mullvadSignedIn: false,
         vpnProviders: {mullvad:{name:'Mullvad',login:'mullvad'}, pia:{name:'Private Internet Access',login:'password'},
             hide:{name:'hide.me'}, azire:{name:'AzireVPN',login:'token'}, nord:{name:'NordVPN',login:'token'},
-            mysterium:{name:'Mysterium VPN',login:'browser'}, ivpn:{name:'IVPN',login:'account'}},
+            mysterium:{name:'Mysterium VPN',login:'browser'}, ivpn:{name:'IVPN',login:'account'},
+            proton:{name:'Proton VPN',login:'profile'}},
         providerAccounts: {pia:false,azire:true},
         proxyCores: {mihomo:true,tun2socks:true,xray:true,"sing-box":true},
         servicePresets: {Netflix:['netflix.com','nflxvideo.net']},
@@ -193,6 +196,32 @@ window.jQuery.ajax = async (request) => {
     }
     if (action === 'ivpnServers') {
         return {ok:true, servers:[{id:'ivpn-loc', name:'Canada · Toronto'}]};
+    }
+    if (action === 'importProfile' && data.provider === 'proton') {
+        reply.dashboard.profiles.push({id:'proton-wg', name:data.name, provider:'proton', interface:'wg8'});
+        return {ok:true, profile:'proton-wg'};
+    }
+    if (action === 'protonServers') {
+        if (protonDirectoryUnavailable) return {ok:false, error:'Directory unavailable.'};
+        if (data.tier === 'plus') {
+            await new Promise(resolve => { finishProtonPlus = resolve; });
+            return {ok:true, servers:[{id:'ca-plus', name:'CA Plus', country:'Canada', city:'Toronto'}]};
+        }
+        return {ok:true, servers:[
+            {id:'jp-free', name:'Tokyo gateway', country:'Japan', city:'Tokyo'},
+            {id:'jp-osaka', name:'Osaka gateway', country:'Japan', city:'Osaka'},
+            {id:'nl-free', name:'Amsterdam gateway', country:'Netherlands', city:'Amsterdam'}]};
+    }
+    if (action === 'switchProtonServer') {
+        const profile = reply.dashboard.profiles.find((row) => row.id === data.profile);
+        if (data.server === 'original') {
+            delete profile.providerLocation;
+            delete profile.providerServer;
+            profile.protonCanRestore = false;
+        } else {
+            Object.assign(profile, {providerLocation:data.server, providerServer:'Tokyo gateway', protonCanRestore:true});
+        }
+        return {ok:true, profile:profile.id};
     }
     if (action === 'addMystExit' || action === 'addIvpnExit') {
         const provider = action === 'addMystExit' ? 'mysterium' : 'ivpn';
@@ -1774,6 +1803,63 @@ document.addEventListener('DOMContentLoaded', async () => {
     await wait();
     assert(requests.some(x => x.action === 'addIvpnExit' && x.data.server === 'ivpn-loc') &&
         bv('profile-list').textContent.includes('IVPN Toronto'), 'IVPN server did not reach the saved tunnel list.');
+    reply.dashboard.profiles.push({id:'native-proton', name:'OpenVPN', kind:'native', provider:'proton'});
+    bv('refresh').click();
+    await wait();
+    bv('provider').value = 'proton';
+    bv('provider-picker').requestSubmit();
+    assert(bv('proton-form').hidden && bv('provider-login').hidden && bv('provider-manual').open &&
+        !bv('provider-import').hidden && bv('provider-status').textContent.includes('Import'),
+        'Proton must guide native-only users to the one-time WireGuard import.');
+    bv('import-name').value = 'Proton router';
+    bv('import-config').value = '[Interface]';
+    bv('provider-import').requestSubmit();
+    await wait();
+    assert(!bv('proton-form').hidden && bv('proton-profile').value === 'proton-wg' &&
+        bv('proton-profile').options.length === 2 && bv('proton-tier').value === 'free' &&
+        bv('proton-country').options.length === 3 && bv('proton-switch').disabled,
+        'The imported Proton profile must open the Free picker and exclude native exits.');
+    bv('proton-tier').value = 'plus';
+    bv('proton-tier').dispatchEvent(new Event('change'));
+    bv('proton-tier').value = 'free';
+    bv('proton-tier').dispatchEvent(new Event('change'));
+    finishProtonPlus();
+    await wait();
+    assert(![...bv('proton-country').options].some(option => option.value === 'Canada'),
+        'A late paid directory response must not replace the Free list.');
+    bv('proton-country').value = 'Japan';
+    bv('proton-country').dispatchEvent(new Event('change'));
+    bv('proton-city').value = 'Tokyo';
+    bv('proton-city').dispatchEvent(new Event('change'));
+    assert(bv('proton-server').options.length === 2 && bv('proton-server').options[1].value === 'jp-free',
+        'Proton gateway choices must follow the selected country and city.');
+    bv('proton-server').value = 'jp-free';
+    bv('proton-server').dispatchEvent(new Event('change'));
+    bv('proton-switch').click();
+    await wait();
+    assert(requests.some(x => x.action === 'switchProtonServer' && x.data.profile === 'proton-wg' &&
+        x.data.tier === 'free' && x.data.server === 'jp-free') && bv('proton-current').textContent.includes('Tokyo gateway') &&
+        bv('profile-list').textContent.includes('Proton router') && bv('proton-switch').disabled,
+        'Switching the Proton gateway must update the existing tunnel and suppress a duplicate switch.');
+    protonDirectoryUnavailable = true;
+    bv('proton-reload').click();
+    await wait();
+    assert(bv('proton-status').textContent.includes('Directory unavailable') && !bv('proton-restore').hidden &&
+        !bv('proton-restore').disabled, 'The imported gateway must be available when the directory is offline.');
+    bv('proton-restore').click();
+    await wait();
+    assert(requests.some(x => x.action === 'switchProtonServer' && x.data.profile === 'proton-wg' &&
+        x.data.server === 'original' && !x.data.tier) && bv('proton-restore').hidden,
+        'The saved tunnel must return to its imported gateway without a directory selection.');
+    protonDirectoryUnavailable = false;
+    bv('proton-tier').value = 'plus';
+    bv('proton-tier').dispatchEvent(new Event('change'));
+    finishProtonPlus();
+    await wait();
+    assert([...bv('proton-country').options].some(option => option.value === 'Canada') &&
+        ![...bv('proton-country').options].some(option => option.value === 'Japan'),
+        'Selecting Plus must recover from a failed directory request and show its own list.');
+    reply.dashboard.profiles = reply.dashboard.profiles.filter(profile => profile.provider !== 'proton');
     const nordNode = 'b'.repeat(64);
     reply.dashboard.profiles.push({id:'proxy-' + nordNode, node:nordNode, kind:'proxy', provider:'nord',
         providerLocation:'jp100.nordvpn.com', providerServer:'Japan', name:'Nord Japan'});

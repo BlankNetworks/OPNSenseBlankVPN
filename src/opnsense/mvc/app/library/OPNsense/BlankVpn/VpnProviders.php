@@ -20,7 +20,7 @@ class VpnProviders
         'nord' => ['name' => 'NordVPN', 'login' => 'token', 'guide' => 'https://support.nordvpn.com/hc/en-us/articles/45535038276753-How-to-generate-a-NordVPN-login-token-to-connect-to-a-VPN-server-on-a-router'],
         'ovpn' => ['name' => 'OVPN', 'guide' => 'https://www.ovpn.com/en/guides/wireguard/opnsense'],
         'pia' => ['name' => 'Private Internet Access', 'login' => 'password', 'guide' => 'https://github.com/pia-foss/manual-connections'],
-        'proton' => ['name' => 'Proton VPN', 'guide' => 'https://protonvpn.com/support/wireguard-configurations'],
+        'proton' => ['name' => 'Proton VPN', 'login' => 'profile', 'guide' => 'https://protonvpn.com/support/wireguard-configurations'],
         'vypr' => ['name' => 'VyprVPN', 'guide' => 'https://support.vyprvpn.com/hc/en-us/articles/43750934530317-VyprVPN-WireGuard-Go-Client-Setup'],
         'windscribe' => ['name' => 'Windscribe', 'guide' => 'https://windscribe.com/myaccount/config-generator#wireguard'],
         'other' => ['name' => 'Other VPN']
@@ -378,6 +378,58 @@ class VpnProviders
     {
         $label = trim(implode(' · ', array_filter([$first, $second], static fn ($value): bool => is_string($value) && $value !== '')));
         return preg_match('/^[^\p{C}<>]{1,64}$/uD', $label) ? $label : $fallback;
+    }
+
+    public function protonServers(string $tier): array
+    {
+        if (!in_array($tier, ['free', 'plus'], true)) {
+            throw new DomainException('Choose Proton Free or Plus.');
+        }
+        $data = $this->request('https://raw.githubusercontent.com/qdm12/gluetun-servers/main/pkg/servers/protonvpn.json');
+        if (($data['version'] ?? null) !== 4 || !is_array($data['servers'] ?? null)) {
+            throw new RuntimeException('The Proton VPN server directory format has changed.');
+        }
+        $servers = [];
+        foreach ($data['servers'] as $row) {
+            if (!is_array($row) || ($row['vpn'] ?? '') !== 'wireguard' ||
+                ($row['free'] ?? false) !== ($tier === 'free') || !empty($row['secure_core']) || !empty($row['tor'])) {
+                continue;
+            }
+            $host = $row['hostname'] ?? '';
+            $key = $row['wgpubkey'] ?? null;
+            $country = $row['country'] ?? '';
+            $city = $row['city'] ?? '';
+            // A single physical peer can have multiple numbered exits. The imported
+            // client's credentials determine the exit, so list the gateway itself.
+            if (!is_string($host) || !preg_match('/^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.protonvpn\.net$/D', $host, $match) ||
+                !self::wireGuardKey($key) || !is_array($row['ips'] ?? null) ||
+                !is_string($country) || !preg_match('/^[^\p{C}<>]{1,80}$/uD', $country) ||
+                !is_string($city) || !preg_match('/^[^\p{C}<>]{0,80}$/uD', $city)) {
+                continue;
+            }
+            $ips = array_values(array_filter($row['ips'], self::publicIpv4(...)));
+            if ($ips !== []) {
+                $servers[$host] = ['host' => $host, 'name' => $match[1], 'city' => $city, 'country' => $country,
+                    'ips' => $ips, 'publicKey' => $key, 'port' => 51820];
+            }
+        }
+        if ($servers === []) {
+            throw new RuntimeException('The Proton VPN directory has no compatible gateways for this plan.');
+        }
+        return $servers;
+    }
+
+    public static function protonRelay(array $server, callable $resolve = 'gethostbynamel'): array
+    {
+        // Both sources must agree. The community directory cannot redirect a peer
+        // to an address outside the A records of the selected Proton hostname.
+        $resolved = $resolve($server['host'] . '.');
+        foreach (is_array($resolved) ? $resolved : [] as $ip) {
+            if (self::publicIpv4($ip) && in_array($ip, $server['ips'], true)) {
+                return ['name' => $server['name'], 'ipv4' => $ip, 'publicKey' => $server['publicKey'], 'port' => $server['port']];
+            }
+        }
+        throw new RuntimeException('The gateway address could not be confirmed with Proton DNS. Choose another gateway or try again later.');
     }
 
     protected function request(string $url, array $headers = [], array $extra = [], bool $firstLine = false): array

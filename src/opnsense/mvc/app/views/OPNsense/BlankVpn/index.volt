@@ -106,6 +106,34 @@
                 </div>
                 <p><a id="bv-provider-guide" target="_blank" rel="noopener noreferrer">Provider setup guide</a></p>
                 <p id="bv-provider-status" role="status"></p>
+                <p id="bv-proton-downloads" hidden><a href="https://account.protonvpn.com/downloads" target="_blank" rel="noopener noreferrer">Get a WireGuard configuration from Proton</a></p>
+                <form id="bv-proton-form" hidden>
+                    <div class="bv-fields">
+                        <label>Saved Proton WireGuard tunnel
+                            <select id="bv-proton-profile" class="form-control" required></select>
+                        </label>
+                        <label>Server list
+                            <select id="bv-proton-tier" class="form-control">
+                                <option value="free">Free servers</option>
+                                <option value="plus">Plus servers (paid plan)</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="bv-actions">
+                        <p id="bv-proton-current" class="text-muted"></p>
+                        <button id="bv-proton-restore" type="button" class="btn btn-default" hidden>Restore imported gateway</button>
+                    </div>
+                    <div class="bv-fields">
+                        <label>Country <select id="bv-proton-country" class="form-control" required></select></label>
+                        <label>City <select id="bv-proton-city" class="form-control"></select></label>
+                        <label>Server <select id="bv-proton-server" class="form-control" required></select></label>
+                    </div>
+                    <div class="bv-actions">
+                        <button id="bv-proton-switch" type="submit" class="btn btn-primary" disabled>Switch server</button>
+                        <button id="bv-proton-reload" type="button" class="btn btn-default">Reload server list</button>
+                    </div>
+                    <p id="bv-proton-status" class="text-muted" role="status"></p>
+                </form>
                 <div id="bv-myst-login" class="bv-actions" hidden>
                     <button id="bv-myst-begin" type="button" class="btn btn-primary">Sign in to Mysterium VPN</button>
                     <a id="bv-myst-approve" class="btn btn-default" target="_blank" rel="noopener noreferrer" hidden>Approve sign-in</a>

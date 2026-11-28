@@ -98,17 +98,17 @@ ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-latest.sh https://raw.githubuser
 
 To pin this release instead, use the following command. It also checks the installer digest before running it.
 
-Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.72** on a supported amd64 or aarch64 OPNsense router.
+Replace `root@ROUTER` with your router's SSH target. This command installs release **0.8.73** on a supported amd64 or aarch64 OPNsense router.
 
 ```sh
-ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.72.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.72/scripts/install.sh && sha256 -c f02be9bba7147617fa24df14b05fafc032f4847d9210d1aea43624200e12dae7 /tmp/blankvpn-install-0.8.72.sh && sh /tmp/blankvpn-install-0.8.72.sh'
+ssh root@ROUTER 'fetch -o /tmp/blankvpn-install-0.8.73.sh https://raw.githubusercontent.com/BlankNetworks/OPNSenseBlankVPN/v0.8.73/scripts/install.sh && sha256 -c 9f9f135f30e53a0618db0df9d9f36b343bf5a7fe8734d5b921f75387d70209a2 /tmp/blankvpn-install-0.8.73.sh && sh /tmp/blankvpn-install-0.8.73.sh'
 ```
 
 The latest-release command remains the same for future releases. Each release page also provides its own pinned command and manual package steps.
 
 ### Download on your computer
 
-1. Open the [0.8.72 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.72), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
+1. Open the [0.8.73 release](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases/tag/v0.8.73), or choose a newer published version from [GitHub Releases](https://github.com/BlankNetworks/OPNSenseBlankVPN/releases). Each release lists both architectures and links to its `.pkg` and `.pkg.sha256` files.
 2. Download the matching pair and copy both files to `/tmp` on the router. You can use `scp` from your computer with an SSH account already configured on OPNsense, using any router address you can reach, including Tailscale. The release page gives the exact filenames and copy command.
 3. In the router's root shell, run the **Install downloaded files** commands from the release page. The install runs only after the checksum matches.
 
@@ -196,12 +196,22 @@ The dashboard reads the router's selected language and supports all 20 OPNsense 
 | Mysterium VPN | Start sign-in, approve it in Mysterium's browser flow, then select **Check approval**. Choose a location and IP type. Blank VPN & Proxy allows one managed Mysterium tunnel at a time. If browser setup fails, import a WireGuard configuration from the Mysterium account portal. [Router configuration guide](https://help.mysteriumvpn.com/en/articles/16010679-how-to-generate-wireguard-configuration-file) |
 | NordVPN | Sign in with a [NordVPN router login token](https://support.nordvpn.com/hc/en-us/articles/45535038276753-How-to-generate-a-NordVPN-login-token-to-connect-to-a-VPN-server-on-a-router). The first NordLynx server uses native WireGuard. Additional NordLynx servers use isolated WireGuard sessions in Mihomo, with TCP/UDP forwarding and the same eight active slots shared with proxies. |
 | Private Internet Access | Sign in with your PIA username and password. Choose a region to register a local WireGuard key. PIA can expire a registration after inactivity or server restart. Re-add the tunnel if needed. [PIA manual connections](https://github.com/pia-foss/manual-connections) |
-| AirVPN, hide.me, OVPN, Proton VPN, Windscribe | Generate a compatible WireGuard profile in the provider portal, then use **Import WireGuard**. You can also attach an existing OPNsense VPN gateway. |
+| Proton VPN | Use a Proton-issued WireGuard profile once. Choose a Free or Plus gateway for that tunnel in the location menu. [Switch Proton VPN servers](#switch-proton-vpn-servers) |
+| AirVPN, hide.me, OVPN, Windscribe | Generate a compatible WireGuard profile in the provider portal, then use **Import WireGuard**. You can also attach an existing OPNsense VPN gateway. |
 | ExpressVPN, VyprVPN, Other VPN | Attach a compatible OpenVPN or WireGuard tunnel configured in OPNsense with an assigned IPv4 gateway. Use the provider setup guide in the picker. |
 
 VPN and proxy servers appear together in **Network Settings**, grouped alphabetically by service or proxy core. LAN and Tailscale devices can use different servers at the same time, subject to provider limits.
 
 Under **Devices and Routing Rules**, choose a saved server in a Local or Tailscale device's **Server** dropdown and press **Save** to apply it. **Cancel** discards an unsaved choice. **Edit** opens the full rule form for routing mode, Kill Switch, DHCP reservation, and other advanced settings. A new device gets a Full rule when its inline server is saved; a DHCP lease may require the displayed reservation confirmation. Changing the server of an existing **Base VPN + Multi-Path** rule keeps that mode and its destination overrides. Multi-Path-only, blocked, paused, and Whole-Network policies require their corresponding advanced controls before a device server can be changed.
+
+### Switch Proton VPN servers
+
+1. Open **VPN Login** in the HTTPS WebGUI. Choose **Proton VPN** and select **Apply**.
+2. Choose your **Saved Proton WireGuard tunnel**. A profile previously imported under Proton VPN is ready to use. For first-time setup, sign in on Proton’s website, download one WireGuard configuration for your router, then open **Add from a VPN configuration** and import the file. Your Proton password stays on Proton’s website. [Proton WireGuard downloads](https://protonvpn.com/support/wireguard-configurations)
+3. Leave **Free servers** selected for a Free account, or select **Plus servers (paid plan)** with a qualifying subscription. Choose a country, optionally filter by city, select a gateway, and choose **Switch server**. The router reuses the tunnel’s key and routing assignments. Devices using it reconnect through the selected location. Proton Free allows one active connection. [Proton router plans](https://protonvpn.com/support/installing-protonvpn-on-a-router)
+4. Under **Saved VPN servers**, use **Test** to check the connection. To return to the server from your original file, select **Restore imported gateway** in the Proton menu. Restore also works when the directory is unavailable.
+
+The menu lists physical WireGuard gateways from Gluetun’s published Proton catalog. Several Proton server numbers can share a gateway. Blank VPN & Proxy checks the selected gateway against its Proton hostname before switching. If you attached a native OPNsense gateway, manage that tunnel in OPNsense or import a Proton WireGuard profile to use this menu. [Gluetun Proton catalog](https://github.com/qdm12/gluetun-servers/blob/main/pkg/servers/protonvpn.json)
 
 ### Add Mullvad servers
 

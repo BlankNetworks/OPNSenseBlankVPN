@@ -201,7 +201,7 @@ final class WireGuard
         return (string)$servers->getNodeByReference('servers.server.' . self::instanceId($profile))->privkey;
     }
 
-    /** Change a peer in place after the caller verifies no device uses this profile. */
+    /** Change only the remote peer of an owned tunnel. */
     public static function retarget(array $profile, array $relay): array
     {
         [, $peers] = self::ownedObjects($profile);
@@ -212,6 +212,15 @@ final class WireGuard
         }
         self::ensureUniquePeer($peers, $profile['owner'], $peerKey, $endpoint, $port, $profile['peer']);
 
+        $updated = array_replace($profile, [
+            'endpoint' => $endpoint,
+            'port' => $port,
+            'peerKey' => $peerKey,
+            'pskFingerprint' => $psk === '' ? '' : hash('sha256', $psk),
+        ]);
+        if ($updated === $profile) {
+            return $profile;
+        }
         $peer = $peers->getNodeByReference('clients.client.' . $profile['peer']);
         $peer->pubkey = $peerKey;
         $peer->psk = $psk;
@@ -219,12 +228,7 @@ final class WireGuard
         $peer->serverport = (string)$port;
         self::serialize($peers, 'WireGuard peer');
 
-        return array_replace($profile, [
-            'endpoint' => $endpoint,
-            'port' => $port,
-            'peerKey' => $peerKey,
-            'pskFingerprint' => $psk === '' ? '' : hash('sha256', $psk),
-        ]);
+        return $updated;
     }
 
     /** Stage a change to the owned Mullvad peer without changing its address or identity. */
