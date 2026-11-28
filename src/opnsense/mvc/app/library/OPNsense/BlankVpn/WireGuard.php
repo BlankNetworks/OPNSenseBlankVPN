@@ -29,6 +29,28 @@ final class WireGuard
         return $keys;
     }
 
+    /** Reserve addresses on disabled instances as well so they can be enabled later. */
+    public static function tunnelNetworks(string $exceptInstance = ''): array
+    {
+        $networks = [];
+        foreach ((new Server())->servers->server->iterateItems() as $uuid => $instance) {
+            if ((string)$uuid === $exceptInstance) {
+                continue;
+            }
+            foreach ($instance->tunneladdress->getValues() as $address) {
+                $address = (string)$address;
+                if (!str_contains($address, '/')) {
+                    $address .= str_contains($address, ':') ? '/128' : '/32';
+                }
+                $network = Policy::cidr($address, false);
+                if ($network !== null) {
+                    $networks[] = $network;
+                }
+            }
+        }
+        return array_values(array_unique($networks));
+    }
+
     public static function create(string $id, array $identity, array $relay): array
     {
         if (!self::uuid($id)) {
@@ -201,10 +223,11 @@ final class WireGuard
         return (string)$servers->getNodeByReference('servers.server.' . self::instanceId($profile))->privkey;
     }
 
-    /** Change a peer in place after the caller verifies no device uses this profile. */
+    /** Change only the remote peer of an owned tunnel. */
     public static function retarget(array $profile, array $relay): array
     {
-        [, $peers] = self::ownedObjects($profile);
+        [$servers, $peers] = self::ownedObjects($profile);
+        self::checkOtherPeerReferences($servers, $profile);
         [$endpoint, $port, $peerKey, $psk] = self::relaySettings($relay);
         self::preflight($endpoint);
         if ($peerKey === $profile['identityKey']) {
@@ -212,6 +235,15 @@ final class WireGuard
         }
         self::ensureUniquePeer($peers, $profile['owner'], $peerKey, $endpoint, $port, $profile['peer']);
 
+        $updated = array_replace($profile, [
+            'endpoint' => $endpoint,
+            'port' => $port,
+            'peerKey' => $peerKey,
+            'pskFingerprint' => $psk === '' ? '' : hash('sha256', $psk),
+        ]);
+        if ($updated === $profile) {
+            return $profile;
+        }
         $peer = $peers->getNodeByReference('clients.client.' . $profile['peer']);
         $peer->pubkey = $peerKey;
         $peer->psk = $psk;
@@ -219,12 +251,59 @@ final class WireGuard
         $peer->serverport = (string)$port;
         self::serialize($peers, 'WireGuard peer');
 
-        return array_replace($profile, [
-            'endpoint' => $endpoint,
-            'port' => $port,
-            'peerKey' => $peerKey,
-            'pskFingerprint' => $psk === '' ? '' : hash('sha256', $psk),
+        return $updated;
+    }
+
+    /** Replace an issued Proton credential in place so assignments keep their interface and gateway. */
+    public static function replaceProton(array $profile, array $config, array $relay): array
+    {
+        [$servers, $peers] = self::ownedObjects($profile);
+        self::checkOtherPeerReferences($servers, $profile);
+        [$endpoint, $port, $peerKey, $psk] = self::relaySettings($relay);
+        self::preflight($endpoint);
+        $privateKey = self::key($config['privateKey']);
+        $identityKey = (new Mullvad())->derivePublicKey($privateKey);
+        if ($identityKey === $peerKey || $psk !== '') {
+            throw new \DomainException('Choose a Proton-issued client configuration with a distinct peer key and no preshared key.');
+        }
+        foreach ($servers->servers->server->iterateItems() as $id => $instance) {
+            if ($id !== $profile['instance'] && ((string)$instance->pubkey === $identityKey || (string)$instance->privkey === $privateKey)) {
+                throw new \DomainException('This WireGuard credential already belongs to another tunnel. Generate a separate Proton configuration for this tunnel.');
+            }
+        }
+        self::ensureUniquePeer($peers, $profile['owner'], $peerKey, $endpoint, $port, $profile['peer']);
+        $address = self::hostAddress($config['address'], false);
+        $address6 = empty($config['address6']) ? '' : self::hostAddress($config['address6'], true);
+        if (($address6 === '') !== empty($profile['address6'])) {
+            throw new \DomainException($address6 === ''
+                ? 'This tunnel has an IPv6 gateway. Choose a configuration with IPv6, or add a separate IPv4-only tunnel.'
+                : 'This tunnel is IPv4-only. Select IPv4 only to keep its assignments, or add a separate dual-stack tunnel.');
+        }
+        $mtu = self::integer($config['mtu'] ?? 1420, 1280, 9000, 'MTU');
+        $keepalive = self::integer($config['keepalive'] ?? 0, 0, 65535, 'keepalive');
+        $updated = array_replace($profile, [
+            'address' => $address, 'address6' => $address6, 'endpoint' => $endpoint, 'port' => $port,
+            'peerKey' => $peerKey, 'identityKey' => $identityKey, 'privateFingerprint' => hash('sha256', $privateKey),
+            'identity' => substr(hash('sha256', $identityKey), 0, 16), 'pskFingerprint' => '',
+            'mtu' => $mtu, 'keepalive' => $keepalive, 'dns' => array_values(array_slice($config['dns'], 0, 4)),
         ]);
+        if ($updated === $profile) {
+            return $profile;
+        }
+        $peer = $peers->getNodeByReference('clients.client.' . $profile['peer']);
+        $peer->pubkey = $peerKey;
+        $peer->psk = '';
+        $peer->serveraddress = $endpoint;
+        $peer->serverport = (string)$port;
+        $peer->keepalive = $keepalive === 0 ? '' : (string)$keepalive;
+        $instance = $servers->getNodeByReference('servers.server.' . $profile['instance']);
+        $instance->pubkey = $identityKey;
+        $instance->privkey = $privateKey;
+        $instance->tunneladdress = $address . ($address6 === '' ? '' : ',' . $address6);
+        $instance->mtu = (string)$mtu;
+        self::serialize($peers, 'WireGuard peer');
+        self::serialize($servers, 'WireGuard instance');
+        return $updated;
     }
 
     /** Stage a change to the owned Mullvad peer without changing its address or identity. */
@@ -381,11 +460,7 @@ final class WireGuard
         $config = Config::getInstance()->object();
         $logical = $profile['logicalInterface'];
         $gatewayNames = array_filter([$profile['gateway'], $profile['gateway6'] ?? '']);
-        foreach ($servers->servers->server->iterateItems() as $uuid => $server) {
-            if ($uuid !== $profile['instance'] && in_array($profile['peer'], $server->peers->getValues(), true)) {
-                throw new RuntimeException('Another WireGuard instance references this peer. Remove that reference first.');
-            }
-        }
+        self::checkOtherPeerReferences($servers, $profile);
         foreach ($gateways->gatewayIterator() as $gateway) {
             if ($gateway['interface'] === $logical && !in_array($gateway['name'], $gatewayNames, true)) {
                 throw new RuntimeException('Another native gateway uses this interface. Remove that reference first.');
@@ -857,6 +932,15 @@ final class WireGuard
                     ((int)(string)$current->serverport ?: 51820) === $port)
             ) {
                 throw new RuntimeException('This relay already has a WireGuard peer. Reuse its existing tunnel.');
+            }
+        }
+    }
+
+    private static function checkOtherPeerReferences(Server $servers, array $profile): void
+    {
+        foreach ($servers->servers->server->iterateItems() as $uuid => $server) {
+            if ($uuid !== $profile['instance'] && in_array($profile['peer'], $server->peers->getValues(), true)) {
+                throw new RuntimeException('Another WireGuard instance references this peer. Remove that reference first.');
             }
         }
     }

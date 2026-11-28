@@ -79,6 +79,7 @@
             mystAuth: {},
             ivpnAuth: {},
             ivpnConfirmationAccount: '',
+            protonCatalog: null,
             nativeGateways: [],
             providerLocations: new Map(),
             serviceDestinations: new Map(),
@@ -165,7 +166,7 @@
 
         async function api(action, payload, path = '', controller = 'service') {
             const method = payload === undefined ? 'GET' : 'POST';
-            if (insecureWebGui && ['addProxyNode', 'addSubscription', 'importProxies', 'providerLogin', 'ivpnLogin', 'importProfile'].includes(action)) {
+            if (insecureWebGui && ['addProxyNode', 'addSubscription', 'importProxies', 'providerLogin', 'ivpnLogin', 'importProfile', 'replaceProtonProfile'].includes(action)) {
                 throw new Error('Open the OPNsense WebGUI over HTTPS before submitting credentials or configuration files.');
             }
             const request = {
@@ -411,6 +412,83 @@
                 group: providerName(profile)};
         }
 
+        function protonProfiles() {
+            return state.profiles.filter((profile) => profile.provider === 'proton' && !profile.kind &&
+                profile.status !== 'Native configuration changed');
+        }
+
+        function renderProton() {
+            const profiles = protonProfiles();
+            const form = byId('proton-form');
+            form.hidden = insecureWebGui || !profiles.length;
+            byId('provider-status').textContent = insecureWebGui ? 'Open the OPNsense WebGUI over HTTPS to set up Proton VPN.'
+                : profiles.length ? 'Choose a saved tunnel to switch its gateway. Free and Plus filter the list. Your Proton account determines which gateways you can use.'
+                : 'Import a WireGuard configuration from your Proton account to choose locations for this router.';
+            if (form.hidden) {
+                if (byId('proton-replace').dataset.profile) resetProtonReplacement();
+                options(byId('proton-import-gateway'), [], 'Gateway from the configuration');
+                return;
+            }
+            const profileField = byId('proton-profile');
+            options(profileField, profiles.map((profile) => ({value: profile.id, label: profile.name})),
+                'Choose a saved tunnel', profiles.length === 1 ? profiles[0].id : profileField.value);
+            const profile = profiles.find((item) => item.id === profileField.value);
+            const replaceForm = byId('proton-replace');
+            const replacement = byId('proton-credentials');
+            replacement.hidden = !profile;
+            if (replaceForm.dataset.profile !== profileField.value) {
+                resetProtonReplacement();
+                replaceForm.dataset.profile = profileField.value;
+            }
+            byId('proton-replace-target').textContent = profile ? 'Selected tunnel: ' + profile.name : '';
+            byId('proton-current').textContent = profile ? 'Current gateway: ' + (profile.providerServer || 'from the imported configuration') : '';
+            byId('proton-restore').hidden = profile?.protonCanRestore !== true;
+            byId('proton-restore').disabled = state.busy;
+            if (!state.protonCatalog) {
+                void loadProtonServers();
+                return;
+            }
+            const {servers, loading, message} = state.protonCatalog;
+            const locationChoices = (values) => [...new Set(values.filter(Boolean))].sort(serviceOrder.compare)
+                .map((value) => ({value, label: value}));
+            const country = byId('proton-country');
+            options(country, locationChoices(servers.map((server) => server.country)), 'Choose a country');
+            country.disabled = !servers.length;
+            const inCountry = servers.filter((server) => server.country === country.value);
+            const city = byId('proton-city');
+            options(city, locationChoices(inCountry.map((server) => server.city)), 'All cities');
+            city.disabled = city.options.length < 2;
+            const server = byId('proton-server');
+            options(server, inCountry.filter((entry) => !city.value || entry.city === city.value)
+                .map((entry) => ({value: entry.id, label: entry.name})), 'Choose a server');
+            server.disabled = server.options.length < 2;
+            for (const action of ['import', 'replace']) {
+                const selected = server.selectedOptions[0];
+                const gateway = byId('proton-' + action + '-gateway');
+                options(gateway, server.value ? [{value: server.value, label: selected.text}] : [], 'Gateway from the configuration');
+            }
+            byId('proton-status').textContent = message;
+            byId('proton-reload').disabled = loading;
+            byId('proton-switch').disabled = state.busy || !profile || !server.value || profile.providerLocation === server.value;
+        }
+
+        async function loadProtonServers() {
+            const tier = byId('proton-tier').value;
+            const catalog = {servers: [], loading: true, message: 'Loading the Proton server list…'};
+            state.protonCatalog = catalog;
+            renderProton();
+            try {
+                const result = await api('protonServers', {tier});
+                catalog.servers = array(result.servers);
+                catalog.message = catalog.servers.length ? '' : 'No gateways are available in this list.';
+            } catch (error) {
+                catalog.message = errorMessage(error, 'The Proton server list could not be loaded.');
+            } finally {
+                catalog.loading = false;
+                if (state.provider === 'proton' && state.protonCatalog === catalog) renderProton();
+            }
+        }
+
         function renderProvider() {
             const provider = state.provider;
             const details = state.vpnProviders[provider];
@@ -419,6 +497,7 @@
             const supportedLogin = Boolean(details?.login);
             const password = details?.login === 'password';
             const browserLogin = details?.login === 'browser';
+            const proton = details?.login === 'profile' && provider === 'proton';
             const ivpn = provider === 'ivpn';
             const nodes = byId('provider-panel');
             byId('mullvad-provider').hidden = !mullvad;
@@ -430,7 +509,7 @@
             const guide = byId('provider-guide');
             guide.parentElement.hidden = !details.guide;
             guide.href = details.guide || '#';
-            byId('provider-login').hidden = signedIn || insecureWebGui || !supportedLogin || browserLogin || ivpn;
+            byId('provider-login').hidden = signedIn || insecureWebGui || !supportedLogin || browserLogin || ivpn || proton;
             byId('ivpn-login').hidden = !ivpn || signedIn || insecureWebGui;
             const totp = ivpn && state.ivpnAuth.challenge === 'totp';
             byId('ivpn-confirmation-field').hidden = !totp;
@@ -457,8 +536,16 @@
                     : ivpn && state.ivpnAuth.message ? state.ivpnAuth.message
                     : translated('Sign in to load the provider’s WireGuard servers.')
                 : 'Import a WireGuard profile or add a VPN tunnel already configured in OPNsense.';
-            byId('provider-logout').hidden = !signedIn;
-            byId('provider-server-form').hidden = !signedIn;
+            byId('provider-logout').hidden = !signedIn || proton;
+            byId('provider-server-form').hidden = !signedIn || proton;
+            byId('proton-form').hidden = !proton;
+            byId('proton-downloads').hidden = !proton;
+            byId('proton-credentials').hidden = true;
+            byId('proton-add-help').hidden = !proton;
+            byId('proton-import-options').hidden = !proton;
+            byId('provider-manual-label').textContent = proton ? 'Add a Proton tunnel' : 'Add from a VPN configuration';
+            byId('import-save').textContent = proton ? 'Add a Proton tunnel' : 'Import WireGuard';
+            if (proton) renderProton();
             byId('myst-type-field').hidden = !browserLogin;
             byId('myst-dns-field').hidden = !browserLogin;
             byId('provider-country-field').hidden = provider !== 'nord' && !ivpn;
@@ -3275,14 +3362,17 @@
             if (provider !== state.provider) {
                 state.provider = provider;
                 state.ivpnConfirmationAccount = '';
-                for (const id of ['provider-login', 'ivpn-login', 'provider-server-form', 'provider-import', 'provider-native']) {
+                state.protonCatalog = null;
+                resetProtonReplacement();
+                for (const id of ['provider-login', 'ivpn-login', 'proton-form', 'provider-server-form', 'provider-import', 'provider-native']) {
                     byId(id).reset();
                 }
                 const locationFilter = state.providerLocations.get(provider)?.country;
                 byId('provider-country').value = ['nord', 'ivpn'].includes(provider) ? locationFilter || '' : '';
                 byId('myst-type').value = provider === 'mysterium' ? locationFilter || 'hosting' : 'hosting';
                 byId('provider-server-status').textContent = '';
-                byId('provider-manual').open = !state.vpnProviders[provider].login;
+                byId('provider-manual').open = !state.vpnProviders[provider].login ||
+                    (provider === 'proton' && !protonProfiles().length);
                 byId('account').value = '';
             }
             renderProvider();
@@ -3419,6 +3509,65 @@
             });
         });
         byId('provider-reload').addEventListener('click', () => void loadProviderServers(true));
+        byId('proton-reload').addEventListener('click', () => void loadProtonServers());
+        byId('proton-tier').addEventListener('change', () => void loadProtonServers());
+        for (const id of ['proton-profile', 'proton-country', 'proton-city', 'proton-server']) {
+            byId(id).addEventListener('change', renderProton);
+        }
+        function switchProton(control, server) {
+            if (state.provider !== 'proton' || control.hidden || control.disabled) return;
+            const payload = {profile: byId('proton-profile').value, server};
+            if (server !== 'original') payload.tier = byId('proton-tier').value;
+            void mutate(control, () => api('switchProtonServer', payload), 'Proton gateway saved.',
+                () => state.tests.delete('exit:' + payload.profile), async () => {
+                    await refreshSignInStatus();
+                    const saved = protonProfiles().some((profile) => profile.id === payload.profile &&
+                        (server === 'original' ? !profile.providerLocation : profile.providerLocation === server));
+                    if (saved) state.tests.delete('exit:' + payload.profile);
+                    return saved;
+                }).then(renderProvider);
+        }
+        byId('proton-restore').addEventListener('click', (event) => switchProton(event.currentTarget, 'original'));
+        byId('proton-form').addEventListener('submit', (event) => {
+            event.preventDefault();
+            switchProton(byId('proton-switch'), byId('proton-server').value);
+        });
+        function resetProtonReplacement() {
+            byId('proton-credentials').open = false;
+            byId('proton-replace').reset();
+            byId('proton-replace-error').textContent = '';
+            delete byId('proton-replace').dataset.profile;
+        }
+
+        function protonConfigOptions(action) {
+            const gateway = byId('proton-' + action + '-gateway').value;
+            return {
+                ...(gateway ? {server: gateway, tier: byId('proton-tier').value} : {}),
+                ...(byId('proton-' + action + '-ipv4').checked ? {ipv4Only: '1'} : {})
+            };
+        }
+
+        byId('proton-replace').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const profile = byId('proton-profile').value;
+            if (state.busy || insecureWebGui || state.provider !== 'proton' || !profile ||
+                byId('proton-replace').dataset.profile !== profile) return;
+            const payload = {profile, config: byId('proton-replace-config').value, ...protonConfigOptions('replace')};
+            byId('proton-replace-error').textContent = '';
+            void mutate(byId('proton-replace-save'), async () => {
+                try {
+                    return await api('replaceProtonProfile', payload);
+                } catch (error) {
+                    if (byId('proton-replace').dataset.profile === profile) {
+                        byId('proton-replace-error').textContent = errorMessage(error, 'Unable to replace the tunnel credentials.');
+                    }
+                    throw error;
+                }
+            }, 'Proton tunnel credentials replaced.', () => {
+                state.tests.delete('exit:' + profile);
+                if (byId('proton-replace').dataset.profile === profile) resetProtonReplacement();
+            });
+        });
         byId('provider-country').addEventListener('input', renderProvider);
         byId('provider-server').addEventListener('change', renderProvider);
         byId('provider-server-form').addEventListener('submit', (event) => {
@@ -3437,32 +3586,46 @@
                 byId('provider-server').value = '';
             }).then(renderProvider);
         });
-        byId('import-file').addEventListener('change', async () => {
-            const input = byId('import-file');
-            const file = input.files[0];
-            const provider = state.provider;
-            if (!file) {
-                return;
-            }
-            if (file.size > 16384) {
-                notice('Choose a WireGuard configuration under 16 KiB.', 'danger');
-                return;
-            }
-            try {
-                const config = await file.text();
-                if (state.provider === provider && input.files[0] === file) {
-                    byId('import-config').value = config;
+        function bindConfigFile(inputId, configId) {
+            const input = byId(inputId);
+            const field = byId(configId);
+            input.addEventListener('change', async () => {
+                const file = input.files[0];
+                const provider = state.provider;
+                if (!file) return;
+                field.value = '';
+                if (file.size > 16384) {
+                    notice('Choose a WireGuard configuration under 16 KiB.', 'danger');
+                    return;
                 }
-            } catch (error) {
-                notice(errorMessage(error, 'The configuration file could not be read.'), 'danger');
-            }
-        });
+                try {
+                    const config = await file.text();
+                    if (state.provider === provider && input.files[0] === file && !field.value) field.value = config;
+                } catch (error) {
+                    notice(errorMessage(error, 'The configuration file could not be read.'), 'danger');
+                }
+            });
+        }
+        bindConfigFile('import-file', 'import-config');
+        bindConfigFile('proton-replace-file', 'proton-replace-config');
         byId('provider-import').addEventListener('submit', (event) => {
             event.preventDefault();
             const payload = {provider: state.provider, name: byId('import-name').value.trim(),
-                dns: byId('import-dns').value.trim(), config: byId('import-config').value};
-            void mutate(event.submitter, () => api('importProfile', payload), 'WireGuard tunnel saved.',
-                () => byId('provider-import').reset());
+                dns: byId('import-dns').value.trim(), config: byId('import-config').value,
+                ...(state.provider === 'proton' ? protonConfigOptions('import') : {})};
+            let added;
+            void mutate(event.submitter, () => api('importProfile', payload), 'WireGuard tunnel saved.', (result) => {
+                byId('provider-import').reset();
+                if (payload.provider === 'proton') {
+                    added = result.profile;
+                    byId('provider-manual').open = false;
+                }
+            }).then(() => {
+                if (added && state.provider === 'proton' && protonProfiles().some((profile) => profile.id === added)) {
+                    byId('proton-profile').value = added;
+                    renderProton();
+                }
+            });
         });
         byId('provider-native').addEventListener('submit', (event) => {
             event.preventDefault();

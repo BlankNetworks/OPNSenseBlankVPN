@@ -20,6 +20,12 @@ The router must contact VPN or proxy endpoints over its WAN to establish the tun
 
 Do not interpret a passing DNS test as proof that every client app uses the router resolver. Tests should include the actual client, policy, address family, and applications in use.
 
+## Proton VPN server directory
+
+**Sign in to Proton** opens the official Proton account portal. Enter your Proton account password and complete any two-factor challenge there. Blank VPN & Proxy receives only the WireGuard file that you explicitly import through the HTTPS WebGUI. Replacing credentials applies the new file’s identity and your chosen gateway to the selected tunnel and its assigned traffic. The Free and Plus directory filters operate locally on the catalog and do not query the account’s plan or active session count.
+
+When you browse Proton VPN gateways, the router requests Gluetun’s public Proton server catalog over HTTPS from GitHub. GitHub receives the request’s source IP. The request contains no Proton account credentials, WireGuard keys, or routing assignments. On selection, the router resolves the listed Proton hostname and checks the resulting address against the catalog before setting the WireGuard peer. The private key stays in the router’s WireGuard configuration. Restoring the imported gateway uses the peer saved on the router. [Gluetun Proton catalog](https://github.com/qdm12/gluetun-servers/blob/main/pkg/servers/protonvpn.json)
+
 ## IPv6, WebRTC, and peer-to-peer traffic
 
 Current Blank VPN & Proxy client tunnels route IPv4. IPv6 internet traffic is blocked for protected Whole-Network coverage and for a LAN/VLAN with a device Kill Switch. Devices using unprotected, bypass, or fail-open policies can use ISP IPv6; address discovery and temporary IPv6 behavior also depend on the OPNsense interface and client configuration.

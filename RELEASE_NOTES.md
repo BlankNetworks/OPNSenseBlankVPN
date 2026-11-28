@@ -1,3 +1,10 @@
+## 0.8.73
+
+- Open Proton’s official sign-in from VPN Login and import a WireGuard configuration for the first tunnel, or use an existing Proton profile. Choose Free or Plus gateways by country, city, and server without downloading a file for each location.
+- Change the Proton account on a saved tunnel by replacing its WireGuard credentials. Use the gateway from the new configuration or the one selected in the menu. Assigned devices and services follow the updated tunnel.
+- Import a separate configuration for each simultaneous tunnel and assign the tunnels independently. Resolve IPv4 address conflicts using Proton’s addressing and DNS scheme, and offer IPv4-only import for an IPv6 address conflict.
+- Check the selected gateway against its Proton hostname. Restore the originally imported gateway even when the server directory is unavailable.
+
 ## 0.8.72
 
 - Show each installed core version, the approved or OPNsense package version, and the number of saved proxy servers using that core.

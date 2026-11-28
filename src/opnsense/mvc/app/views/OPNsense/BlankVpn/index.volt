@@ -106,6 +106,56 @@
                 </div>
                 <p><a id="bv-provider-guide" target="_blank" rel="noopener noreferrer">Provider setup guide</a></p>
                 <p id="bv-provider-status" role="status"></p>
+                <div id="bv-proton-downloads" hidden>
+                    <p><a href="https://account.protonvpn.com/downloads" target="_blank" rel="noopener noreferrer" class="btn btn-default">Sign in to Proton</a></p>
+                    <p class="text-muted">In Proton, generate one WireGuard configuration per tunnel. Proton enforces your connection limit across all devices. Free allows one active connection and VPN Plus allows up to ten.</p>
+                </div>
+                <form id="bv-proton-form" hidden>
+                    <div class="bv-fields">
+                        <label>Saved Proton WireGuard tunnel
+                            <select id="bv-proton-profile" class="form-control" required></select>
+                        </label>
+                        <label>Server list
+                            <select id="bv-proton-tier" class="form-control">
+                                <option value="free">Free servers</option>
+                                <option value="plus">Plus servers (paid plan)</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="bv-actions">
+                        <p id="bv-proton-current" class="text-muted"></p>
+                        <button id="bv-proton-restore" type="button" class="btn btn-default" hidden>Restore imported gateway</button>
+                    </div>
+                    <div class="bv-fields">
+                        <label>Country <select id="bv-proton-country" class="form-control" required></select></label>
+                        <label>City <select id="bv-proton-city" class="form-control"></select></label>
+                        <label>Server <select id="bv-proton-server" class="form-control" required></select></label>
+                    </div>
+                    <div class="bv-actions">
+                        <button id="bv-proton-switch" type="submit" class="btn btn-primary" disabled>Switch server</button>
+                        <button id="bv-proton-reload" type="button" class="btn btn-default">Reload server list</button>
+                    </div>
+                    <p id="bv-proton-status" class="text-muted" role="status"></p>
+                </form>
+                <details id="bv-proton-credentials" hidden>
+                    <summary>Change Proton account or tunnel credentials</summary>
+                    <form id="bv-proton-replace">
+                        <p id="bv-proton-replace-target"></p>
+                        <p class="text-muted">Download a new WireGuard configuration from the Proton account you want to use. The selected tunnel and its assigned devices and services will use those credentials. To override the file’s gateway, first select a server above.</p>
+                        <label>New WireGuard file
+                            <input id="bv-proton-replace-file" type="file" accept=".conf,.txt" class="form-control">
+                        </label>
+                        <label>New WireGuard configuration
+                            <textarea id="bv-proton-replace-config" maxlength="16384" rows="5" spellcheck="false" autocomplete="off" class="form-control bv-config-text" required></textarea>
+                        </label>
+                        <label>Gateway for this tunnel
+                            <select id="bv-proton-replace-gateway" class="form-control"><option value="">Gateway from the configuration</option></select>
+                        </label>
+                        <label class="bv-check"><input id="bv-proton-replace-ipv4" type="checkbox"> Use IPv4 only for this tunnel</label>
+                        <button id="bv-proton-replace-save" type="submit" class="btn btn-primary">Replace tunnel credentials</button>
+                        <p id="bv-proton-replace-error" class="text-danger" role="alert"></p>
+                    </form>
+                </details>
                 <div id="bv-myst-login" class="bv-actions" hidden>
                     <button id="bv-myst-begin" type="button" class="btn btn-primary">Sign in to Mysterium VPN</button>
                     <a id="bv-myst-approve" class="btn btn-default" target="_blank" rel="noopener noreferrer" hidden>Approve sign-in</a>
@@ -161,8 +211,9 @@
                     <p id="bv-provider-server-status" class="text-muted" role="status"></p>
                 </form>
                 <details id="bv-provider-manual">
-                    <summary>Add from a VPN configuration</summary>
+                    <summary id="bv-provider-manual-label">Add from a VPN configuration</summary>
                     <form id="bv-provider-import">
+                        <p id="bv-proton-add-help" class="text-muted" hidden>Give the new tunnel its own name and import a freshly generated Proton configuration. Choose a different gateway for each tunnel, either in the file or from the server list above. Assign each tunnel in Network Settings.</p>
                         <div class="bv-fields">
                             <label>Tunnel name
                                 <input id="bv-import-name" type="text" maxlength="64" class="form-control" required>
@@ -177,7 +228,13 @@
                         <label>WireGuard configuration
                             <textarea id="bv-import-config" maxlength="16384" rows="5" spellcheck="false" class="form-control bv-config-text" required></textarea>
                         </label>
-                        <button type="submit" class="btn btn-primary">Import WireGuard</button>
+                        <div id="bv-proton-import-options" hidden>
+                            <label>Gateway for this tunnel
+                                <select id="bv-proton-import-gateway" class="form-control"><option value="">Gateway from the configuration</option></select>
+                            </label>
+                            <label class="bv-check"><input id="bv-proton-import-ipv4" type="checkbox"> Use IPv4 only for this tunnel</label>
+                        </div>
+                        <button id="bv-import-save" type="submit" class="btn btn-primary">Import WireGuard</button>
                     </form>
                     <form id="bv-provider-native">
                         <p class="text-muted">For OpenVPN or an existing WireGuard tunnel, configure it in OPNsense and assign it an IPv4 gateway.</p>
